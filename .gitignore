@@ -1,13 +1,22 @@
 target/
 local-target/
-*.osm.pbf
+backend/local-target/
+
 **/*.rs.bk
 *.swp
 .DS_Store
+
 node_modules/
-/dist/
+dist/
 frontend/pkg/
 frontend/dist/
-# workspace specific
-backend/local-target/
+.trunk/
+
+*.log
+coverage/
+.env
+.env.local
+
+*.osm.pbf
 /tmp/
+/scripts/tmp/
