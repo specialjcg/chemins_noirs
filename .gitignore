@@ -1,4 +1,6 @@
 target/
+local-target/
+*.osm.pbf
 **/*.rs.bk
 *.swp
 .DS_Store

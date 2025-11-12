@@ -7,6 +7,7 @@ This workspace hosts three Rust crates (`backend`, `frontend`, `shared`) that sh
 
 ## Build, Test, and Development Commands
 - `cargo run -p backend` – builds and runs the backend binary with workspace dependencies.
+- `cargo run -p backend --bin build_graph -- --pbf <path/to.osm.pbf> --output backend/data/region.json [--min-lat ...]` – converts an OSM PBF extract into the JSON graph consumed by the backend.
 - `cargo test` – runs the full suite for every crate; use `-p <crate>` during focused development.
 - `cargo fmt && cargo clippy --all-targets --all-features` – formats and lints before every PR; the lint flag combination catches warnings in tests and benches too.
 
@@ -29,6 +30,7 @@ The Rust backend lives in `src/`, with domain modules like `game/`, `mcts/`, `ne
 - `make build`: performs a release build and triggers the frontend production bundle.
 - `cargo run --bin compare_mcts -- --games 200 --simulations 150`: benchmark pure MCTS versus neural-guided MCTS.
 - `run_all_tests.sh`: executes the Rust unit and integration tests sequentially; inspect `lib_tests.log` and `integration_tests.log` if failures occur.
+- `cargo run -p backend --bin build_graph -- --pbf <pbf> --output <graph.json> --min-lat <..> --max-lat <..> --min-lon <..> --max-lon <..>`: build a scoped routing graph from OSM data; feed the resulting JSON path to `GRAPH_JSON` when starting the backend.
 
 ## Coding Style & Naming Conventions
 Format Rust code with `cargo fmt` before committing; follow Rust 2021 defaults (4-space indentation, module-level `snake_case`). Prefer `PascalCase` for types and components, `camelCase` for local variables, and `SCREAMING_SNAKE_CASE` for constants. Keep module boundaries aligned with domain folders (e.g., AI helpers stay under `neural/`) and document non-obvious behaviour with concise inline comments. Frontend components should use PascalCase filenames inside `frontend/src`.

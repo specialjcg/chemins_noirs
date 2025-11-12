@@ -1,6 +1,7 @@
 pub mod engine;
 pub mod error;
 pub mod gpx_export;
+pub mod graph;
 pub mod models;
 pub mod routing;
 

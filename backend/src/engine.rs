@@ -1,17 +1,18 @@
 use std::{
     collections::HashMap,
-    fs,
+    fs::File,
     io::{self, Read},
     path::Path,
 };
 
+use crate::{
+    graph::{EdgeRecord, GraphFile, NodeRecord},
+    models::{Coordinate, RouteRequest, SurfaceType},
+};
 use petgraph::{
     algo::astar,
     graph::{NodeIndex, UnGraph},
 };
-use serde::Deserialize;
-
-use crate::models::{Coordinate, RouteRequest, SurfaceType};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -29,29 +30,6 @@ pub enum EngineError {
 pub struct RouteEngine {
     graph: UnGraph<NodeData, EdgeData>,
     nodes: Vec<NodeData>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct GraphFile {
-    nodes: Vec<NodeRecord>,
-    edges: Vec<EdgeRecord>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct NodeRecord {
-    id: u32,
-    lat: f64,
-    lon: f64,
-    #[serde(default)]
-    population_density: f64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct EdgeRecord {
-    from: u32,
-    to: u32,
-    surface: SurfaceType,
-    length_m: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -75,8 +53,8 @@ pub struct WeightConfig {
 
 impl RouteEngine {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, EngineError> {
-        let data = fs::read_to_string(path)?;
-        Self::from_reader(data.as_bytes())
+        let file = File::open(path)?;
+        Self::from_reader(file)
     }
 
     pub fn from_reader(reader: impl Read) -> Result<Self, EngineError> {
