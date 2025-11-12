@@ -21,13 +21,21 @@ kill_child_processes() {
 
 trap kill_child_processes EXIT
 
-env CARGO_TARGET_DIR="$TARGET_DIR" cargo run -p backend --bin backend "$@" &
-BACKEND_PID=$!
+if lsof -iTCP:"$BACKEND_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    printf 'Port %s already in use; not starting backend.\n' "$BACKEND_PORT"
+else
+    env CARGO_TARGET_DIR="$TARGET_DIR" cargo run -p backend --bin backend "$@" &
+    BACKEND_PID=$!
+    printf 'Backend started with PID %s (listening on %s).\n' "$BACKEND_PID" "$BACKEND_PORT"
+fi
 
-echo "Backend started with PID $BACKEND_PID (listening on $BACKEND_PORT)"
+if lsof -iTCP:"$FRONTEND_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "Port $FRONTEND_PORT already in use; aborting."
+    exit 1
+fi
 
 echo "Starting frontend dev server on http://localhost:$FRONTEND_PORT ..."
 (cd "$FRONTEND_DIR" && trunk serve --port "$FRONTEND_PORT" --open) &
 FRONTEND_PID=$!
 
-wait "$BACKEND_PID"
+wait "$FRONTEND_PID"
