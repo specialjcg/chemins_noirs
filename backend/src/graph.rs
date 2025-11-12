@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Write},
     path::Path,
 };
 

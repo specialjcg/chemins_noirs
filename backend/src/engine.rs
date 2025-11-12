@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    graph::{EdgeRecord, GraphFile, NodeRecord},
+    graph::GraphFile,
     models::{Coordinate, RouteRequest, SurfaceType},
 };
 use petgraph::{

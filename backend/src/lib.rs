@@ -12,7 +12,9 @@ use axum::{Json, Router, extract::State, http::StatusCode, response::IntoRespons
 use crate::engine::RouteEngine;
 use crate::error::RouteError;
 use crate::gpx_export::encode_route_as_gpx;
-use crate::models::{RouteRequest, RouteResponse};
+use crate::models::{
+    ApiError, Coordinate, RouteBounds, RouteMetadata, RouteRequest, RouteResponse,
+};
 use crate::routing::{approximate_distance_km, generate_route};
 
 #[derive(Clone)]
@@ -36,19 +38,48 @@ async fn route_handler(
         .unwrap_or_else(|| generate_route(&req));
     let distance_km = approximate_distance_km(&path);
     let gpx_base64 = encode_route_as_gpx(&path).map_err(internal_error)?;
+    let metadata = build_metadata(&path);
 
     let response = RouteResponse {
         path,
         distance_km,
         gpx_base64,
+        metadata: Some(metadata),
     };
 
     Ok(Json(response))
 }
 
-#[derive(serde::Serialize)]
-struct ApiError {
-    message: String,
+fn build_metadata(path: &[Coordinate]) -> RouteMetadata {
+    let mut min_lat = f64::MAX;
+    let mut max_lat = f64::MIN;
+    let mut min_lon = f64::MAX;
+    let mut max_lon = f64::MIN;
+
+    for coord in path {
+        min_lat = min_lat.min(coord.lat);
+        max_lat = max_lat.max(coord.lat);
+        min_lon = min_lon.min(coord.lon);
+        max_lon = max_lon.max(coord.lon);
+    }
+
+    RouteMetadata {
+        point_count: path.len(),
+        bounds: RouteBounds {
+            min_lat,
+            max_lat,
+            min_lon,
+            max_lon,
+        },
+        start: path
+            .first()
+            .copied()
+            .unwrap_or(Coordinate { lat: 0.0, lon: 0.0 }),
+        end: path
+            .last()
+            .copied()
+            .unwrap_or(Coordinate { lat: 0.0, lon: 0.0 }),
+    }
 }
 
 fn internal_error(err: RouteError) -> (StatusCode, Json<ApiError>) {

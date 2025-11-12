@@ -8,6 +8,7 @@ This workspace hosts three Rust crates (`backend`, `frontend`, `shared`) that sh
 ## Build, Test, and Development Commands
 - `cargo run -p backend` – builds and runs the backend binary with workspace dependencies.
 - `cargo run -p backend --bin build_graph -- --pbf <path/to.osm.pbf> --output backend/data/region.json [--min-lat ...]` – converts an OSM PBF extract into the JSON graph consumed by the backend.
+- `trunk serve --open` (run from `frontend/`) – compiles the Seed/WebAssembly frontend and serves it with hot reload. Requires `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`) and the `trunk` CLI.
 - `cargo test` – runs the full suite for every crate; use `-p <crate>` during focused development.
 - `cargo fmt && cargo clippy --all-targets --all-features` – formats and lints before every PR; the lint flag combination catches warnings in tests and benches too.
 

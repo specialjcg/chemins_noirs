@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chemins Noirs</title>
+    <link data-trunk rel="rust" data-wasm-opt="z" />
+    <link data-trunk rel="css" href="style.css" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-sA+4wZf2650j0rGUNShUMDSOWHpmFN0i7o46GZ8Ok0w="
+      crossorigin=""
+    />
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-o9N1j7kGStzG2z7bT1AA4Jt0v9zxvJHL1vC4A1p1I6k="
+      crossorigin=""
+    ></script>
+    <link data-trunk rel="copy-file" href="map.js" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="map"></div>
+    <script type="module" src="map.js"></script>
+  </body>
+</html>
