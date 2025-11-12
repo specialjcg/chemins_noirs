@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    {"id": 1, "lat": 45.000, "lon": 5.000, "population_density": 0.9},
+    {"id": 2, "lat": 45.010, "lon": 5.005, "population_density": 0.6},
+    {"id": 3, "lat": 45.020, "lon": 5.015, "population_density": 0.3},
+    {"id": 4, "lat": 45.015, "lon": 5.030, "population_density": 0.1},
+    {"id": 5, "lat": 45.000, "lon": 5.025, "population_density": 0.05},
+    {"id": 6, "lat": 45.025, "lon": 5.035, "population_density": 0.02}
+  ],
+  "edges": [
+    {"from": 1, "to": 2, "surface": "paved", "length_m": 900},
+    {"from": 2, "to": 3, "surface": "paved", "length_m": 950},
+    {"from": 3, "to": 4, "surface": "paved", "length_m": 1050},
+    {"from": 1, "to": 5, "surface": "trail", "length_m": 1600},
+    {"from": 5, "to": 4, "surface": "dirt", "length_m": 1200},
+    {"from": 4, "to": 6, "surface": "trail", "length_m": 1000},
+    {"from": 2, "to": 5, "surface": "trail", "length_m": 1100},
+    {"from": 3, "to": 6, "surface": "paved", "length_m": 950}
+  ]
+}

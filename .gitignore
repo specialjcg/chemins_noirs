@@ -1,0 +1,10 @@
+target/
+**/*.rs.bk
+*.swp
+.DS_Store
+node_modules/
+/dist/
+frontend/pkg/
+# workspace specific
+backend/local-target/
+/tmp/
