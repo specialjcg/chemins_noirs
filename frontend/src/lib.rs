@@ -19,7 +19,10 @@ extern "C" {
     fn update_selection_markers(start: JsValue, end: JsValue);
 }
 
-const API_ROOT: &str = "/api/route";
+const API_ROOT: &str = match option_env!("FRONTEND_API_ROOT") {
+    Some(url) => url,
+    None => "http://localhost:8080/api/route",
+};
 
 pub struct Model {
     form: RouteForm,
