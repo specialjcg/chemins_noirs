@@ -85,6 +85,19 @@ button[disabled] {
     overflow: auto;
 }
 
+.click-mode {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.click-mode label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-weight: 600;
+}
+
 
 #map {
     width: min(960px, calc(100% - 4rem));
