@@ -24,8 +24,15 @@ fn api_root() -> String {
         return url.to_string();
     }
     if let Some(window) = web_sys::window() {
-        if let Ok(location) = window.location().origin() {
-            return format!("{}/api/route", location.trim_end_matches('/'));
+        if let Ok(location) = window.location() {
+            if let Ok(origin) = location.origin() {
+                if origin.contains("127.0.0.1:8081") || origin.contains("localhost:8081") {
+                    return "http://127.0.0.1:8080/api/route".into();
+                }
+            }
+            if let Ok(host) = location.host() {
+                return format!("http://{host}/api/route");
+            }
         }
     }
     "http://localhost:8080/api/route".to_string()
