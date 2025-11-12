@@ -19,10 +19,17 @@ extern "C" {
     fn update_selection_markers(start: JsValue, end: JsValue);
 }
 
-const API_ROOT: &str = match option_env!("FRONTEND_API_ROOT") {
-    Some(url) => url,
-    None => "http://localhost:8080/api/route",
-};
+fn api_root() -> String {
+    if let Some(url) = option_env!("FRONTEND_API_ROOT") {
+        return url.to_string();
+    }
+    if let Some(window) = web_sys::window() {
+        if let Ok(location) = window.location().origin() {
+            return format!("{}/api/route", location.trim_end_matches('/'));
+        }
+    }
+    "http://localhost:8080/api/route".to_string()
+}
 
 pub struct Model {
     form: RouteForm,
@@ -187,7 +194,10 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
 
 fn send_route_request(payload: RouteRequest) -> impl Future<Output = Msg> {
     async move {
-        let response = match Request::new(API_ROOT).method(Method::Post).json(&payload) {
+        let response = match Request::new(&api_root())
+            .method(Method::Post)
+            .json(&payload)
+        {
             Err(err) => Err(format!("{err:?}")),
             Ok(request) => match request.fetch().await {
                 Err(err) => Err(format!("{err:?}")),
