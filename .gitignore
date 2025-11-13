@@ -11,6 +11,7 @@ dist/
 frontend/pkg/
 frontend/dist/
 .trunk/
+backend/data/generated_graph.json
 
 *.log
 coverage/

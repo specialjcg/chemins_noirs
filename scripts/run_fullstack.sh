@@ -29,6 +29,17 @@ kill_child_processes() {
 
 trap kill_child_processes EXIT
 
+free_port() {
+    local port="$1"
+    local pids
+    pids=$(lsof -ti tcp:"$port" || true)
+    if [[ -n "$pids" ]]; then
+        echo "Port $port busy (PIDs: $pids). Terminating..."
+        kill $pids 2>/dev/null || true
+        sleep 1
+    fi
+}
+
 generate_graph() {
     if [[ -f "$GRAPH_JSON" ]]; then
         echo "Using existing graph at $GRAPH_JSON"
@@ -52,18 +63,12 @@ generate_graph() {
 generate_graph
 export GRAPH_JSON
 
-if lsof -iTCP:"$BACKEND_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-    printf 'Port %s already in use; not starting backend.\n' "$BACKEND_PORT"
-else
-    env CARGO_TARGET_DIR="$TARGET_DIR" cargo run -p backend --bin backend "$@" &
-    BACKEND_PID=$!
-    printf 'Backend started with PID %s (listening on %s).\n' "$BACKEND_PID" "$BACKEND_PORT"
-fi
+free_port "$BACKEND_PORT"
+free_port "$FRONTEND_PORT"
 
-if lsof -iTCP:"$FRONTEND_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "Port $FRONTEND_PORT already in use; aborting."
-    exit 1
-fi
+env CARGO_TARGET_DIR="$TARGET_DIR" cargo run -p backend --bin backend "$@" &
+BACKEND_PID=$!
+printf 'Backend started with PID %s (listening on %s).\n' "$BACKEND_PID" "$BACKEND_PORT"
 
 echo "Starting frontend dev server on http://localhost:$FRONTEND_PORT ..."
 (cd "$FRONTEND_DIR" && trunk serve --port "$FRONTEND_PORT" --open) &
