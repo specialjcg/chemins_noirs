@@ -35,7 +35,7 @@ pub struct Model {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum ClickMode {
+pub enum ClickMode {
     Start,
     End,
 }

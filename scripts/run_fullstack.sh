@@ -40,10 +40,31 @@ free_port() {
     fi
 }
 
+graph_has_nodes() {
+    python3 - "$1" <<'PY'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(1)
+nodes = data.get("nodes")
+if isinstance(nodes, list) and len(nodes) > 0:
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
 generate_graph() {
     if [[ -f "$GRAPH_JSON" ]]; then
-        echo "Using existing graph at $GRAPH_JSON"
-        return
+        if graph_has_nodes "$GRAPH_JSON"; then
+            echo "Using existing graph at $GRAPH_JSON"
+            return
+        else
+            echo "Existing graph at $GRAPH_JSON is empty; regenerating..."
+            rm -f "$GRAPH_JSON"
+        fi
     fi
     if [[ -z "$GRAPH_PBF" || ! -f "$GRAPH_PBF" ]]; then
         echo "PBF file '$GRAPH_PBF' not found. Falling back to sample graph."
