@@ -24,6 +24,7 @@ export function initMap() {
   ensureMap();
   if (!clickHandlerSet) {
     mapInstance.on("click", (event) => {
+      console.debug("[map] click", event.latlng);
       window.dispatchEvent(
         new CustomEvent("map-click", {
           detail: { lat: event.latlng.lat, lon: event.latlng.lng },
@@ -36,6 +37,7 @@ export function initMap() {
 
 export function updateRoute(coords) {
   ensureMap();
+  console.debug("[map] updateRoute", coords);
   if (!Array.isArray(coords) || coords.length === 0) {
     routeLayer.setLatLngs([]);
     return;
@@ -50,6 +52,7 @@ export function updateRoute(coords) {
 
 export function updateSelectionMarkers(start, end) {
   ensureMap();
+  console.debug("[map] updateSelectionMarkers", start, end);
   updateMarker("start", start);
   updateMarker("end", end);
 }

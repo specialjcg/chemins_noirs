@@ -34,7 +34,7 @@ pub struct Model {
     click_mode: ClickMode,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum ClickMode {
     Start,
     End,
@@ -92,6 +92,13 @@ pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
         let detail = event.detail();
         let payload: MapClickPayload = serde_wasm_bindgen::from_value(detail)
             .unwrap_or(MapClickPayload { lat: 0.0, lon: 0.0 });
+        web_sys::console::debug_1(
+            &format!(
+                "[frontend] map click lat={:.5} lon={:.5}",
+                payload.lat, payload.lon
+            )
+            .into(),
+        );
         Msg::MapClicked {
             lat: payload.lat,
             lon: payload.lon,
@@ -172,6 +179,13 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
         Msg::MapClicked { lat, lon } => {
             let lat_str = format_coord(lat);
             let lon_str = format_coord(lon);
+            web_sys::console::debug_1(
+                &format!(
+                    "[frontend] MapClicked mode={:?} lat={lat:.5} lon={lon:.5}",
+                    model.click_mode
+                )
+                .into(),
+            );
             match model.click_mode {
                 ClickMode::Start => {
                     model.form.start_lat = lat_str;
@@ -189,6 +203,13 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
 
 fn send_route_request(payload: RouteRequest) -> impl Future<Output = Msg> {
     async move {
+        web_sys::console::debug_1(
+            &format!(
+                "[frontend] sending route request start=({:.5},{:.5}) end=({:.5},{:.5})",
+                payload.start.lat, payload.start.lon, payload.end.lat, payload.end.lon
+            )
+            .into(),
+        );
         let response = match Request::new(&api_root())
             .method(Method::Post)
             .json(&payload)
@@ -223,7 +244,14 @@ fn view_form(model: &Model) -> Node<Msg> {
         div![
             C!["input-field"],
             label![label],
-            input![attrs! { At::Value => value }, input_ev(Ev::Input, msg),]
+            input![
+                attrs! {
+                    At::Value => value,
+                    At::AutoComplete => "off",
+                    At::SpellCheck => "false",
+                },
+                input_ev(Ev::Input, msg),
+            ]
         ]
     };
 
