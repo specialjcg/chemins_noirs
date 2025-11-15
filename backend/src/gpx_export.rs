@@ -7,11 +7,15 @@ use crate::error::RouteError;
 use crate::models::Coordinate;
 
 pub fn encode_route_as_gpx(path: &[Coordinate]) -> Result<String, RouteError> {
-    let mut gpx = Gpx::default();
-    gpx.version = GpxVersion::Gpx11;
-    gpx.creator = Some("chemins_noirs".into());
-    let mut track = Track::default();
-    track.name = Some("chemins_noirs".into());
+    let mut gpx = Gpx {
+        version: GpxVersion::Gpx11,
+        creator: Some("chemins_noirs".into()),
+        ..Default::default()
+    };
+    let mut track = Track {
+        name: Some("chemins_noirs".into()),
+        ..Default::default()
+    };
 
     let mut segment = TrackSegment::new();
     for waypoint in path.iter().map(to_waypoint) {

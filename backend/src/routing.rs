@@ -36,7 +36,7 @@ fn perpendicular_unit(start: Coordinate, end: Coordinate) -> Coordinate {
     }
 }
 
-pub(crate) fn haversine_km(a: Coordinate, b: Coordinate) -> f64 {
+pub fn haversine_km(a: Coordinate, b: Coordinate) -> f64 {
     let lat1 = a.lat.to_radians();
     let lat2 = b.lat.to_radians();
     let dlat = (b.lat - a.lat).to_radians();

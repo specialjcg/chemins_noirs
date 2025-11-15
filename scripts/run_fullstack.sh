@@ -41,19 +41,16 @@ free_port() {
 }
 
 graph_has_nodes() {
-    python3 - "$1" <<'PY'
-import json, sys
-path = sys.argv[1]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except Exception:
-    sys.exit(1)
-nodes = data.get("nodes")
-if isinstance(nodes, list) and len(nodes) > 0:
-    sys.exit(0)
-sys.exit(1)
-PY
+    # Pure shell + jq solution (faster than Python)
+    if ! command -v jq &>/dev/null; then
+        # Fallback: check if file is non-empty and contains "nodes"
+        [[ -s "$1" ]] && grep -q '"nodes"' "$1"
+        return $?
+    fi
+    # Use jq to check if nodes array exists and has elements
+    local node_count
+    node_count=$(jq -e '.nodes | length' "$1" 2>/dev/null) || return 1
+    [[ "$node_count" -gt 0 ]]
 }
 
 generate_graph() {
@@ -72,7 +69,7 @@ generate_graph() {
         return
     fi
     echo "Generating graph JSON at $GRAPH_JSON from $GRAPH_PBF ..."
-    env CARGO_TARGET_DIR="$TARGET_DIR" cargo run -p backend --bin build_graph -- \
+    env CARGO_TARGET_DIR="$TARGET_DIR" cargo run --release -p backend --bin build_graph -- \
         --pbf "$GRAPH_PBF" \
         --output "$GRAPH_JSON" \
         --min-lat "$GRAPH_MIN_LAT" \
@@ -81,15 +78,19 @@ generate_graph() {
         --max-lon "$GRAPH_MAX_LON"
 }
 
-generate_graph
-export GRAPH_JSON
+# Using backend_partial with on-demand graph generation - no pre-generation needed!
+export PBF_PATH="${GRAPH_PBF:-data/rhone-alpes-251111.osm.pbf}"
+export CACHE_DIR="${CACHE_DIR:-data/cache}"
 
 free_port "$BACKEND_PORT"
 free_port "$FRONTEND_PORT"
 
-env CARGO_TARGET_DIR="$TARGET_DIR" cargo run -p backend --bin backend "$@" &
+echo "Starting backend_partial with on-demand graph generation..."
+env CARGO_TARGET_DIR="$TARGET_DIR" PBF_PATH="$PBF_PATH" CACHE_DIR="$CACHE_DIR" cargo run -p backend --bin backend_partial "$@" &
 BACKEND_PID=$!
-printf 'Backend started with PID %s (listening on %s).\n' "$BACKEND_PID" "$BACKEND_PORT"
+printf 'Backend_partial started with PID %s (listening on %s).\n' "$BACKEND_PID" "$BACKEND_PORT"
+printf 'PBF: %s\n' "$PBF_PATH"
+printf 'Cache: %s\n' "$CACHE_DIR"
 
 echo "Starting frontend dev server on http://localhost:$FRONTEND_PORT ..."
 (cd "$FRONTEND_DIR" && trunk serve --port "$FRONTEND_PORT" --open) &

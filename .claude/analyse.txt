@@ -1,0 +1,1721 @@
+
+🎯 **Mission :**
+Analyser et proposer un plan de refactorisation complet du code Rust dans ce répertoire
+afin de le rendre plus lisible, testable, pur, maintenable et bien architecturé,
+selon les meilleures pratiques suivantes :
+- Paradigme fonctionnel (immutabilité, pureté, Result/Option, combinators)
+- Cycle TDD (Red → Green → Refactor)
+- Méthode Mikado (refactoring progressif sans régression)
+- Techniques de refactoring de refactoring.guru
+- Design Patterns de refactoring.guru adaptés à Rust
+
+---
+
+## 🔍 ÉTAPE 1 : Diagnostic initial
+
+### 1.1 Code Smells (Odeurs de code)
+Identifier :
+- **Duplication** : Code répété, logique similaire
+- **Mutations excessives** : `mut` inutiles, clones abusifs
+- **Fonctions longues** : > 30 lignes, complexité cyclomatique > 10
+- **Dépendances implicites** : Couplage fort, dépendances cachées
+- **Gestion d'erreurs** : `.unwrap()`, `.expect()`, `panic!`
+- **Unsafe blocks** : Usage injustifié ou non documenté
+- **Dead code** : Fonctions/modules inutilisés
+- **God objects** : Structures avec trop de responsabilités
+
+### 1.2 Zones à risque
+- **Ownership** : Borrowing complexe, lifetimes enchevêtrés
+- **Concurrency** : Race conditions potentielles, Arc/Mutex usage
+- **Side effects** : IO, mutations globales, randomness
+- **Tests manquants** : Coverage < 80%, scenarios critiques non testés
+
+---
+
+## 🎨 ÉTAPE 2 : Design Patterns applicables (Refactoring.guru → Rust)
+
+### CREATIONAL PATTERNS (Création)
+
+#### 2.1 Builder Pattern
+**Quand** : Construction d'objets complexes avec de nombreux paramètres optionnels
+**Rust idiom** :
+```rust
+// ❌ AVANT - Constructeur avec 10 paramètres
+fn new(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J) -> Self
+
+// ✅ APRÈS - Builder pattern
+pub struct ConfigBuilder {
+    host: Option<String>,
+    port: Option<u16>,
+    timeout: Option<Duration>,
+}
+
+impl ConfigBuilder {
+    pub fn new() -> Self { Self::default() }
+    pub fn host(mut self, host: impl Into<String>) -> Self {
+        self.host = Some(host.into());
+        self
+    }
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = Some(port);
+        self
+    }
+    pub fn build(self) -> Result<Config, ConfigError> {
+        Ok(Config {
+            host: self.host.ok_or(ConfigError::MissingHost)?,
+            port: self.port.unwrap_or(8080),
+            timeout: self.timeout.unwrap_or(Duration::from_secs(30)),
+        })
+    }
+}
+
+// Usage
+let config = ConfigBuilder::new()
+    .host("localhost")
+    .port(3000)
+    .build()?;
+```
+
+#### 2.2 Factory Method
+**Quand** : Créer des objets sans spécifier leur classe exacte
+```rust
+// ✅ Factory avec trait
+trait NotificationFactory {
+    fn create_notification(&self) -> Box<dyn Notification>;
+}
+
+struct EmailFactory;
+impl NotificationFactory for EmailFactory {
+    fn create_notification(&self) -> Box<dyn Notification> {
+        Box::new(EmailNotification::new())
+    }
+}
+
+struct SmsFactory;
+impl NotificationFactory for SmsFactory {
+    fn create_notification(&self) -> Box<dyn Notification> {
+        Box::new(SmsNotification::new())
+    }
+}
+```
+
+#### 2.3 Abstract Factory
+**Quand** : Famille de produits liés (ex: UI themes)
+```rust
+trait UIFactory {
+    fn create_button(&self) -> Box<dyn Button>;
+    fn create_input(&self) -> Box<dyn Input>;
+}
+
+struct DarkThemeFactory;
+impl UIFactory for DarkThemeFactory {
+    fn create_button(&self) -> Box<dyn Button> {
+        Box::new(DarkButton)
+    }
+    fn create_input(&self) -> Box<dyn Input> {
+        Box::new(DarkInput)
+    }
+}
+```
+
+#### 2.4 Prototype (Clone pattern en Rust)
+**Quand** : Cloner des objets complexes
+```rust
+#[derive(Clone)]
+pub struct GameState {
+    board: Board,
+    history: Vec<Move>,
+}
+
+impl GameState {
+    pub fn deep_clone(&self) -> Self {
+        Self {
+            board: self.board.clone(),
+            history: self.history.clone(),
+        }
+    }
+}
+```
+
+#### 2.5 Singleton
+**Quand** : Instance unique globale (éviter en Rust, préférer dependency injection)
+```rust
+// ⚠️ À éviter mais si nécessaire :
+use std::sync::OnceLock;
+
+static CONFIG: OnceLock<Config> = OnceLock::new();
+
+pub fn get_config() -> &'static Config {
+    CONFIG.get_or_init(|| Config::load())
+}
+
+// ✅ PRÉFÉRER : Dependency injection
+pub struct App {
+    config: Arc<Config>, // Shared ownership
+}
+```
+
+### STRUCTURAL PATTERNS (Structure)
+
+#### 2.6 Adapter
+**Quand** : Adapter une interface existante à une nouvelle
+```rust
+// API externe incompatible
+struct ExternalUser {
+    user_id: i64,
+    first_name: String,
+    last_name: String,
+}
+
+// Notre interface
+trait User {
+    fn id(&self) -> UserId;
+    fn full_name(&self) -> String;
+}
+
+// Adapter
+struct UserAdapter(ExternalUser);
+
+impl User for UserAdapter {
+    fn id(&self) -> UserId {
+        UserId(self.0.user_id as u64)
+    }
+    fn full_name(&self) -> String {
+        format!("{} {}", self.0.first_name, self.0.last_name)
+    }
+}
+```
+
+#### 2.7 Bridge
+**Quand** : Séparer abstraction et implémentation
+```rust
+// Implémentation
+trait Renderer {
+    fn render_circle(&self, x: f32, y: f32, radius: f32);
+}
+
+struct OpenGLRenderer;
+impl Renderer for OpenGLRenderer {
+    fn render_circle(&self, x: f32, y: f32, radius: f32) {
+        // OpenGL specific
+    }
+}
+
+// Abstraction
+struct Circle {
+    x: f32,
+    y: f32,
+    radius: f32,
+    renderer: Box<dyn Renderer>,
+}
+
+impl Circle {
+    fn draw(&self) {
+        self.renderer.render_circle(self.x, self.y, self.radius);
+    }
+}
+```
+
+#### 2.8 Composite
+**Quand** : Arbre d'objets (menu, file system)
+```rust
+trait Component {
+    fn execute(&self);
+}
+
+struct File { name: String }
+impl Component for File {
+    fn execute(&self) {
+        println!("Opening {}", self.name);
+    }
+}
+
+struct Directory {
+    name: String,
+    children: Vec<Box<dyn Component>>,
+}
+
+impl Component for Directory {
+    fn execute(&self) {
+        println!("Opening directory {}", self.name);
+        for child in &self.children {
+            child.execute();
+        }
+    }
+}
+```
+
+#### 2.9 Decorator (Newtype pattern en Rust)
+**Quand** : Ajouter comportement dynamiquement
+```rust
+struct Logger<T> {
+    inner: T,
+}
+
+impl<T: Service> Service for Logger<T> {
+    fn handle(&self, req: Request) -> Response {
+        println!("Request: {:?}", req);
+        let response = self.inner.handle(req);
+        println!("Response: {:?}", response);
+        response
+    }
+}
+
+// Usage avec composition
+let service = Logger {
+    inner: Cache {
+        inner: RealService,
+    }
+};
+```
+
+#### 2.10 Facade
+**Quand** : Simplifier un sous-système complexe
+```rust
+pub struct GameFacade {
+    engine: GameEngine,
+    ai: AIPlayer,
+    renderer: Renderer,
+    audio: AudioSystem,
+}
+
+impl GameFacade {
+    pub fn start_new_game(&mut self) -> Result<()> {
+        self.engine.initialize()?;
+        self.ai.reset();
+        self.renderer.prepare_scene()?;
+        self.audio.play_music("menu")?;
+        Ok(())
+    }
+}
+```
+
+#### 2.11 Flyweight
+**Quand** : Partager des données communes pour économiser mémoire
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+
+struct TextureCache {
+    textures: HashMap<String, Arc<Texture>>,
+}
+
+impl TextureCache {
+    fn get_texture(&mut self, path: &str) -> Arc<Texture> {
+        self.textures
+            .entry(path.to_string())
+            .or_insert_with(|| Arc::new(Texture::load(path)))
+            .clone()
+    }
+}
+```
+
+#### 2.12 Proxy
+**Quand** : Contrôle d'accès, lazy loading, caching
+```rust
+struct LazyImage {
+    path: String,
+    image: Option<Image>,
+}
+
+impl LazyImage {
+    fn get_image(&mut self) -> &Image {
+        self.image.get_or_insert_with(|| {
+            println!("Loading image from {}", self.path);
+            Image::load(&self.path)
+        })
+    }
+}
+```
+
+### BEHAVIORAL PATTERNS (Comportement)
+
+#### 2.13 Chain of Responsibility
+**Quand** : Chaîne de handlers
+```rust
+trait Handler {
+    fn handle(&self, request: &Request) -> Option<Response>;
+    fn set_next(&mut self, next: Box<dyn Handler>);
+}
+
+struct AuthHandler {
+    next: Option<Box<dyn Handler>>,
+}
+
+impl Handler for AuthHandler {
+    fn handle(&self, request: &Request) -> Option<Response> {
+        if !request.is_authenticated() {
+            return Some(Response::Unauthorized);
+        }
+        self.next.as_ref()?.handle(request)
+    }
+
+    fn set_next(&mut self, next: Box<dyn Handler>) {
+        self.next = Some(next);
+    }
+}
+```
+
+#### 2.14 Command
+**Quand** : Encapsuler actions (undo/redo)
+```rust
+trait Command {
+    fn execute(&mut self) -> Result<()>;
+    fn undo(&mut self) -> Result<()>;
+}
+
+struct MoveCommand {
+    game: GameState,
+    from: Position,
+    to: Position,
+    captured: Option<Piece>,
+}
+
+impl Command for MoveCommand {
+    fn execute(&mut self) -> Result<()> {
+        self.captured = self.game.move_piece(self.from, self.to)?;
+        Ok(())
+    }
+
+    fn undo(&mut self) -> Result<()> {
+        self.game.move_piece(self.to, self.from)?;
+        if let Some(piece) = self.captured {
+            self.game.place_piece(self.to, piece);
+        }
+        Ok(())
+    }
+}
+
+struct CommandHistory {
+    commands: Vec<Box<dyn Command>>,
+    current: usize,
+}
+
+impl CommandHistory {
+    fn execute(&mut self, mut cmd: Box<dyn Command>) -> Result<()> {
+        cmd.execute()?;
+        self.commands.truncate(self.current);
+        self.commands.push(cmd);
+        self.current += 1;
+        Ok(())
+    }
+
+    fn undo(&mut self) -> Result<()> {
+        if self.current > 0 {
+            self.current -= 1;
+            self.commands[self.current].undo()?;
+        }
+        Ok(())
+    }
+}
+```
+
+#### 2.15 Iterator (natif en Rust)
+```rust
+struct RangeIterator {
+    current: i32,
+    max: i32,
+}
+
+impl Iterator for RangeIterator {
+    type Item = i32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current < self.max {
+            let result = self.current;
+            self.current += 1;
+            Some(result)
+        } else {
+            None
+        }
+    }
+}
+```
+
+#### 2.16 Mediator
+**Quand** : Centraliser communication entre objets
+```rust
+struct ChatMediator {
+    users: HashMap<UserId, Sender<Message>>,
+}
+
+impl ChatMediator {
+    fn send_message(&self, from: UserId, to: UserId, msg: String) {
+        if let Some(sender) = self.users.get(&to) {
+            sender.send(Message { from, content: msg }).ok();
+        }
+    }
+
+    fn broadcast(&self, from: UserId, msg: String) {
+        for (id, sender) in &self.users {
+            if *id != from {
+                sender.send(Message { from, content: msg.clone() }).ok();
+            }
+        }
+    }
+}
+```
+
+#### 2.17 Memento
+**Quand** : Sauvegarder/restaurer état
+```rust
+#[derive(Clone)]
+pub struct EditorMemento {
+    content: String,
+    cursor: usize,
+}
+
+pub struct Editor {
+    content: String,
+    cursor: usize,
+}
+
+impl Editor {
+    pub fn save(&self) -> EditorMemento {
+        EditorMemento {
+            content: self.content.clone(),
+            cursor: self.cursor,
+        }
+    }
+
+    pub fn restore(&mut self, memento: EditorMemento) {
+        self.content = memento.content;
+        self.cursor = memento.cursor;
+    }
+}
+```
+
+#### 2.18 Observer (avec channels)
+```rust
+use std::sync::mpsc::{channel, Sender, Receiver};
+
+trait Observer {
+    fn update(&self, event: &Event);
+}
+
+struct Subject {
+    observers: Vec<Sender<Event>>,
+}
+
+impl Subject {
+    fn subscribe(&mut self) -> Receiver<Event> {
+        let (tx, rx) = channel();
+        self.observers.push(tx);
+        rx
+    }
+
+    fn notify(&self, event: Event) {
+        for observer in &self.observers {
+            observer.send(event.clone()).ok();
+        }
+    }
+}
+```
+
+#### 2.19 State
+**Quand** : Machine à états
+```rust
+trait State {
+    fn handle(self: Box<Self>) -> Box<dyn State>;
+}
+
+struct PendingState;
+impl State for PendingState {
+    fn handle(self: Box<Self>) -> Box<dyn State> {
+        println!("Processing...");
+        Box::new(ProcessingState)
+    }
+}
+
+struct ProcessingState;
+impl State for ProcessingState {
+    fn handle(self: Box<Self>) -> Box<dyn State> {
+        println!("Complete!");
+        Box::new(CompletedState)
+    }
+}
+
+struct Order {
+    state: Box<dyn State>,
+}
+
+impl Order {
+    fn next(&mut self) {
+        self.state = self.state.handle();
+    }
+}
+```
+
+#### 2.20 Strategy
+**Quand** : Algorithmes interchangeables
+```rust
+trait CompressionStrategy {
+    fn compress(&self, data: &[u8]) -> Vec<u8>;
+}
+
+struct ZipCompression;
+impl CompressionStrategy for ZipCompression {
+    fn compress(&self, data: &[u8]) -> Vec<u8> {
+        // ZIP compression
+        vec![]
+    }
+}
+
+struct GzipCompression;
+impl CompressionStrategy for GzipCompression {
+    fn compress(&self, data: &[u8]) -> Vec<u8> {
+        // GZIP compression
+        vec![]
+    }
+}
+
+struct Compressor {
+    strategy: Box<dyn CompressionStrategy>,
+}
+
+impl Compressor {
+    fn compress(&self, data: &[u8]) -> Vec<u8> {
+        self.strategy.compress(data)
+    }
+}
+```
+
+#### 2.21 Template Method
+**Quand** : Algorithme avec étapes personnalisables
+```rust
+trait DataProcessor {
+    fn process(&self, data: Vec<u8>) -> Result<Vec<u8>> {
+        let validated = self.validate(data)?;
+        let transformed = self.transform(validated)?;
+        let saved = self.save(transformed)?;
+        self.notify();
+        Ok(saved)
+    }
+
+    fn validate(&self, data: Vec<u8>) -> Result<Vec<u8>>;
+    fn transform(&self, data: Vec<u8>) -> Result<Vec<u8>>;
+
+    fn save(&self, data: Vec<u8>) -> Result<Vec<u8>> {
+        // Default implementation
+        Ok(data)
+    }
+
+    fn notify(&self) {
+        // Hook
+    }
+}
+```
+
+#### 2.22 Visitor
+**Quand** : Opérations sur structure complexe
+```rust
+trait Visitor {
+    fn visit_file(&mut self, file: &File);
+    fn visit_directory(&mut self, dir: &Directory);
+}
+
+trait Visitable {
+    fn accept(&self, visitor: &mut dyn Visitor);
+}
+
+impl Visitable for File {
+    fn accept(&self, visitor: &mut dyn Visitor) {
+        visitor.visit_file(self);
+    }
+}
+
+struct SizeCalculator {
+    total_size: u64,
+}
+
+impl Visitor for SizeCalculator {
+    fn visit_file(&mut self, file: &File) {
+        self.total_size += file.size;
+    }
+
+    fn visit_directory(&mut self, dir: &Directory) {
+        for item in &dir.items {
+            item.accept(self);
+        }
+    }
+}
+```
+
+---
+
+## 🧩 ÉTAPE 3 : Stratégie de refactoring (Mikado Method)
+
+Présente un **graphe Mikado** pour le refactoring progressif :
+
+```
+🎯 Objectif Final: Code pur, testable, patterns appliqués
+├── 📦 Phase 1: Extraction & Modularisation
+│   ├── Extract Function (longues fonctions) ⭐
+│   ├── Extract Module (responsabilités séparées) ⭐
+│   └── Move Method (regrouper comportements) ⭐
+├── 🧬 Phase 2: Éliminer mutations
+│   ├── Replace Temp with Query ⭐
+│   ├── Remove mut inutiles ⭐
+│   └── Introduce immutable structs ⭐
+├── 🎨 Phase 3: Appliquer Design Patterns
+│   ├── Builder pour constructeurs complexes ⭐
+│   ├── Strategy pour algorithmes MCTS ⭐
+│   ├── Command pour undo/redo ⭐
+│   ├── Observer pour événements jeu ⭐
+│   └── State pour machine à états ⭐
+├── 🧪 Phase 4: Tests & TDD
+│   ├── Ajouter tests manquants ⭐
+│   ├── Property-based tests (proptest) ⭐
+│   └── Integration tests ⭐
+└── ⚡ Phase 5: Performance & Production
+    ├── Benchmarks (criterion) ⭐
+    ├── Profile & optimize ⭐
+    └── Documentation (rustdoc) ⭐
+```
+
+**Ordre d'exécution** : Traiter les feuilles ⭐ en premier, de bas en haut
+
+---
+
+## ⚙️ ÉTAPE 4 : Techniques de refactoring (Refactoring.guru)
+
+Pour chaque zone identifiée, appliquer :
+
+### 4.1 Extract Function
+```rust
+// ❌ AVANT - Fonction longue et complexe
+fn update_game_state(game: &mut Game) {
+    // 50 lignes de logique...
+    if game.is_finished() {
+        // 10 lignes
+    }
+    // calcul score
+    // update UI
+    // save state
+}
+
+// ✅ APRÈS - Fonctions extraites
+fn update_game_state(game: &mut Game) {
+    handle_game_end(game);
+    calculate_scores(game);
+    update_ui(game);
+    save_game_state(game);
+}
+
+fn handle_game_end(game: &Game) {
+    if game.is_finished() {
+        display_winner(game.winner());
+    }
+}
+```
+
+### 4.2 Replace Temp with Query
+```rust
+// ❌ AVANT - Variable temporaire
+let base_price = order.quantity * order.item_price;
+let discount = if base_price > 1000 { base_price * 0.1 } else { 0.0 };
+let total = base_price - discount;
+
+// ✅ APRÈS - Méthodes pures
+fn base_price(order: &Order) -> f64 {
+    order.quantity * order.item_price
+}
+
+fn discount(order: &Order) -> f64 {
+    let base = base_price(order);
+    if base > 1000.0 { base * 0.1 } else { 0.0 }
+}
+
+fn total(order: &Order) -> f64 {
+    base_price(order) - discount(order)
+}
+```
+
+### 4.3 Introduce Parameter Object
+```rust
+// ❌ AVANT - Trop de paramètres
+fn create_user(
+    name: String,
+    email: String,
+    age: u8,
+    country: String,
+    city: String,
+    postal: String
+) -> User
+
+// ✅ APRÈS - Parameter object
+struct UserInfo {
+    name: String,
+    email: String,
+    age: u8,
+    address: Address,
+}
+
+fn create_user(info: UserInfo) -> User
+```
+
+### 4.4 Replace Conditional with Polymorphism
+```rust
+// ❌ AVANT - if/match répétés
+fn calculate_price(product_type: &str, base: f64) -> f64 {
+    match product_type {
+        "book" => base * 0.9,
+        "electronics" => base * 1.2,
+        "food" => base * 1.05,
+        _ => base,
+    }
+}
+
+// ✅ APRÈS - Trait polymorphisme
+trait PricingStrategy {
+    fn calculate_price(&self, base: f64) -> f64;
+}
+
+struct BookPricing;
+impl PricingStrategy for BookPricing {
+    fn calculate_price(&self, base: f64) -> f64 {
+        base * 0.9
+    }
+}
+
+struct Product {
+    base_price: f64,
+    pricing: Box<dyn PricingStrategy>,
+}
+
+impl Product {
+    fn price(&self) -> f64 {
+        self.pricing.calculate_price(self.base_price)
+    }
+}
+```
+
+### 4.5 Decompose Conditional
+```rust
+// ❌ AVANT - Condition complexe
+if date.month() == 6 || date.month() == 7 || date.month() == 8 {
+    charge = quantity * summer_rate + summer_service_charge;
+} else {
+    charge = quantity * winter_rate + winter_service_charge;
+}
+
+// ✅ APRÈS - Fonctions nommées
+fn is_summer(date: &Date) -> bool {
+    matches!(date.month(), 6 | 7 | 8)
+}
+
+fn summer_charge(quantity: u32) -> f64 {
+    quantity as f64 * SUMMER_RATE + SUMMER_SERVICE_CHARGE
+}
+
+fn winter_charge(quantity: u32) -> f64 {
+    quantity as f64 * WINTER_RATE + WINTER_SERVICE_CHARGE
+}
+
+let charge = if is_summer(&date) {
+    summer_charge(quantity)
+} else {
+    winter_charge(quantity)
+};
+```
+
+### 4.6 Remove Dead Code
+```rust
+// Utiliser cargo pour détecter
+$ cargo +nightly udeps  // Unused dependencies
+$ cargo +nightly clippy -- -W clippy::all -W clippy::pedantic
+```
+
+---
+
+## 🧠 ÉTAPE 5 : Paradigme fonctionnel Rust
+
+### 5.1 Conversion impératif → fonctionnel
+
+```rust
+// ❌ AVANT - Style impératif avec mutations
+fn process_users(users: Vec<User>) -> Vec<String> {
+    let mut result = Vec::new();
+    for user in users {
+        if user.age >= 18 {
+            let formatted = format!("{} ({})", user.name, user.email);
+            result.push(formatted);
+        }
+    }
+    result
+}
+
+// ✅ APRÈS - Style fonctionnel pur
+fn process_users(users: Vec<User>) -> Vec<String> {
+    users
+        .into_iter()
+        .filter(|u| u.age >= 18)
+        .map(|u| format!("{} ({})", u.name, u.email))
+        .collect()
+}
+```
+
+### 5.2 Éliminer mutations (mut)
+```rust
+// ❌ AVANT - Mutations
+fn calculate_total(items: &[Item]) -> f64 {
+    let mut total = 0.0;
+    for item in items {
+        total += item.price * item.quantity as f64;
+    }
+    total
+}
+
+// ✅ APRÈS - Immutable avec fold
+fn calculate_total(items: &[Item]) -> f64 {
+    items
+        .iter()
+        .map(|item| item.price * item.quantity as f64)
+        .sum()
+}
+```
+
+### 5.3 Result/Option composition
+```rust
+// ❌ AVANT - Gestion d'erreurs impérative
+fn get_user_email(user_id: UserId) -> Result<String, Error> {
+    let user = database.find_user(user_id)?;
+    if user.email.is_empty() {
+        return Err(Error::NoEmail);
+    }
+    Ok(user.email)
+}
+
+// ✅ APRÈS - Composition fonctionnelle
+fn get_user_email(user_id: UserId) -> Result<String, Error> {
+    database
+        .find_user(user_id)
+        .and_then(|user| {
+            (!user.email.is_empty())
+                .then_some(user.email)
+                .ok_or(Error::NoEmail)
+        })
+}
+```
+
+### 5.4 Fonctions pures (pas d'effets de bord)
+```rust
+// ❌ AVANT - Effets de bord
+fn update_score(player: &mut Player, points: i32) {
+    player.score += points;
+    println!("Score updated!"); // IO effect
+}
+
+// ✅ APRÈS - Pure function
+fn calculate_new_score(current: i32, points: i32) -> i32 {
+    current + points
+}
+
+// Effets de bord séparés
+fn update_and_log(player: &mut Player, points: i32) {
+    player.score = calculate_new_score(player.score, points);
+    log_score_update(player.score); // IO isolé
+}
+```
+
+---
+
+## 🧪 ÉTAPE 6 : TDD & Sécurité du refactor
+
+### 6.1 Cycle TDD (Red → Green → Refactor)
+
+```rust
+// 1️⃣ RED - Test qui échoue
+#[test]
+fn test_calculate_discount() {
+    let order = Order { total: 1500.0 };
+    assert_eq!(calculate_discount(&order), 150.0); // Compile error
+}
+
+// 2️⃣ GREEN - Implémentation minimale
+fn calculate_discount(order: &Order) -> f64 {
+    if order.total > 1000.0 {
+        order.total * 0.1
+    } else {
+        0.0
+    }
+}
+
+// 3️⃣ REFACTOR - Améliorer sans casser les tests
+fn calculate_discount(order: &Order) -> f64 {
+    match order.total {
+        total if total > 1000.0 => total * 0.1,
+        _ => 0.0,
+    }
+}
+```
+
+### 6.2 Property-based testing
+```rust
+use proptest::prelude::*;
+
+proptest! {
+    #[test]
+    fn test_discount_never_negative(total in 0.0f64..10000.0) {
+        let order = Order { total };
+        let discount = calculate_discount(&order);
+        prop_assert!(discount >= 0.0);
+        prop_assert!(discount <= total);
+    }
+}
+```
+
+### 6.3 Tests avant refactoring
+```rust
+// Ajouter tests de caractérisation AVANT de refactorer
+#[test]
+fn characterization_test_mcts_search() {
+    let game = GameState::new();
+    let result = mcts_search(&game, 1000);
+
+    // Capturer le comportement actuel
+    assert!(result.visits > 0);
+    assert!(result.best_move.is_some());
+}
+
+// Maintenant on peut refactorer en toute sécurité
+```
+
+### 6.4 Commandes de validation
+```bash
+# Avant chaque commit
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all
+cargo test --doc
+
+# Coverage
+cargo tarpaulin --out Html --output-dir coverage/
+
+# Benchmarks
+cargo bench
+```
+
+---
+
+## 🚀 ÉTAPE 7 : Plan d'action synthétique
+
+| Étape | Technique / Pattern | Objectif | Durée | Impact | Priorité |
+|-------|---------------------|----------|-------|--------|----------|
+| 1 | Extract Function | Décomposer fonctions longues | 2h | ↑↑ Lisibilité | 🔴 Haute |
+| 2 | Replace Mut with Immutable | Éliminer mutations MCTS | 3h | ↑↑ Sécurité | 🔴 Haute |
+| 3 | Builder Pattern | Simplifier construction Config | 1h | ↑ Maintenabilité | 🟡 Moyenne |
+| 4 | Strategy Pattern | Rendre IA modulaire | 2h | ↑↑ Extensibilité | 🔴 Haute |
+| 5 | Command Pattern | Implémenter undo/redo | 2.5h | ↑↑ UX | 🟡 Moyenne |
+| 6 | Observer Pattern | Événements de jeu découplés | 1.5h | ↑ Modularité | 🟢 Basse |
+| 7 | State Pattern | Machine à états pour GameState | 2h | ↑↑ Clarté | 🟡 Moyenne |
+| 8 | Adapter Pattern | Normaliser API externe | 1h | ↑ Intégration | 🟢 Basse |
+| 9 | Facade Pattern | Simplifier interface MCTS | 1.5h | ↑ Simplicité | 🟡 Moyenne |
+| 10 | Replace Conditional | Polymorphisme pour types de jeu | 2h | ↑ Extensibilité | 🟡 Moyenne |
+| 11 | Introduce Trait | Abstraire comportement Neural | 1.5h | ↑↑ Testabilité | 🔴 Haute |
+| 12 | Remove Dead Code | Nettoyer modules inutilisés | 1h | ↓ Complexité | 🟢 Basse |
+| 13 | TDD - Ajouter tests manquants | Coverage > 80% | 4h | ↑↑↑ Fiabilité | 🔴 Haute |
+| 14 | Property-based tests | Tests génératifs (proptest) | 2h | ↑↑ Robustesse | 🟡 Moyenne |
+| 15 | Benchmarks | Profiling & optimisation | 3h | ↑ Performance | 🟡 Moyenne |
+| **TOTAL** | | | **~29h** | | |
+
+**Légende Impact :**
+- ↑ = Amélioration modérée
+- ↑↑ = Amélioration significative
+- ↑↑↑ = Amélioration majeure
+- ↓ = Réduction (complexité, bugs)
+
+**Priorités :**
+- 🔴 Haute : À faire en premier (fondations)
+- 🟡 Moyenne : À faire ensuite (améliorations)
+- 🟢 Basse : Nice-to-have (polish)
+
+---
+
+## 🧰 ÉTAPE 8 : Commandes Rust recommandées
+
+### 8.1 Validation quotidienne
+```bash
+# Format du code
+cargo fmt
+
+# Linting strict
+cargo clippy --all-targets --all-features -- -D warnings
+
+# Tests complets
+cargo test --all --verbose
+
+# Tests avec output
+cargo test -- --nocapture --test-threads=1
+
+# Tests de documentation
+cargo test --doc
+
+# Vérifier compilation sans optimisations
+cargo check --all-targets
+```
+
+### 8.2 Qualité & Coverage
+```bash
+# Coverage HTML (nécessite tarpaulin)
+cargo install cargo-tarpaulin
+cargo tarpaulin --out Html --output-dir coverage/ --all-features
+
+# Unused dependencies
+cargo install cargo-udeps
+cargo +nightly udeps
+
+# Security audit
+cargo install cargo-audit
+cargo audit
+
+# Outdated dependencies
+cargo install cargo-outdated
+cargo outdated
+
+# Bloat analysis
+cargo install cargo-bloat
+cargo bloat --release
+```
+
+### 8.3 Performance & Benchmarking
+```bash
+# Benchmarks avec criterion
+cargo bench
+
+# Benchmark spécifique
+cargo bench --bench mcts_benchmark
+
+# Profiling (Linux)
+cargo build --release
+perf record --call-graph=dwarf ./target/release/your_binary
+perf report
+
+# Flamegraph
+cargo install flamegraph
+cargo flamegraph --bin your_binary
+```
+
+### 8.4 Documentation
+```bash
+# Générer documentation
+cargo doc --open --no-deps
+
+# Documentation privée incluse
+cargo doc --document-private-items
+
+# Vérifier liens cassés
+cargo install cargo-deadlinks
+cargo doc --no-deps
+cargo deadlinks
+```
+
+### 8.5 CI/CD Script complet
+```bash
+#!/bin/bash
+# ci_check.sh - Script de validation complète
+
+set -e  # Exit on error
+
+echo "🔍 1. Format check..."
+cargo fmt -- --check
+
+echo "🔍 2. Clippy (strict)..."
+cargo clippy --all-targets --all-features -- -D warnings
+
+echo "🔍 3. Tests..."
+cargo test --all --verbose
+
+echo "🔍 4. Doc tests..."
+cargo test --doc
+
+echo "🔍 5. Build release..."
+cargo build --release
+
+echo "🔍 6. Coverage..."
+cargo tarpaulin --out Html --output-dir coverage/
+
+echo "🔍 7. Benchmarks..."
+cargo bench --no-run
+
+echo "🔍 8. Security audit..."
+cargo audit
+
+echo "✅ All checks passed!"
+```
+
+---
+
+## 📝 ÉTAPE 9 : Exemples concrets AVANT/APRÈS
+
+### Exemple 1 : MCTS avec mutations → Pure functional
+
+```rust
+// ❌ AVANT - Style impératif avec mutations
+pub struct MCTSNode {
+    pub state: GameState,
+    pub visits: u32,
+    pub wins: f64,
+    pub children: Vec<MCTSNode>,
+}
+
+impl MCTSNode {
+    pub fn select_best_child(&mut self) -> &mut MCTSNode {
+        let mut best_index = 0;
+        let mut best_score = f64::NEG_INFINITY;
+
+        for (i, child) in self.children.iter().enumerate() {
+            let score = child.ucb1_score();
+            if score > best_score {
+                best_score = score;
+                best_index = i;
+            }
+        }
+
+        &mut self.children[best_index]
+    }
+
+    pub fn expand(&mut self) {
+        let moves = self.state.legal_moves();
+        for m in moves {
+            let mut new_state = self.state.clone();
+            new_state.apply_move(m);
+            self.children.push(MCTSNode {
+                state: new_state,
+                visits: 0,
+                wins: 0.0,
+                children: vec![],
+            });
+        }
+    }
+}
+
+// ✅ APRÈS - Style fonctionnel pur avec Arc
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct MCTSNode {
+    state: Arc<GameState>,
+    visits: u32,
+    wins: f64,
+    children: Vec<MCTSNode>,
+}
+
+impl MCTSNode {
+    // Pure function - retourne l'index sans muter
+    pub fn best_child_index(&self) -> Option<usize> {
+        self.children
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| {
+                a.ucb1_score()
+                    .partial_cmp(&b.ucb1_score())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(idx, _)| idx)
+    }
+
+    // Pure function - retourne nouveau nœud avec enfants
+    pub fn with_expanded_children(self) -> Self {
+        let children = self.state
+            .legal_moves()
+            .into_iter()
+            .map(|m| {
+                let new_state = self.state.apply_move_pure(m);
+                MCTSNode::new(Arc::new(new_state))
+            })
+            .collect();
+
+        Self { children, ..self }
+    }
+
+    // Pure function - retourne nouveau nœud avec stats mises à jour
+    pub fn with_updated_stats(self, win: bool) -> Self {
+        Self {
+            visits: self.visits + 1,
+            wins: self.wins + if win { 1.0 } else { 0.0 },
+            ..self
+        }
+    }
+}
+
+// Pattern Strategy pour l'algorithme de sélection
+trait SelectionStrategy {
+    fn select_child<'a>(&self, node: &'a MCTSNode) -> Option<&'a MCTSNode>;
+}
+
+struct UCB1Selection;
+
+impl SelectionStrategy for UCB1Selection {
+    fn select_child<'a>(&self, node: &'a MCTSNode) -> Option<&'a MCTSNode> {
+        node.best_child_index()
+            .and_then(|idx| node.children.get(idx))
+    }
+}
+```
+
+### Exemple 2 : Configuration avec Builder Pattern
+
+```rust
+// ❌ AVANT - Constructeur avec nombreux paramètres
+pub struct GameConfig {
+    pub board_size: usize,
+    pub time_limit: Duration,
+    pub max_simulations: u32,
+    pub exploration_constant: f64,
+    pub neural_network_path: PathBuf,
+    pub use_gpu: bool,
+    pub batch_size: usize,
+    pub temperature: f64,
+}
+
+impl GameConfig {
+    pub fn new(
+        board_size: usize,
+        time_limit: Duration,
+        max_simulations: u32,
+        exploration_constant: f64,
+        neural_network_path: PathBuf,
+        use_gpu: bool,
+        batch_size: usize,
+        temperature: f64,
+    ) -> Self {
+        Self {
+            board_size,
+            time_limit,
+            max_simulations,
+            exploration_constant,
+            neural_network_path,
+            use_gpu,
+            batch_size,
+            temperature,
+        }
+    }
+}
+
+// Usage horrible :
+let config = GameConfig::new(
+    19,
+    Duration::from_secs(60),
+    10000,
+    1.414,
+    PathBuf::from("model.onnx"),
+    true,
+    32,
+    1.0,
+);
+
+// ✅ APRÈS - Builder Pattern avec validation
+#[derive(Debug, Clone)]
+pub struct GameConfig {
+    board_size: usize,
+    time_limit: Duration,
+    max_simulations: u32,
+    exploration_constant: f64,
+    neural_network_path: PathBuf,
+    use_gpu: bool,
+    batch_size: usize,
+    temperature: f64,
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ConfigError {
+    #[error("Board size must be between 9 and 19")]
+    InvalidBoardSize,
+    #[error("Neural network path does not exist")]
+    ModelNotFound,
+    #[error("Temperature must be positive")]
+    InvalidTemperature,
+}
+
+pub struct GameConfigBuilder {
+    board_size: Option<usize>,
+    time_limit: Option<Duration>,
+    max_simulations: Option<u32>,
+    exploration_constant: f64,
+    neural_network_path: Option<PathBuf>,
+    use_gpu: bool,
+    batch_size: usize,
+    temperature: f64,
+}
+
+impl Default for GameConfigBuilder {
+    fn default() -> Self {
+        Self {
+            board_size: None,
+            time_limit: None,
+            max_simulations: None,
+            exploration_constant: 1.414, // Default UCB1 constant
+            neural_network_path: None,
+            use_gpu: false,
+            batch_size: 32,
+            temperature: 1.0,
+        }
+    }
+}
+
+impl GameConfigBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn board_size(mut self, size: usize) -> Self {
+        self.board_size = Some(size);
+        self
+    }
+
+    pub fn time_limit(mut self, limit: Duration) -> Self {
+        self.time_limit = Some(limit);
+        self
+    }
+
+    pub fn max_simulations(mut self, max: u32) -> Self {
+        self.max_simulations = Some(max);
+        self
+    }
+
+    pub fn exploration_constant(mut self, c: f64) -> Self {
+        self.exploration_constant = c;
+        self
+    }
+
+    pub fn neural_network(mut self, path: impl Into<PathBuf>) -> Self {
+        self.neural_network_path = Some(path.into());
+        self
+    }
+
+    pub fn use_gpu(mut self, use_gpu: bool) -> Self {
+        self.use_gpu = use_gpu;
+        self
+    }
+
+    pub fn batch_size(mut self, size: usize) -> Self {
+        self.batch_size = size;
+        self
+    }
+
+    pub fn temperature(mut self, temp: f64) -> Self {
+        self.temperature = temp;
+        self
+    }
+
+    pub fn build(self) -> Result<GameConfig, ConfigError> {
+        let board_size = self.board_size.ok_or(ConfigError::InvalidBoardSize)?;
+
+        if !(9..=19).contains(&board_size) {
+            return Err(ConfigError::InvalidBoardSize);
+        }
+
+        let neural_network_path = self
+            .neural_network_path
+            .ok_or(ConfigError::ModelNotFound)?;
+
+        if !neural_network_path.exists() {
+            return Err(ConfigError::ModelNotFound);
+        }
+
+        if self.temperature <= 0.0 {
+            return Err(ConfigError::InvalidTemperature);
+        }
+
+        Ok(GameConfig {
+            board_size,
+            time_limit: self.time_limit.unwrap_or(Duration::from_secs(60)),
+            max_simulations: self.max_simulations.unwrap_or(10000),
+            exploration_constant: self.exploration_constant,
+            neural_network_path,
+            use_gpu: self.use_gpu,
+            batch_size: self.batch_size,
+            temperature: self.temperature,
+        })
+    }
+}
+
+// Usage élégant et validé :
+let config = GameConfigBuilder::new()
+    .board_size(19)
+    .time_limit(Duration::from_secs(120))
+    .neural_network("models/alphazero.onnx")
+    .use_gpu(true)
+    .build()?;
+```
+
+### Exemple 3 : Command Pattern pour undo/redo
+
+```rust
+// ✅ Command Pattern avec État immutable
+use std::collections::VecDeque;
+
+trait GameCommand: Send {
+    fn execute(&self, state: GameState) -> Result<GameState, GameError>;
+    fn undo(&self, state: GameState) -> Result<GameState, GameError>;
+    fn description(&self) -> String;
+}
+
+struct MoveCommand {
+    from: Position,
+    to: Position,
+    captured_piece: Option<Piece>,
+}
+
+impl GameCommand for MoveCommand {
+    fn execute(&self, mut state: GameState) -> Result<GameState, GameError> {
+        state.move_piece(self.from, self.to)?;
+        Ok(state)
+    }
+
+    fn undo(&self, mut state: GameState) -> Result<GameState, GameError> {
+        state.move_piece(self.to, self.from)?;
+        if let Some(piece) = self.captured_piece {
+            state.place_piece(self.to, piece);
+        }
+        Ok(state)
+    }
+
+    fn description(&self) -> String {
+        format!("Move from {:?} to {:?}", self.from, self.to)
+    }
+}
+
+pub struct CommandHistory {
+    commands: VecDeque<Box<dyn GameCommand>>,
+    current: usize,
+    max_history: usize,
+}
+
+impl CommandHistory {
+    pub fn new(max_history: usize) -> Self {
+        Self {
+            commands: VecDeque::new(),
+            current: 0,
+            max_history,
+        }
+    }
+
+    pub fn execute(
+        &mut self,
+        command: Box<dyn GameCommand>,
+        state: GameState,
+    ) -> Result<GameState, GameError> {
+        // Exécuter la commande
+        let new_state = command.execute(state)?;
+
+        // Tronquer l'historique après la position courante
+        self.commands.truncate(self.current);
+
+        // Ajouter la nouvelle commande
+        self.commands.push_back(command);
+
+        // Limiter la taille de l'historique
+        if self.commands.len() > self.max_history {
+            self.commands.pop_front();
+        } else {
+            self.current += 1;
+        }
+
+        Ok(new_state)
+    }
+
+    pub fn undo(&mut self, state: GameState) -> Result<GameState, GameError> {
+        if self.current == 0 {
+            return Err(GameError::NothingToUndo);
+        }
+
+        self.current -= 1;
+        self.commands[self.current].undo(state)
+    }
+
+    pub fn redo(&mut self, state: GameState) -> Result<GameState, GameError> {
+        if self.current >= self.commands.len() {
+            return Err(GameError::NothingToRedo);
+        }
+
+        let new_state = self.commands[self.current].execute(state)?;
+        self.current += 1;
+        Ok(new_state)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.current > 0
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.current < self.commands.len()
+    }
+}
+```
+
+---
+
+## 🎯 ÉTAPE 10 : Feuille de route pragmatique (Roadmap)
+
+### Semaine 1 : Fondations (Priorité 🔴 Haute)
+**Jour 1-2 : Extraction & Modularisation**
+- Extract Function sur fonctions > 50 lignes
+- Extract Module pour séparer game/ mcts/ neural/
+- Tests de caractérisation pour code existant
+
+**Jour 3-4 : Éliminer mutations critiques**
+- Replace mut dans MCTS core
+- Introduce immutable structs pour GameState
+- Tests property-based sur invariants
+
+**Jour 5 : Tests manquants**
+- TDD pour modules critiques
+- Coverage > 60% (baseline)
+
+### Semaine 2 : Patterns & Architecture (Priorité 🟡)
+**Jour 1 : Creational Patterns**
+- Builder pour GameConfig
+- Factory pour créer différents types de jeu
+
+**Jour 2-3 : Behavioral Patterns**
+- Strategy pour algorithmes MCTS variants
+- Command pour undo/redo
+- Observer pour événements
+
+**Jour 4 : Structural Patterns**
+- Facade pour simplifier API publique
+- Adapter pour intégrations externes
+
+**Jour 5 : Tests & validation**
+- Tests d'intégration des patterns
+- Coverage > 75%
+
+### Semaine 3 : Polish & Performance (Priorité 🟢)
+**Jour 1-2 : Refactoring avancé**
+- Replace Conditional avec polymorphisme
+- Introduce Trait pour abstractions
+- Remove Dead Code
+
+**Jour 3-4 : Performance**
+- Benchmarks avec criterion
+- Profiling et optimisations ciblées
+- Zero-cost abstractions
+
+**Jour 5 : Documentation**
+- Rustdoc complète
+- Architecture Decision Records (ADR)
+- README mis à jour
+
+### Semaine 4 : Production Ready
+**Jour 1 : CI/CD**
+- GitHub Actions avec checks complets
+- Pre-commit hooks
+
+**Jour 2 : Monitoring**
+- Logging structuré (tracing)
+- Métriques de performance
+
+**Jour 3-4 : Edge cases & hardening**
+- Fuzzing avec cargo-fuzz
+- Tests de stress
+
+**Jour 5 : Release**
+- Changelog
+- Semantic versioning
+- Documentation de migration
+
+---
+
+## 📚 ÉTAPE 11 : Ressources & Checklist finale
+
+### Checklist de validation
+
+#### ✅ Code Quality
+- [ ] Toutes les fonctions < 30 lignes
+- [ ] Complexité cyclomatique < 10
+- [ ] Pas de `.unwrap()` ou `.expect()` sans justification
+- [ ] Pas de `panic!` dans le code public
+- [ ] Tous les `unsafe` documentés et justifiés
+- [ ] Pas de code mort (cargo +nightly udeps)
+- [ ] Clippy passe sans warnings
+
+#### ✅ Paradigme Fonctionnel
+- [ ] Mutations (`mut`) minimisées et justifiées
+- [ ] Fonctions pures pour la logique métier
+- [ ] Composition avec `map`, `and_then`, `filter`
+- [ ] Result/Option utilisés idiomatiquement
+- [ ] Effets de bord isolés aux frontières
+
+#### ✅ Design Patterns
+- [ ] Builder pour constructeurs complexes
+- [ ] Strategy pour algorithmes variants
+- [ ] Command pour opérations annulables
+- [ ] Observer pour événements découplés
+- [ ] State pour machines à états
+- [ ] Facade pour API simplifiée
+- [ ] Adapter pour intégrations
+
+#### ✅ Tests (TDD)
+- [ ] Coverage > 80%
+- [ ] Tests unitaires pour logique pure
+- [ ] Tests d'intégration pour workflows
+- [ ] Property-based tests (proptest) pour invariants
+- [ ] Tests de documentation (doc tests)
+- [ ] Benchmarks pour code critique
+
+#### ✅ Documentation
+- [ ] Tous les items publics documentés (rustdoc)
+- [ ] Exemples dans la documentation
+- [ ] README avec quick start
+- [ ] CHANGELOG.md maintenu
+- [ ] Architecture Decision Records (ADR)
+
+#### ✅ Performance
+- [ ] Benchmarks avec criterion
+- [ ] Profiling fait (perf, flamegraph)
+- [ ] Pas d'allocations inutiles
+- [ ] Zero-cost abstractions vérifiées
+
+#### ✅ Production
+- [ ] CI/CD configuré
+- [ ] Logging structuré (tracing)
+- [ ] Error handling robuste
+- [ ] Security audit (cargo audit)
+- [ ] Dépendances à jour (cargo outdated)
+
+### Ressources
+
+**Refactoring :**
+- https://refactoring.guru/refactoring/catalog
+- https://refactoring.guru/design-patterns/catalog
+- "Refactoring: Improving the Design of Existing Code" - Martin Fowler
+
+**Rust Patterns :**
+- https://rust-unofficial.github.io/patterns/
+- "Programming Rust" - Jim Blandy, Jason Orendorff
+- "Rust for Rustaceans" - Jon Gjengset
+
+**TDD & Testing :**
+- https://doc.rust-lang.org/book/ch11-00-testing.html
+- https://github.com/proptest-rs/proptest
+- "Test Driven Development: By Example" - Kent Beck
+
+**Mikado Method :**
+- "The Mikado Method" - Ola Ellnestam, Daniel Brolund
+- https://mikadomethod.info/
+
+---
+
+## 🎉 CONCLUSION
+
+Ce plan de refactoring complet combine :
+✅ **23 Design Patterns** de refactoring.guru adaptés à Rust
+✅ **Paradigme fonctionnel** (immutabilité, pureté, composition)
+✅ **TDD** (Red → Green → Refactor)
+✅ **Méthode Mikado** (refactoring progressif sans régression)
+✅ **Techniques de refactoring** (Extract, Replace, Introduce, Remove)
+
+**Résultat attendu :**
+Un code Rust moderne, pur, testable, maintenable et performant,
+avec des abstractions élégantes et une architecture claire.
+
+**Prochaine action immédiate :**
+1. Lancer `cargo test` pour établir baseline
+2. Identifier la fonction la plus complexe
+3. Écrire tests de caractérisation
+4. Commencer refactoring Mikado sur cette fonction
+5. Valider avec `cargo check && cargo test && cargo clippy`
+
+🚀 **Let's make this Rust codebase shine!**

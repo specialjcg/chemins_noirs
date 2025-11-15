@@ -23,7 +23,7 @@ pub enum EngineError {
     #[error("graph is empty")]
     EmptyGraph,
     #[error("edge references unknown node {0}")]
-    MissingNode(u32),
+    MissingNode(u64),
 }
 
 #[derive(Clone)]
@@ -110,12 +110,25 @@ impl RouteEngine {
     pub fn find_path(&self, req: &RouteRequest) -> Option<Vec<Coordinate>> {
         let start = self.closest_node(req.start)?;
         let end = self.closest_node(req.end)?;
+
+        tracing::debug!(
+            "Closest nodes - Start: {:?} (target: {:?}), End: {:?} (target: {:?})",
+            self.nodes[start.index()].coord, req.start,
+            self.nodes[end.index()].coord, req.end
+        );
+
         let weights = WeightConfig {
             population: req.w_pop,
             paved: req.w_paved,
         };
 
-        let heuristic = |idx: NodeIndex| straight_line_km(self.nodes[idx.index()].coord, req.end);
+        let heuristic = |idx: NodeIndex| {
+            if idx == end {
+                0.0
+            } else {
+                straight_line_km(self.nodes[idx.index()].coord, req.end)
+            }
+        };
         let edge_cost =
             |edge: petgraph::graph::EdgeReference<EdgeData>| self.edge_cost(edge.weight(), weights);
 
@@ -136,6 +149,8 @@ impl RouteEngine {
     }
 
     fn closest_node(&self, target: Coordinate) -> Option<NodeIndex> {
+        const MAX_DISTANCE_KM: f64 = 20.0; // Max 20km from target to nearest node
+
         self.nodes
             .iter()
             .enumerate()
@@ -144,7 +159,14 @@ impl RouteEngine {
                 let db = squared_distance(b.coord, target);
                 da.partial_cmp(&db).unwrap()
             })
-            .map(|(idx, _)| NodeIndex::new(idx))
+            .and_then(|(idx, node)| {
+                let distance_km = straight_line_km(node.coord, target);
+                if distance_km <= MAX_DISTANCE_KM {
+                    Some(NodeIndex::new(idx))
+                } else {
+                    None
+                }
+            })
     }
 
     fn edge_cost(&self, edge: &EdgeData, weights: WeightConfig) -> f64 {
@@ -217,5 +239,93 @@ mod tests {
         };
         let path = engine.find_path(&base_req).expect("path");
         assert!(path.len() <= 4, "should take direct path when no avoidance");
+    }
+
+    #[test]
+    fn test_graph_bounds_coverage() {
+        // Test that the engine can find nodes within expected bounds
+        let engine = engine();
+
+        // Sample graph is around 45.0, 5.0
+        let in_bounds_coord = Coordinate { lat: 45.0, lon: 5.0 };
+        let node = engine.closest_node(in_bounds_coord);
+        assert!(node.is_some(), "Should find node within graph bounds");
+    }
+
+    #[test]
+    fn test_routing_returns_none_for_far_coordinates() {
+        let engine = engine();
+
+        // Test coordinates far outside the graph (Paris area)
+        let far_req = RouteRequest {
+            start: Coordinate { lat: 48.8566, lon: 2.3522 },
+            end: Coordinate { lat: 48.8606, lon: 2.3376 },
+            w_pop: 1.0,
+            w_paved: 1.0,
+        };
+
+        let path = engine.find_path(&far_req);
+        assert!(path.is_none(), "Should return None for coordinates outside graph");
+    }
+
+    #[test]
+    fn test_closest_node_within_reasonable_distance() {
+        let engine = engine();
+
+        // Test that closest_node finds a node within reasonable distance
+        let test_coord = Coordinate { lat: 45.0, lon: 5.0 };
+        let node_idx = engine.closest_node(test_coord).expect("should find node");
+        let actual_coord = engine.nodes[node_idx.index()].coord;
+
+        let distance = crate::routing::haversine_km(test_coord, actual_coord);
+        assert!(distance < 5.0, "Closest node should be within 5km, got {}km", distance);
+    }
+
+    #[test]
+    fn test_route_with_same_start_end() {
+        let engine = engine();
+
+        let req = RouteRequest {
+            start: Coordinate { lat: 45.0, lon: 5.0 },
+            end: Coordinate { lat: 45.0, lon: 5.0 },
+            w_pop: 1.0,
+            w_paved: 1.0,
+        };
+
+        // Should either return a single-point path or None
+        let path = engine.find_path(&req);
+        if let Some(p) = path {
+            assert!(!p.is_empty(), "Path should not be empty if returned");
+        }
+    }
+
+    #[test]
+    fn test_graph_connectivity() {
+        let engine = engine();
+
+        // Count nodes with at least one neighbor
+        let mut edges_by_node = std::collections::HashMap::new();
+        for node in &engine.nodes {
+            edges_by_node.insert(node.coord, Vec::new());
+        }
+
+        for edge in engine.graph.edge_references() {
+            let from = engine.graph[edge.source()].coord;
+            let to = engine.graph[edge.target()].coord;
+            edges_by_node.get_mut(&from).unwrap().push(to);
+            edges_by_node.get_mut(&to).unwrap().push(from);
+        }
+
+        let total_nodes = edges_by_node.len();
+        let connected_nodes = edges_by_node.values().filter(|v| !v.is_empty()).count();
+        let connectivity_ratio = connected_nodes as f64 / total_nodes as f64;
+
+        println!("Graph connectivity: {}/{} nodes connected ({:.1}%)",
+                 connected_nodes, total_nodes, connectivity_ratio * 100.0);
+
+        // At least 50% of nodes should be connected
+        assert!(connectivity_ratio >= 0.5,
+                "Graph is too disconnected: only {:.1}% of nodes have neighbors",
+                connectivity_ratio * 100.0);
     }
 }

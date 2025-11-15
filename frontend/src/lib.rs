@@ -1,5 +1,3 @@
-use std::future::Future;
-
 use seed::{prelude::*, virtual_dom::AtValue, *};
 use serde::Deserialize;
 use serde_wasm_bindgen::to_value;
@@ -201,34 +199,32 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
     }
 }
 
-fn send_route_request(payload: RouteRequest) -> impl Future<Output = Msg> {
-    async move {
-        web_sys::console::debug_1(
-            &format!(
-                "[frontend] sending route request start=({:.5},{:.5}) end=({:.5},{:.5})",
-                payload.start.lat, payload.start.lon, payload.end.lat, payload.end.lon
-            )
-            .into(),
-        );
-        let response = match Request::new(&api_root())
-            .method(Method::Post)
-            .json(&payload)
-        {
+async fn send_route_request(payload: RouteRequest) -> Msg {
+    web_sys::console::debug_1(
+        &format!(
+            "[frontend] sending route request start=({:.5},{:.5}) end=({:.5},{:.5})",
+            payload.start.lat, payload.start.lon, payload.end.lat, payload.end.lon
+        )
+        .into(),
+    );
+    let response = match Request::new(api_root())
+        .method(Method::Post)
+        .json(&payload)
+    {
+        Err(err) => Err(format!("{err:?}")),
+        Ok(request) => match request.fetch().await {
             Err(err) => Err(format!("{err:?}")),
-            Ok(request) => match request.fetch().await {
-                Err(err) => Err(format!("{err:?}")),
-                Ok(raw) => match raw.check_status() {
-                    Err(status_err) => Err(format!("{status_err:?}")),
-                    Ok(resp) => match resp.json::<RouteResponse>().await {
-                        Ok(route) => Ok(route),
-                        Err(err) => Err(format!("{err:?}")),
-                    },
+            Ok(raw) => match raw.check_status() {
+                Err(status_err) => Err(format!("{status_err:?}")),
+                Ok(resp) => match resp.json::<RouteResponse>().await {
+                    Ok(route) => Ok(route),
+                    Err(err) => Err(format!("{err:?}")),
                 },
             },
-        };
+        },
+    };
 
-        Msg::RouteFetched(response)
-    }
+    Msg::RouteFetched(response)
 }
 
 pub fn view(model: &Model) -> Node<Msg> {

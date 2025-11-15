@@ -3,6 +3,7 @@ pub mod error;
 pub mod gpx_export;
 pub mod graph;
 pub mod models;
+pub mod partial_graph;
 pub mod routing;
 
 use std::sync::Arc;
@@ -26,6 +27,18 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/api/route", post(route_handler))
         .with_state(state)
+}
+
+/// Create router with partial graph support
+pub fn create_router_with_partial(
+    state: AppState,
+    partial_config: Arc<partial_graph::PartialGraphConfig>,
+) -> Router {
+    Router::new()
+        .route("/api/route", post(route_handler))
+        .with_state(state.clone())
+        .route("/api/graph/partial", post(partial_graph::partial_graph_handler))
+        .with_state(partial_config)
 }
 
 async fn route_handler(
