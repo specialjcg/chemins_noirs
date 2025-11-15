@@ -21,3 +21,8 @@ coverage/
 *.osm.pbf
 /tmp/
 /scripts/tmp/
+
+# Data files and caches
+data/
+backend/data/
+**/cache/
