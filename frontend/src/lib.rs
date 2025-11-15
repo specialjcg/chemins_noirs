@@ -15,6 +15,24 @@ extern "C" {
     fn update_route_js(coords: JsValue);
     #[wasm_bindgen(js_name = updateSelectionMarkers)]
     fn update_selection_markers(start: JsValue, end: JsValue);
+    #[wasm_bindgen(js_name = toggleSatelliteView)]
+    fn toggle_satellite_view(enabled: bool);
+    #[wasm_bindgen(js_name = updateBbox)]
+    fn update_bbox_js(bounds: JsValue);
+}
+
+#[wasm_bindgen(module = "/cesium.js")]
+extern "C" {
+    #[wasm_bindgen(js_name = initCesiumViewer)]
+    fn init_cesium_viewer();
+    #[wasm_bindgen(js_name = updateRoute3D)]
+    fn update_route_3d(coords: JsValue, elevations: JsValue);
+    #[wasm_bindgen(js_name = playRouteAnimation)]
+    fn play_route_animation(speed: f64);
+    #[wasm_bindgen(js_name = pauseRouteAnimation)]
+    fn pause_route_animation();
+    #[wasm_bindgen(js_name = toggleCesiumView)]
+    fn toggle_cesium_view(enabled: bool);
 }
 
 fn api_root() -> String {
@@ -30,12 +48,34 @@ pub struct Model {
     last_response: Option<RouteResponse>,
     error: Option<String>,
     click_mode: ClickMode,
+    map_view_mode: MapViewMode,
+    view_mode: ViewMode,
+    animation_state: AnimationState,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ClickMode {
     Start,
     End,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MapViewMode {
+    Standard,
+    Satellite,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ViewMode {
+    Map2D,
+    Map3D,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum AnimationState {
+    Stopped,
+    Playing,
+    Paused,
 }
 
 #[derive(Default, Clone)]
@@ -80,13 +120,19 @@ pub enum Msg {
     PavedWeightChanged(String),
     Submit,
     SetClickMode(ClickMode),
+    ToggleMapView,
+    Toggle3DView,
+    PlayAnimation,
+    PauseAnimation,
     MapClicked { lat: f64, lon: f64 },
     RouteFetched(Result<RouteResponse, String>),
 }
 
 pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
     orders.stream(streams::window_event(Ev::from("map-click"), |event| {
-        let event = event.dyn_into::<web_sys::CustomEvent>().unwrap();
+        let event = event
+            .dyn_into::<web_sys::CustomEvent>()
+            .expect("map-click event must be CustomEvent");
         let detail = event.detail();
         let payload: MapClickPayload = serde_wasm_bindgen::from_value(detail)
             .unwrap_or(MapClickPayload { lat: 0.0, lon: 0.0 });
@@ -116,6 +162,9 @@ pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
         last_response: None,
         error: None,
         click_mode: ClickMode::Start,
+        map_view_mode: MapViewMode::Standard,
+        view_mode: ViewMode::Map2D,
+        animation_state: AnimationState::Stopped,
     };
 
     sync_selection_markers(&model.form);
@@ -161,6 +210,23 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
             match result {
                 Ok(route) => {
                     push_route_to_map(&route.path);
+                    // Update bbox if metadata is present
+                    if let Some(ref metadata) = route.metadata
+                        && let Ok(bounds_value) = to_value(&metadata.bounds) {
+                            update_bbox_js(bounds_value);
+                        }
+
+                    // Update 3D view if in 3D mode
+                    if model.view_mode == ViewMode::Map3D {
+                        let coords_value = to_value(&route.path).unwrap_or(JsValue::NULL);
+                        let elevations_value = route
+                            .elevation_profile
+                            .as_ref()
+                            .and_then(|p| to_value(&p.elevations).ok())
+                            .unwrap_or(JsValue::NULL);
+                        update_route_3d(coords_value, elevations_value);
+                    }
+
                     model.last_response = Some(route);
                     model.error = None;
                     sync_selection_markers(&model.form);
@@ -173,6 +239,42 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
         }
         Msg::SetClickMode(mode) => {
             model.click_mode = mode;
+        }
+        Msg::ToggleMapView => {
+            model.map_view_mode = match model.map_view_mode {
+                MapViewMode::Standard => MapViewMode::Satellite,
+                MapViewMode::Satellite => MapViewMode::Standard,
+            };
+            toggle_satellite_view(model.map_view_mode == MapViewMode::Satellite);
+        }
+        Msg::Toggle3DView => {
+            model.view_mode = match model.view_mode {
+                ViewMode::Map2D => ViewMode::Map3D,
+                ViewMode::Map3D => ViewMode::Map2D,
+            };
+            toggle_cesium_view(model.view_mode == ViewMode::Map3D);
+
+            // If switching to 3D and we have a route, render it in 3D
+            if model.view_mode == ViewMode::Map3D
+                && let Some(ref route) = model.last_response {
+                    let coords_value = to_value(&route.path).unwrap_or(JsValue::NULL);
+                    let elevations_value = route
+                        .elevation_profile
+                        .as_ref()
+                        .and_then(|p| to_value(&p.elevations).ok())
+                        .unwrap_or(JsValue::NULL);
+                    update_route_3d(coords_value, elevations_value);
+                }
+        }
+        Msg::PlayAnimation => {
+            if model.view_mode == ViewMode::Map3D {
+                model.animation_state = AnimationState::Playing;
+                play_route_animation(1.0); // Speed 1.0x
+            }
+        }
+        Msg::PauseAnimation => {
+            model.animation_state = AnimationState::Stopped;
+            pause_route_animation();
         }
         Msg::MapClicked { lat, lon } => {
             let lat_str = format_coord(lat);
@@ -310,6 +412,53 @@ fn view_form(model: &Model) -> Node<Msg> {
             ],
             small!["Cliquez sur la carte pour remplir la position sélectionnée."],
         ],
+        fieldset![
+            legend!["Vue de la carte"],
+            button![
+                match model.map_view_mode {
+                    MapViewMode::Standard => "Vue Satellite",
+                    MapViewMode::Satellite => "Vue Standard",
+                },
+                ev(Ev::Click, |event| {
+                    event.prevent_default();
+                    Msg::ToggleMapView
+                }),
+                C!["map-toggle"],
+            ],
+            button![
+                match model.view_mode {
+                    ViewMode::Map2D => "Vue 3D",
+                    ViewMode::Map3D => "Vue 2D",
+                },
+                ev(Ev::Click, |event| {
+                    event.prevent_default();
+                    Msg::Toggle3DView
+                }),
+                C!["view-toggle"],
+            ],
+        ],
+        if model.view_mode == ViewMode::Map3D && model.last_response.is_some() {
+            let anim_state = model.animation_state;
+            fieldset![
+                legend!["Animation 3D"],
+                button![
+                    match anim_state {
+                        AnimationState::Stopped | AnimationState::Paused => "▶ Lire",
+                        AnimationState::Playing => "⏸ Pause",
+                    },
+                    ev(Ev::Click, move |event| {
+                        event.prevent_default();
+                        match anim_state {
+                            AnimationState::Stopped | AnimationState::Paused => Msg::PlayAnimation,
+                            AnimationState::Playing => Msg::PauseAnimation,
+                        }
+                    }),
+                    C!["animation-toggle"],
+                ],
+            ]
+        } else {
+            empty![]
+        },
         button![
             "Tracer l'itinéraire",
             ev(Ev::Click, |event| {
@@ -349,7 +498,13 @@ fn view_preview(model: &Model) -> Node<Msg> {
             .map(view_metadata)
             .unwrap_or_else(|| empty![]);
 
-        div![C!["preview"], stats, metadata, path_list]
+        let elevation = route
+            .elevation_profile
+            .as_ref()
+            .map(view_elevation_profile)
+            .unwrap_or_else(|| empty![]);
+
+        div![C!["preview"], stats, metadata, elevation, path_list]
     } else {
         div![
             C!["preview"],
@@ -433,8 +588,129 @@ fn format_coord(value: f64) -> String {
     format!("{value:.5}")
 }
 
+fn view_elevation_profile(profile: &shared::ElevationProfile) -> Node<Msg> {
+    let card = |label: &str, content: String| {
+        div![
+            C!["metadata-card"],
+            span![C!["label"], label],
+            strong![content],
+        ]
+    };
+
+    let elevation_stats = div![
+        C!["metadata-grid"],
+        card(
+            "Dénivelé +",
+            format!("{:.0} m", profile.total_ascent)
+        ),
+        card(
+            "Dénivelé -",
+            format!("{:.0} m", profile.total_descent)
+        ),
+        card(
+            "Altitude min",
+            profile.min_elevation
+                .map(|e| format!("{:.0} m", e))
+                .unwrap_or_else(|| "N/A".to_string())
+        ),
+        card(
+            "Altitude max",
+            profile.max_elevation
+                .map(|e| format!("{:.0} m", e))
+                .unwrap_or_else(|| "N/A".to_string())
+        ),
+    ];
+
+    div![
+        C!["elevation-section"],
+        h3!["Profil d'élévation"],
+        elevation_stats
+    ]
+}
+
 #[derive(Deserialize)]
 struct MapClickPayload {
     lat: f64,
     lon: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_view_mode_toggle() {
+        assert_eq!(ViewMode::Map2D, ViewMode::Map2D);
+        assert_ne!(ViewMode::Map2D, ViewMode::Map3D);
+        
+        let mode_2d = ViewMode::Map2D;
+        let toggled = match mode_2d {
+            ViewMode::Map2D => ViewMode::Map3D,
+            ViewMode::Map3D => ViewMode::Map2D,
+        };
+        assert_eq!(toggled, ViewMode::Map3D);
+    }
+
+    #[test]
+    fn test_animation_state_transitions() {
+        let stopped = AnimationState::Stopped;
+        let playing = AnimationState::Playing;
+        let paused = AnimationState::Paused;
+        
+        assert_eq!(stopped, AnimationState::Stopped);
+        assert_ne!(stopped, playing);
+        assert_ne!(playing, paused);
+    }
+
+    #[test]
+    fn test_click_mode_toggle() {
+        assert_eq!(ClickMode::Start, ClickMode::Start);
+        assert_ne!(ClickMode::Start, ClickMode::End);
+    }
+
+    #[test]
+    fn test_map_view_mode_toggle() {
+        let standard = MapViewMode::Standard;
+        let satellite = MapViewMode::Satellite;
+        
+        assert_eq!(standard, MapViewMode::Standard);
+        assert_ne!(standard, satellite);
+    }
+
+    #[test]
+    fn test_route_form_to_request_valid() {
+        let form = RouteForm {
+            start_lat: "45.93".to_string(),
+            start_lon: "4.577".to_string(),
+            end_lat: "45.94".to_string(),
+            end_lon: "4.575".to_string(),
+            w_pop: "1.0".to_string(),
+            w_paved: "1.0".to_string(),
+        };
+
+        let request = form.to_request();
+        assert!(request.is_ok(), "Expected Ok, got: {:?}", request);
+        let req = request.unwrap();
+        assert_eq!(req.start.lat, 45.93);
+        assert_eq!(req.start.lon, 4.577);
+        assert_eq!(req.end.lat, 45.94);
+        assert_eq!(req.end.lon, 4.575);
+        assert_eq!(req.w_pop, 1.0);
+        assert_eq!(req.w_paved, 1.0);
+    }
+
+    #[test]
+    fn test_route_form_to_request_invalid_coords() {
+        let form = RouteForm {
+            start_lat: "45.93".to_string(),
+            start_lon: "invalid".to_string(),
+            end_lat: "45.94".to_string(),
+            end_lon: "4.575".to_string(),
+            w_pop: "1.0".to_string(),
+            w_paved: "1.0".to_string(),
+        };
+
+        let request = form.to_request();
+        assert!(request.is_err(), "Expected error for invalid coordinate");
+    }
 }
