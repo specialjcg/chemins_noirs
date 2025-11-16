@@ -99,14 +99,24 @@ button[disabled] {
 }
 
 
-#map {
+#map, #mapbox3dContainer {
     width: min(960px, calc(100% - 4rem));
-    height: 360px;
+    height: 540px;
     margin: 1.5rem auto 0;
     border-radius: 18px;
     border: 1px solid rgba(255, 255, 255, 0.05);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     overflow: hidden;
+}
+
+#mapbox3dContainer {
+    position: relative;
+}
+
+/* Hide Mapbox attribution for cleaner UI (keep it small) */
+.mapboxgl-ctrl-attrib {
+    font-size: 10px;
+    opacity: 0.6;
 }
 
 .metadata-grid {

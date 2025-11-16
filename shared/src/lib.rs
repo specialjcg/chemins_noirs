@@ -50,12 +50,23 @@ pub struct RouteBounds {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElevationProfile {
+    pub elevations: Vec<Option<f64>>, // Elevation in meters for each point in path
+    pub min_elevation: Option<f64>,
+    pub max_elevation: Option<f64>,
+    pub total_ascent: f64,    // Total meters climbed
+    pub total_descent: f64,   // Total meters descended
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteResponse {
     pub path: Vec<Coordinate>,
     pub distance_km: f64,
     pub gpx_base64: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<RouteMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevation_profile: Option<ElevationProfile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

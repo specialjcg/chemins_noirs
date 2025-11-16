@@ -3,6 +3,10 @@ let routeLayer;
 let startMarker;
 let endMarker;
 let clickHandlerSet = false;
+let standardLayer;
+let satelliteLayer;
+let currentLayer;
+let bboxRectangle;
 
 function ensureMap() {
   if (mapInstance) {
@@ -10,11 +14,25 @@ function ensureMap() {
   }
 
   mapInstance = L.map("map").setView([45.0, 5.0], 8);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+
+  // Standard OpenStreetMap layer
+  standardLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
     maxZoom: 18,
-  }).addTo(mapInstance);
+  });
+
+  // Satellite layer (using Esri World Imagery)
+  satelliteLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    attribution:
+      'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+    maxZoom: 18,
+  });
+
+  // Add standard layer by default
+  standardLayer.addTo(mapInstance);
+  currentLayer = standardLayer;
+
   routeLayer = L.polyline([], { color: "#4dab7b", weight: 4 }).addTo(
     mapInstance,
   );
@@ -73,5 +91,47 @@ function updateMarker(type, coord) {
     mapInstance.removeLayer(markerRef);
     if (type === "start") startMarker = null;
     else endMarker = null;
+  }
+}
+
+export function toggleSatelliteView(enabled) {
+  ensureMap();
+  console.debug("[map] toggleSatelliteView", enabled);
+
+  if (enabled && currentLayer !== satelliteLayer) {
+    mapInstance.removeLayer(currentLayer);
+    satelliteLayer.addTo(mapInstance);
+    currentLayer = satelliteLayer;
+  } else if (!enabled && currentLayer !== standardLayer) {
+    mapInstance.removeLayer(currentLayer);
+    standardLayer.addTo(mapInstance);
+    currentLayer = standardLayer;
+  }
+}
+
+export function updateBbox(bounds) {
+  ensureMap();
+  console.debug("[map] updateBbox", bounds);
+
+  // Remove existing bbox if any
+  if (bboxRectangle) {
+    mapInstance.removeLayer(bboxRectangle);
+    bboxRectangle = null;
+  }
+
+  // Add new bbox if bounds provided
+  if (bounds && typeof bounds.min_lat === "number") {
+    const latLngBounds = [
+      [bounds.min_lat, bounds.min_lon],
+      [bounds.max_lat, bounds.max_lon],
+    ];
+    bboxRectangle = L.rectangle(latLngBounds, {
+      color: "#ff7800",
+      weight: 2,
+      fillOpacity: 0.1,
+      dashArray: "5, 5",
+    }).addTo(mapInstance);
+
+    console.debug("[map] BBox rectangle added");
   }
 }

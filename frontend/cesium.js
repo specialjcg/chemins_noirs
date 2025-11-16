@@ -7,10 +7,11 @@ let isAnimating = false;
 let lastAnimationTime = 0;
 let animationSpeed = 1.0;
 
-// Cesium ion access token (using default token - you can get your own at cesium.com/ion)
-Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlYWE1OWUxNy1mMWZiLTQzYjYtYTQ0OS1kMWFjYmFkNjc5YzciLCJpZCI6NTc3MzMsImlhdCI6MTYyNzg0NTE4Mn0.XcKpgANiY19MC4bdFUXMVEBToBmqS8kuYpUlxJHYZxk';
+// Cesium Ion token - using public demo token
+// To get your own free token: https://ion.cesium.com/signup
+Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJkN2MyNmUzNC1jNzQ5LTRmZTUtOWJjNi0zOTk1YjUyMDc1NjgiLCJpZCI6MjU5LCJpYXQiOjE3MTIwNjM4MTV9.HlCfoaw-vZPTHcXXYNL5kSgVujjGfCR-8pnLgvVPJ0M';
 
-export function initCesiumViewer() {
+export async function initCesiumViewer() {
   if (viewer) {
     return;
   }
@@ -41,36 +42,32 @@ export function initCesiumViewer() {
       timeline: false,
       fullscreenButton: false,
       vrButton: false,
-      skyBox: false,
-      skyAtmosphere: false,
-      imageryProvider: new Cesium.OpenStreetMapImageryProvider({
-        url: 'https://a.tile.openstreetmap.org/'
-      })
+      // Use Cesium Ion satellite imagery
+      imageryProvider: new Cesium.IonImageryProvider({ assetId: 2 })
     });
 
-    // Load world terrain asynchronously
-    Cesium.createWorldTerrainAsync({
-      requestWaterMask: false,
+    // Load Cesium World Terrain
+    viewer.terrainProvider = Cesium.Terrain.fromWorldTerrain({
+      requestWaterMask: true,
       requestVertexNormals: true
-    }).then(terrainProvider => {
-      if (viewer) {
-        viewer.terrainProvider = terrainProvider;
-        console.debug("[cesium] Terrain provider loaded");
-      }
-    }).catch(error => {
-      console.warn("[cesium] Failed to load terrain provider:", error);
     });
 
-    // Disable fog and adjust lighting
-    viewer.scene.fog.enabled = false;
-    viewer.scene.globe.enableLighting = true;
+    // Configure scene for better 3D visualization
+    viewer.scene.globe.enableLighting = true; // Enable sun lighting for depth
+    viewer.scene.globe.depthTestAgainstTerrain = true; // Proper depth testing
 
-    // Set initial camera position (Rhône-Alpes area)
+    // Add exaggeration to see terrain relief better
+    viewer.scene.globe.terrainExaggeration = 1.5;
+
+    // Improve visual quality
+    viewer.scene.screenSpaceCameraController.enableCollisionDetection = true;
+
+    // Set initial camera position (Rhône-Alpes area) with better angle
     viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(5.0, 45.0, 50000),
+      destination: Cesium.Cartesian3.fromDegrees(5.0, 45.0, 150000),
       orientation: {
         heading: 0.0,
-        pitch: -Cesium.Math.toRadians(30),
+        pitch: -Cesium.Math.toRadians(45), // More inclined view for terrain
         roll: 0.0
       }
     });
@@ -109,8 +106,8 @@ export function updateRoute3D(coords, elevations) {
         return null;
       }
       const elevation = elevations && elevations[idx] ? elevations[idx] : 0;
-      // Add 10m height for better visibility
-      return Cesium.Cartesian3.fromDegrees(coord.lon, coord.lat, elevation + 10);
+      // Add 50m height for better visibility above terrain
+      return Cesium.Cartesian3.fromDegrees(coord.lon, coord.lat, elevation + 50);
     }).filter(pos => pos !== null);
 
     if (positions.length === 0) {
@@ -121,17 +118,19 @@ export function updateRoute3D(coords, elevations) {
     // Store animation path
     animationPath = positions;
 
-    // Create polyline entity
+    // Create polyline entity with enhanced visibility
     routeEntity = viewer.entities.add({
       polyline: {
         positions: positions,
-        width: 5,
+        width: 8, // Wider line for better visibility
         material: new Cesium.PolylineOutlineMaterialProperty({
-          color: Cesium.Color.fromCssColorString('#4dab7b'),
-          outlineWidth: 2,
-          outlineColor: Cesium.Color.WHITE
+          color: Cesium.Color.fromCssColorString('#ff6b35').withAlpha(0.9), // Bright orange
+          outlineWidth: 3,
+          outlineColor: Cesium.Color.WHITE.withAlpha(0.8)
         }),
-        clampToGround: false
+        clampToGround: false,
+        // Add glow effect
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 500000)
       }
     });
 

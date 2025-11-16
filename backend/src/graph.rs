@@ -22,6 +22,8 @@ pub struct NodeRecord {
     pub lat: f64,
     pub lon: f64,
     #[serde(default)]
+    pub elevation: Option<f64>, // Elevation in meters from OSM 'ele' tag
+    #[serde(default)]
     pub population_density: f64,
 }
 
@@ -128,6 +130,7 @@ struct OsmNode {
     osm_id: i64,
     lat: f64,
     lon: f64,
+    elevation: Option<f64>, // Elevation in meters from OSM 'ele' tag
 }
 
 // Internal state for node collection
@@ -148,7 +151,7 @@ impl NodeCollectionState {
     }
 
     // Pure function to add a node, returning new state
-    fn with_node(mut self, osm_id: i64, lat: f64, lon: f64) -> Self {
+    fn with_node(mut self, osm_id: i64, lat: f64, lon: f64, elevation: Option<f64>) -> Self {
         let graph_id = (self.nodes.len() + 1) as u64;
         let coord = Coordinate { lat, lon };
 
@@ -156,6 +159,7 @@ impl NodeCollectionState {
             id: graph_id,
             lat,
             lon,
+            elevation,
             population_density: 0.0,
         });
         self.coords.push(coord);
@@ -258,10 +262,22 @@ impl GraphBuilder {
                 |element| -> Vec<OsmNode> {
                     match element {
                         Element::Node(node) => {
-                            vec![OsmNode { osm_id: node.id(), lat: node.lat(), lon: node.lon() }]
+                            let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
+                            vec![OsmNode {
+                                osm_id: node.id(),
+                                lat: node.lat(),
+                                lon: node.lon(),
+                                elevation,
+                            }]
                         }
                         Element::DenseNode(node) => {
-                            vec![OsmNode { osm_id: node.id(), lat: node.lat(), lon: node.lon() }]
+                            let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
+                            vec![OsmNode {
+                                osm_id: node.id(),
+                                lat: node.lat(),
+                                lon: node.lon(),
+                                elevation,
+                            }]
                         }
                         _ => Vec::new(),
                     }
@@ -272,7 +288,7 @@ impl GraphBuilder {
 
             let state = osm_nodes.into_iter().fold(
                 NodeCollectionState::new(),
-                |state, node| state.with_node(node.osm_id, node.lat, node.lon),
+                |state, node| state.with_node(node.osm_id, node.lat, node.lon, node.elevation),
             );
             return Ok(state);
         }
@@ -348,14 +364,26 @@ impl GraphBuilder {
                 match element {
                     Element::Node(node) => {
                         if needed_node_ids.contains(&node.id()) {
-                            vec![OsmNode { osm_id: node.id(), lat: node.lat(), lon: node.lon() }]
+                            let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
+                            vec![OsmNode {
+                                osm_id: node.id(),
+                                lat: node.lat(),
+                                lon: node.lon(),
+                                elevation,
+                            }]
                         } else {
                             Vec::new()
                         }
                     }
                     Element::DenseNode(node) => {
                         if needed_node_ids.contains(&node.id()) {
-                            vec![OsmNode { osm_id: node.id(), lat: node.lat(), lon: node.lon() }]
+                            let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
+                            vec![OsmNode {
+                                osm_id: node.id(),
+                                lat: node.lat(),
+                                lon: node.lon(),
+                                elevation,
+                            }]
                         } else {
                             Vec::new()
                         }
@@ -369,7 +397,7 @@ impl GraphBuilder {
 
         let state = osm_nodes.into_iter().fold(
             NodeCollectionState::new(),
-            |state, node| state.with_node(node.osm_id, node.lat, node.lon),
+            |state, node| state.with_node(node.osm_id, node.lat, node.lon, node.elevation),
         );
 
         Ok(state)
@@ -404,11 +432,13 @@ impl GraphBuilder {
     }
 }
 
-// Pure function to process a node element
+// Pure function to process a node element (not used anymore, kept for reference)
+#[allow(dead_code)]
 fn process_node_element(
     lat: f64,
     lon: f64,
     osm_id: i64,
+    elevation: Option<f64>,
     bbox: Option<BoundingBox>,
 ) -> Vec<OsmNode> {
     let coord = Coordinate { lat, lon };
@@ -417,7 +447,7 @@ fn process_node_element(
     let in_bbox = bbox.map(|b| b.contains(coord)).unwrap_or(true);
 
     if in_bbox {
-        vec![OsmNode { osm_id, lat, lon }]
+        vec![OsmNode { osm_id, lat, lon, elevation }]
     } else {
         Vec::new()
     }
@@ -533,4 +563,12 @@ fn infer_surface(tags: &[(String, String)]) -> SurfaceType {
 
     // Default fallback
     SurfaceType::Trail
+}
+
+// Extract elevation from OSM tags
+// OSM uses 'ele' tag for elevation in meters
+fn extract_elevation(tags: &[(&str, &str)]) -> Option<f64> {
+    tags.iter()
+        .find(|(k, _)| *k == "ele")
+        .and_then(|(_, v)| v.parse::<f64>().ok())
 }

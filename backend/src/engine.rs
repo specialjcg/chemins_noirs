@@ -195,6 +195,8 @@ fn straight_line_km(a: Coordinate, b: Coordinate) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use petgraph::visit::EdgeRef;
+
     use super::*;
 
     const SAMPLE: &str = include_str!("../data/sample_graph.json");
@@ -305,13 +307,13 @@ mod tests {
 
         // Count nodes with at least one neighbor
         let mut edges_by_node = std::collections::HashMap::new();
-        for node in &engine.nodes {
-            edges_by_node.insert(node.coord, Vec::new());
+        for node_idx in engine.graph.node_indices() {
+            edges_by_node.insert(node_idx, Vec::new());
         }
 
         for edge in engine.graph.edge_references() {
-            let from = engine.graph[edge.source()].coord;
-            let to = engine.graph[edge.target()].coord;
+            let from = edge.source();
+            let to = edge.target();
             edges_by_node.get_mut(&from).unwrap().push(to);
             edges_by_node.get_mut(&to).unwrap().push(from);
         }

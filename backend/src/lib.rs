@@ -1,3 +1,4 @@
+pub mod elevation;
 pub mod engine;
 pub mod error;
 pub mod gpx_export;
@@ -7,8 +8,9 @@ pub mod partial_graph;
 pub mod routing;
 
 use std::sync::Arc;
+use std::path::PathBuf;
 
-use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::{post, get}};
 
 use crate::engine::RouteEngine;
 use crate::error::RouteError;
@@ -26,6 +28,8 @@ pub struct AppState {
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/api/route", post(route_handler))
+        .route("/api/routes/save", post(save_route_handler))
+        .route("/api/routes/load", get(load_route_handler))
         .with_state(state)
 }
 
@@ -36,6 +40,8 @@ pub fn create_router_with_partial(
 ) -> Router {
     Router::new()
         .route("/api/route", post(route_handler))
+        .route("/api/routes/save", post(save_route_handler))
+        .route("/api/routes/load", get(load_route_handler))
         .with_state(state.clone())
         .route("/api/graph/partial", post(partial_graph::partial_graph_handler))
         .with_state(partial_config)
@@ -58,6 +64,7 @@ async fn route_handler(
         distance_km,
         gpx_base64,
         metadata: Some(metadata),
+        elevation_profile: None, // Not available in this handler (legacy backend)
     };
 
     Ok(Json(response))
@@ -102,4 +109,87 @@ fn internal_error(err: RouteError) -> (StatusCode, Json<ApiError>) {
             message: err.to_string(),
         }),
     )
+}
+
+// Handler pour sauvegarder une route sur le disque
+async fn save_route_handler(
+    State(_state): State<AppState>,
+    Json(route): Json<RouteResponse>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let save_dir = PathBuf::from("backend/data/saved_routes");
+
+    // Créer le répertoire s'il n'existe pas
+    if let Err(e) = std::fs::create_dir_all(&save_dir) {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                message: format!("Failed to create save directory: {}", e),
+            }),
+        ));
+    }
+
+    // Utiliser un nom de fichier fixe pour la dernière route sauvegardée
+    let file_path = save_dir.join("last_route.json");
+
+    // Sérialiser et sauvegarder
+    let json_str = serde_json::to_string_pretty(&route).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                message: format!("Failed to serialize route: {}", e),
+            }),
+        )
+    })?;
+
+    std::fs::write(&file_path, json_str).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                message: format!("Failed to write route file: {}", e),
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Route sauvegardée avec succès"
+    })))
+}
+
+// Handler pour charger la dernière route sauvegardée
+async fn load_route_handler(
+    State(_state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let file_path = PathBuf::from("backend/data/saved_routes/last_route.json");
+
+    // Vérifier si le fichier existe
+    if !file_path.exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                message: "Aucune route sauvegardée trouvée".to_string(),
+            }),
+        ));
+    }
+
+    // Lire et désérialiser
+    let json_str = std::fs::read_to_string(&file_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                message: format!("Failed to read route file: {}", e),
+            }),
+        )
+    })?;
+
+    let route: RouteResponse = serde_json::from_str(&json_str).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                message: format!("Failed to deserialize route: {}", e),
+            }),
+        )
+    })?;
+
+    Ok(Json(route))
 }

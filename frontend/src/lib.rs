@@ -21,18 +21,18 @@ extern "C" {
     fn update_bbox_js(bounds: JsValue);
 }
 
-#[wasm_bindgen(module = "/cesium.js")]
+#[wasm_bindgen(module = "/mapbox3d.js")]
 extern "C" {
-    #[wasm_bindgen(js_name = initCesiumViewer)]
-    fn init_cesium_viewer();
-    #[wasm_bindgen(js_name = updateRoute3D)]
-    fn update_route_3d(coords: JsValue, elevations: JsValue);
+    #[wasm_bindgen(js_name = initMapbox3D)]
+    fn init_mapbox_3d();
+    #[wasm_bindgen(js_name = updateRoute3DMapbox)]
+    fn update_route_3d_mapbox(coords: JsValue, elevations: JsValue);
     #[wasm_bindgen(js_name = playRouteAnimation)]
-    fn play_route_animation(speed: f64);
+    fn play_route_animation();
     #[wasm_bindgen(js_name = pauseRouteAnimation)]
     fn pause_route_animation();
-    #[wasm_bindgen(js_name = toggleCesiumView)]
-    fn toggle_cesium_view(enabled: bool);
+    #[wasm_bindgen(js_name = toggleMapbox3DView)]
+    fn toggle_mapbox_3d_view(enabled: bool);
 }
 
 fn api_root() -> String {
@@ -124,6 +124,8 @@ pub enum Msg {
     Toggle3DView,
     PlayAnimation,
     PauseAnimation,
+    SaveRoute,
+    LoadRoute,
     MapClicked { lat: f64, lon: f64 },
     RouteFetched(Result<RouteResponse, String>),
 }
@@ -151,10 +153,11 @@ pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
 
     let model = Model {
         form: RouteForm {
-            start_lat: "45.0005".into(),
-            start_lon: "5.0005".into(),
-            end_lat: "45.024".into(),
-            end_lon: "5.034".into(),
+            // Combefort, Le Bois-d'Oingt (69620)
+            start_lat: "45.9305".into(),
+            start_lon: "4.5776".into(),
+            end_lat: "45.9399".into(),
+            end_lon: "4.5757".into(),
             w_pop: "1.5".into(),
             w_paved: "4.0".into(),
         },
@@ -224,7 +227,7 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                             .as_ref()
                             .and_then(|p| to_value(&p.elevations).ok())
                             .unwrap_or(JsValue::NULL);
-                        update_route_3d(coords_value, elevations_value);
+                        update_route_3d_mapbox(coords_value, elevations_value);
                     }
 
                     model.last_response = Some(route);
@@ -252,7 +255,7 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                 ViewMode::Map2D => ViewMode::Map3D,
                 ViewMode::Map3D => ViewMode::Map2D,
             };
-            toggle_cesium_view(model.view_mode == ViewMode::Map3D);
+            toggle_mapbox_3d_view(model.view_mode == ViewMode::Map3D);
 
             // If switching to 3D and we have a route, render it in 3D
             if model.view_mode == ViewMode::Map3D
@@ -263,18 +266,31 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                         .as_ref()
                         .and_then(|p| to_value(&p.elevations).ok())
                         .unwrap_or(JsValue::NULL);
-                    update_route_3d(coords_value, elevations_value);
+                    update_route_3d_mapbox(coords_value, elevations_value);
                 }
         }
         Msg::PlayAnimation => {
             if model.view_mode == ViewMode::Map3D {
                 model.animation_state = AnimationState::Playing;
-                play_route_animation(1.0); // Speed 1.0x
+                play_route_animation();
             }
         }
         Msg::PauseAnimation => {
             model.animation_state = AnimationState::Stopped;
             pause_route_animation();
+        }
+        Msg::SaveRoute => {
+            if let Some(ref route) = model.last_response {
+                save_route_to_disk(route);
+            }
+        }
+        Msg::LoadRoute => {
+            orders.perform_cmd(async {
+                match load_route_from_disk_async().await {
+                    Ok(route) => Msg::RouteFetched(Ok(route)),
+                    Err(e) => Msg::RouteFetched(Err(e)),
+                }
+            });
         }
         Msg::MapClicked { lat, lon } => {
             let lat_str = format_coord(lat);
@@ -459,6 +475,37 @@ fn view_form(model: &Model) -> Node<Msg> {
         } else {
             empty![]
         },
+        if model.last_response.is_some() {
+            fieldset![
+                legend!["Sauvegarder/Charger"],
+                button![
+                    "💾 Sauvegarder",
+                    ev(Ev::Click, |event| {
+                        event.prevent_default();
+                        Msg::SaveRoute
+                    }),
+                    C!["save-btn"],
+                ],
+                button![
+                    "📂 Charger",
+                    ev(Ev::Click, |event| {
+                        event.prevent_default();
+                        Msg::LoadRoute
+                    }),
+                    C!["load-btn"],
+                ],
+                small!["Le tracé est sauvegardé localement dans votre navigateur."],
+            ]
+        } else {
+            button![
+                "📂 Charger tracé sauvegardé",
+                ev(Ev::Click, |event| {
+                    event.prevent_default();
+                    Msg::LoadRoute
+                }),
+                C!["load-btn"],
+            ]
+        },
         button![
             "Tracer l'itinéraire",
             ev(Ev::Click, |event| {
@@ -632,6 +679,47 @@ fn view_elevation_profile(profile: &shared::ElevationProfile) -> Node<Msg> {
 struct MapClickPayload {
     lat: f64,
     lon: f64,
+}
+
+// Save route to disk via API
+fn save_route_to_disk(route: &RouteResponse) {
+    let route_clone = route.clone();
+    spawn_local(async move {
+        match Request::new("/api/routes/save")
+            .method(Method::Post)
+            .json(&route_clone)
+        {
+            Err(err) => {
+                web_sys::console::error_1(&format!("Failed to build request: {:?}", err).into());
+            }
+            Ok(request) => match request.fetch().await {
+                Err(err) => {
+                    web_sys::console::error_1(&format!("Failed to save route: {:?}", err).into());
+                }
+                Ok(_) => {
+                    web_sys::console::log_1(&"Route sauvegardée sur le disque".into());
+                }
+            },
+        }
+    });
+}
+
+// Load route from disk via API (async function)
+async fn load_route_from_disk_async() -> Result<RouteResponse, String> {
+    let request = Request::new("/api/routes/load").method(Method::Get);
+    match request.fetch().await {
+        Err(err) => Err(format!("Failed to fetch: {:?}", err)),
+        Ok(raw) => match raw.check_status() {
+            Err(status_err) => Err(format!("Status error: {:?}", status_err)),
+            Ok(resp) => match resp.json::<RouteResponse>().await {
+                Ok(route) => {
+                    web_sys::console::log_1(&"Route chargée depuis le disque".into());
+                    Ok(route)
+                }
+                Err(err) => Err(format!("Failed to parse JSON: {:?}", err)),
+            },
+        },
+    }
 }
 
 #[cfg(test)]

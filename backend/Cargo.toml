@@ -18,6 +18,7 @@ geo-types = "0.7"
 osmpbf = "0.3"
 rayon = "1.10"
 clap = { version = "4.5", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json"] }
 shared = { path = "../shared" }
 
 [dev-dependencies]

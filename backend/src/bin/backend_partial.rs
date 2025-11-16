@@ -1,9 +1,53 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::{extract::State, http::StatusCode, Json};
-use backend::{engine::RouteEngine, graph::{BoundingBox, GraphBuilder, GraphBuilderConfig}, models::RouteRequest, partial_graph::PartialGraphConfig, routing::haversine_km};
+use serde_json;
+use backend::{
+    elevation::create_elevation_profile,
+    engine::RouteEngine,
+    graph::{BoundingBox, GraphBuilder, GraphBuilderConfig},
+    models::{ApiError, RouteRequest, RouteResponse as RouteResponseModel},
+    partial_graph::PartialGraphConfig,
+    routing::haversine_km,
+};
 use shared::RouteResponse;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Save route handler used by backend_partial to persist last route
+async fn save_route_handler(
+    Json(route): Json<RouteResponse>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let save_dir = PathBuf::from("backend/data/saved_routes");
+    std::fs::create_dir_all(&save_dir)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create save dir: {e}")))?;
+
+    let file_path = save_dir.join("last_route.json");
+    let json_str = serde_json::to_string_pretty(&route)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize route: {e}")))?;
+
+    std::fs::write(&file_path, json_str)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write route file: {e}")))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Route sauvegardée avec succès"
+    })))
+}
+
+/// Load route handler used by backend_partial to read last saved route
+async fn load_route_handler() -> Result<Json<RouteResponse>, (StatusCode, String)> {
+    let file_path = PathBuf::from("backend/data/saved_routes/last_route.json");
+    if !file_path.exists() {
+        return Err((StatusCode::NOT_FOUND, "Aucune route sauvegardée trouvée".to_string()));
+    }
+
+    let json_str = std::fs::read_to_string(&file_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read route file: {e}")))?;
+    let route: RouteResponse = serde_json::from_str(&json_str)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to deserialize route: {e}")))?;
+
+    Ok(Json(route))
+}
 
 /// Handler for /api/route - generates partial graph on-demand and finds route
 async fn route_handler(
@@ -59,6 +103,25 @@ async fn route_handler(
                 .map(|pair| haversine_km(pair[0], pair[1]))
                 .sum();
 
+            // Fetch elevation profile on-demand
+            tracing::info!("Fetching elevation profile for {} points...", path.len());
+            let elevation_profile = match create_elevation_profile(&path).await {
+                Ok(profile) => {
+                    tracing::info!(
+                        "Elevation profile created: min={:?}m, max={:?}m, ascent={}m, descent={}m",
+                        profile.min_elevation,
+                        profile.max_elevation,
+                        profile.total_ascent,
+                        profile.total_descent
+                    );
+                    Some(profile)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch elevation profile: {}", e);
+                    None
+                }
+            };
+
             // For now, GPX base64 is empty - we can implement it later
             let gpx_base64 = String::new();
 
@@ -67,6 +130,7 @@ async fn route_handler(
                 distance_km,
                 gpx_base64,
                 metadata: None,
+                elevation_profile,
             };
 
             Ok(Json(response))
@@ -116,6 +180,8 @@ async fn main() {
             axum::routing::post(backend::partial_graph::partial_graph_handler),
         )
         .route("/api/route", axum::routing::post(route_handler))
+        .route("/api/routes/save", axum::routing::post(save_route_handler))
+        .route("/api/routes/load", axum::routing::get(load_route_handler))
         .route("/api/click_mode", axum::routing::get(click_mode_handler))
         .with_state(config);
 
