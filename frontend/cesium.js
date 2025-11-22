@@ -154,6 +154,40 @@ export function updateRoute3D(coords, elevations) {
   }
 }
 
+/**
+ * Calcule le bearing moyen sur plusieurs points pour un lissage optimal
+ */
+function computeSmoothedBearing(path, currentIndex, lookAhead = 10) {
+  if (!path || path.length < 2) return 0;
+
+  const bearings = [];
+  const maxIndex = Math.min(currentIndex + lookAhead, path.length - 1);
+
+  for (let i = currentIndex; i < maxIndex; i++) {
+    const b = bearing(path[i], path[i + 1]);
+    bearings.push(b);
+  }
+
+  if (bearings.length === 0) {
+    return currentIndex > 0 ? bearing(path[currentIndex - 1], path[currentIndex]) : 0;
+  }
+
+  // Moyenne circulaire pour gérer le wrap-around (0°-360°)
+  const sinSum = bearings.reduce((sum, b) => sum + Math.sin(b * Math.PI / 180), 0);
+  const cosSum = bearings.reduce((sum, b) => sum + Math.cos(b * Math.PI / 180), 0);
+  return Math.atan2(sinSum, cosSum) * 180 / Math.PI;
+}
+
+/**
+ * Interpole deux angles avec gestion du wrap-around
+ */
+function interpolateBearing(current, target, factor = 0.15) {
+  let diff = target - current;
+  if (diff > 180) diff -= 360;
+  else if (diff < -180) diff += 360;
+  return (current + diff * factor + 360) % 360;
+}
+
 export function playRouteAnimation(speed = 1.0) {
   if (!viewer || animationPath.length === 0) {
     console.warn("[cesium] Cannot play animation - no route loaded");
@@ -169,8 +203,9 @@ export function playRouteAnimation(speed = 1.0) {
     isAnimating = true;
     currentAnimationIndex = 0;
     lastAnimationTime = performance.now();
+    let lastHeading = 0; // Pour l'interpolation du bearing
 
-    console.debug("[cesium] Starting animation with speed", speed);
+    console.debug("[cesium] Starting FPV animation at street-level with speed", speed);
 
     // Validate and store speed parameter
     animationSpeed = (typeof speed === 'number' && speed > 0) ? speed : 1.0;
@@ -205,23 +240,32 @@ export function playRouteAnimation(speed = 1.0) {
             return;
           }
 
-          // Calculate camera orientation
-          const heading = Cesium.Math.toRadians(
-            bearing(position, nextPosition)
+          // Calculate camera orientation for STREET-LEVEL FPV view with smoothing
+          const targetHeading = computeSmoothedBearing(animationPath, currentAnimationIndex, 15);
+          const smoothedHeading = interpolateBearing(lastHeading, targetHeading, 0.15);
+          lastHeading = smoothedHeading;
+
+          const heading = Cesium.Math.toRadians(smoothedHeading);
+
+          // STREET-LEVEL CONFIGURATION
+          const pitch = Cesium.Math.toRadians(-10); // Vue quasi-horizontale (conducteur)
+          const heightAboveGround = 2.0; // 2 mètres au-dessus du sol (hauteur d'homme)
+
+          // Position de la caméra : point de la route + hauteur
+          const cameraPosition = Cesium.Cartesian3.fromDegrees(
+            Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(position).longitude),
+            Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(position).latitude),
+            Cesium.Cartographic.fromCartesian(position).height + heightAboveGround
           );
-          const pitch = Cesium.Math.toRadians(-15); // Look slightly down
-          const range = 200; // 200m from path
 
           viewer.camera.setView({
-            destination: position,
+            destination: cameraPosition,
             orientation: {
               heading: heading,
               pitch: pitch,
               roll: 0.0
             }
           });
-
-          viewer.camera.moveBackward(range);
 
           currentAnimationIndex++;
         }
