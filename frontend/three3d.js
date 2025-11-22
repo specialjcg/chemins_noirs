@@ -1,6 +1,8 @@
 // Custom 3D engine using Three.js (100% free and open-source)
 // No tokens, no paid services
 
+import * as THREE from 'three';
+
 let scene, camera, renderer;
 let routeLine;
 let currentRouteCoords = [];
@@ -11,7 +13,7 @@ let currentAnimationIndex = 0;
 
 // Constants for conversion
 const METERS_PER_DEGREE_LAT = 111000; // Approximate meters per degree of latitude
-const SCALE_FACTOR = 1000; // Scale factor for visualization
+const SCALE_FACTOR = 10; // Much smaller scale for better visualization
 
 /**
  * Initialize the Three.js 3D scene
@@ -52,16 +54,20 @@ export function initThree3D() {
   scene.add(directionalLight);
 
   // Add a ground plane for reference
-  const groundGeometry = new THREE.PlaneGeometry(10000, 10000);
-  const groundMaterial = new THREE.MeshBasicMaterial({
-    color: 0x90EE90,
-    side: THREE.DoubleSide,
-    transparent: true,
-    opacity: 0.5
+  const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
+  const groundMaterial = new THREE.MeshLambertMaterial({
+    color: 0x228B22, // Forest green
+    side: THREE.DoubleSide
   });
   const ground = new THREE.Mesh(groundGeometry, groundMaterial);
   ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -1; // Slightly below zero
   scene.add(ground);
+
+  // Add grid helper for better spatial understanding
+  const gridHelper = new THREE.GridHelper(1000, 50, 0x444444, 0x222222);
+  gridHelper.position.y = -0.9;
+  scene.add(gridHelper);
 
   // Handle window resize
   window.addEventListener('resize', () => {
@@ -116,31 +122,72 @@ export function updateRoute3D(coords, elevations) {
   const centerLat = currentRouteCoords[Math.floor(currentRouteCoords.length / 2)].lat;
   const centerLon = currentRouteCoords[Math.floor(currentRouteCoords.length / 2)].lon;
 
-  // Create route line
+  // Create route line with tube geometry for better visibility
   const points = currentRouteCoords.map((coord, idx) => {
     const elevation = currentElevations[idx] || 0;
     const pos = latLonToXYZ(coord.lat, coord.lon, elevation, centerLat, centerLon);
     return new THREE.Vector3(pos.x, pos.y, pos.z);
   });
 
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const material = new THREE.LineBasicMaterial({
+  // Create a tube geometry for a thick, visible line
+  const curve = new THREE.CatmullRomCurve3(points);
+  const tubeGeometry = new THREE.TubeGeometry(curve, points.length * 2, 0.5, 8, false);
+  const tubeMaterial = new THREE.MeshLambertMaterial({
     color: 0xff6b35, // Bright orange
-    linewidth: 3
+    emissive: 0xff3300,
+    emissiveIntensity: 0.3
   });
-  routeLine = new THREE.Line(geometry, material);
+  routeLine = new THREE.Mesh(tubeGeometry, tubeMaterial);
   scene.add(routeLine);
 
-  // Position camera to see the whole route
-  if (points.length > 0) {
-    const firstPoint = points[0];
-    const lastPoint = points[points.length - 1];
-    const midX = (firstPoint.x + lastPoint.x) / 2;
-    const midZ = (firstPoint.z + lastPoint.z) / 2;
-    const avgY = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+  // Add markers at start and end
+  const sphereGeometry = new THREE.SphereGeometry(1, 16, 16);
 
-    camera.position.set(midX, avgY + 50, midZ + 100);
-    camera.lookAt(midX, avgY, midZ);
+  const startMaterial = new THREE.MeshLambertMaterial({
+    color: 0x00ff00,
+    emissive: 0x00ff00,
+    emissiveIntensity: 0.5
+  });
+  const startMarker = new THREE.Mesh(sphereGeometry, startMaterial);
+  startMarker.position.copy(points[0]);
+  scene.add(startMarker);
+
+  const endMaterial = new THREE.MeshLambertMaterial({
+    color: 0xff0000,
+    emissive: 0xff0000,
+    emissiveIntensity: 0.5
+  });
+  const endMarker = new THREE.Mesh(sphereGeometry, endMaterial);
+  endMarker.position.copy(points[points.length - 1]);
+  scene.add(endMarker);
+
+  // Position camera to see the whole route from above at angle
+  if (points.length > 0) {
+    // Calculate bounding box
+    const bounds = {
+      minX: Math.min(...points.map(p => p.x)),
+      maxX: Math.max(...points.map(p => p.x)),
+      minY: Math.min(...points.map(p => p.y)),
+      maxY: Math.max(...points.map(p => p.y)),
+      minZ: Math.min(...points.map(p => p.z)),
+      maxZ: Math.max(...points.map(p => p.z))
+    };
+
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerY = (bounds.minY + bounds.maxY) / 2;
+    const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+
+    const rangeX = bounds.maxX - bounds.minX;
+    const rangeZ = bounds.maxZ - bounds.minZ;
+    const maxRange = Math.max(rangeX, rangeZ);
+
+    // Position camera at 45-degree angle above the route
+    camera.position.set(
+      centerX + maxRange * 0.5,
+      centerY + maxRange * 1.2,
+      centerZ + maxRange * 0.8
+    );
+    camera.lookAt(centerX, centerY, centerZ);
   }
 
   // Render
@@ -192,20 +239,24 @@ export function playRouteAnimation() {
 
     if (currentAnimationIndex < points.length - 1) {
       const currentPoint = points[currentAnimationIndex];
-      const nextPoint = points[currentAnimationIndex + 1];
+      const nextIndex = Math.min(currentAnimationIndex + 5, points.length - 1);
+      const nextPoint = points[nextIndex];
 
-      // Position camera at human height (1.7m = 0.0017 in scaled units)
+      // Position camera at human height (1.7m / SCALE_FACTOR = 0.17)
+      const eyeHeight = 0.17;
       camera.position.set(
         currentPoint.x,
-        currentPoint.y + 0.002, // Human eye height
+        currentPoint.y + eyeHeight,
         currentPoint.z
       );
 
-      // Look towards next point
+      // Look towards a point ahead on the path (not just next point)
+      const lookAheadIndex = Math.min(currentAnimationIndex + 10, points.length - 1);
+      const lookAtPoint = points[lookAheadIndex];
       camera.lookAt(
-        nextPoint.x,
-        nextPoint.y + 0.002,
-        nextPoint.z
+        lookAtPoint.x,
+        lookAtPoint.y + eyeHeight,
+        lookAtPoint.z
       );
 
       // Render
