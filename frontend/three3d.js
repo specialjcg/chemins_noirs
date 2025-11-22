@@ -14,6 +14,9 @@ let currentAnimationIndex = 0;
 // Constants for conversion
 const METERS_PER_DEGREE_LAT = 111000; // Approximate meters per degree of latitude
 const SCALE_FACTOR = 10; // Much smaller scale for better visualization
+const ELEVATION_SCALE = 3; // Exaggerate elevation for visibility
+
+let terrainMesh = null;
 
 /**
  * Initialize the Three.js 3D scene
@@ -88,9 +91,108 @@ function latLonToXYZ(lat, lon, elevation, centerLat, centerLon) {
   // Calculate relative position from center point
   const x = (lon - centerLon) * METERS_PER_DEGREE_LAT * Math.cos(centerLat * Math.PI / 180) / SCALE_FACTOR;
   const z = -(lat - centerLat) * METERS_PER_DEGREE_LAT / SCALE_FACTOR; // Negative to match Three.js coordinate system
-  const y = elevation / SCALE_FACTOR;
+  const y = elevation * ELEVATION_SCALE / SCALE_FACTOR;
 
   return { x, y, z };
+}
+
+/**
+ * Create 3D terrain mesh from route coordinates and elevations
+ */
+function createTerrain(coords, elevations, centerLat, centerLon) {
+  if (!coords || coords.length === 0) return null;
+
+  // Calculate bounds
+  const lats = coords.map(c => c.lat);
+  const lons = coords.map(c => c.lon);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons);
+  const maxLon = Math.max(...lons);
+
+  // Add padding around route
+  const latPadding = (maxLat - minLat) * 0.3;
+  const lonPadding = (maxLon - minLon) * 0.3;
+
+  // Create terrain grid (higher resolution for smoother terrain)
+  const segments = 100;
+  const geometry = new THREE.PlaneGeometry(1, 1, segments, segments);
+
+  // Get terrain bounds in 3D space
+  const minPos = latLonToXYZ(minLat - latPadding, minLon - lonPadding, 0, centerLat, centerLon);
+  const maxPos = latLonToXYZ(maxLat + latPadding, maxLon + lonPadding, 0, centerLat, centerLon);
+
+  const width = maxPos.x - minPos.x;
+  const depth = minPos.z - maxPos.z; // Note: z is inverted
+
+  // Scale geometry to match terrain size
+  geometry.scale(width, depth, 1);
+  geometry.translate((minPos.x + maxPos.x) / 2, 0, (minPos.z + maxPos.z) / 2);
+
+  // Modify vertices to add elevation
+  const positions = geometry.attributes.position;
+  for (let i = 0; i < positions.count; i++) {
+    const x = positions.getX(i);
+    const z = positions.getZ(i);
+
+    // Convert back to lat/lon
+    const lon = centerLon + (x * SCALE_FACTOR) / (METERS_PER_DEGREE_LAT * Math.cos(centerLat * Math.PI / 180));
+    const lat = centerLat - (z * SCALE_FACTOR) / METERS_PER_DEGREE_LAT;
+
+    // Find nearest route point for elevation
+    let nearestElevation = 0;
+    let minDistance = Infinity;
+
+    coords.forEach((coord, idx) => {
+      const dist = Math.sqrt(
+        Math.pow(coord.lat - lat, 2) +
+        Math.pow(coord.lon - lon, 2)
+      );
+      if (dist < minDistance) {
+        minDistance = dist;
+        nearestElevation = elevations[idx] || 0;
+      }
+    });
+
+    // Set vertex elevation
+    positions.setY(i, nearestElevation * ELEVATION_SCALE / SCALE_FACTOR);
+  }
+
+  geometry.computeVertexNormals();
+  geometry.rotateX(-Math.PI / 2); // Rotate to horizontal
+
+  // Load satellite texture from OpenStreetMap
+  const textureLoader = new THREE.TextureLoader();
+
+  // Calculate tile coordinates for the center of the route
+  const zoom = 13; // Zoom level for satellite imagery
+  const centerTileX = Math.floor((centerLon + 180) / 360 * Math.pow(2, zoom));
+  const centerTileY = Math.floor((1 - Math.log(Math.tan(centerLat * Math.PI / 180) + 1 / Math.cos(centerLat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+
+  // Use OpenStreetMap satellite layer (free)
+  const satelliteUrl = `https://a.tile.openstreetmap.org/${zoom}/${centerTileX}/${centerTileY}.png`;
+
+  const material = new THREE.MeshLambertMaterial({
+    color: 0xffffff,
+    wireframe: false
+  });
+
+  // Load texture asynchronously
+  textureLoader.load(
+    satelliteUrl,
+    (texture) => {
+      material.map = texture;
+      material.needsUpdate = true;
+      console.log("[three3d] Satellite texture loaded");
+    },
+    undefined,
+    (error) => {
+      console.warn("[three3d] Failed to load satellite texture, using color instead");
+      material.color.setHex(0x90EE90); // Fallback to green
+    }
+  );
+
+  return new THREE.Mesh(geometry, material);
 }
 
 /**
@@ -112,15 +214,27 @@ export function updateRoute3D(coords, elevations) {
     return;
   }
 
-  // Remove existing route
+  // Remove existing route and terrain
   if (routeLine) {
     scene.remove(routeLine);
     routeLine = null;
+  }
+  if (terrainMesh) {
+    scene.remove(terrainMesh);
+    terrainMesh = null;
   }
 
   // Calculate center point for coordinate conversion
   const centerLat = currentRouteCoords[Math.floor(currentRouteCoords.length / 2)].lat;
   const centerLon = currentRouteCoords[Math.floor(currentRouteCoords.length / 2)].lon;
+
+  // Create 3D terrain with satellite texture
+  console.log("[three3d] Creating terrain mesh...");
+  terrainMesh = createTerrain(currentRouteCoords, currentElevations, centerLat, centerLon);
+  if (terrainMesh) {
+    scene.add(terrainMesh);
+    console.log("[three3d] Terrain added to scene");
+  }
 
   // Create route line with tube geometry for better visibility
   const points = currentRouteCoords.map((coord, idx) => {
