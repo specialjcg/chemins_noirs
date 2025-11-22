@@ -265,22 +265,22 @@ export function playRouteAnimation() {
       if (currentIndex < currentRouteCoords.length) {
         const coord = currentRouteCoords[currentIndex];
 
-        // Calculer le bearing lissé en regardant plusieurs points en avant
-        const targetBearing = computeSmoothedBearing(currentRouteCoords, currentIndex, 8);
+        // Calculer le bearing lissé en regardant plus loin (12 points) pour plus de fluidité
+        const targetBearing = computeSmoothedBearing(currentRouteCoords, currentIndex, 12);
 
-        // Interpoler progressivement vers le nouveau bearing pour éviter les sauts brusques
-        const smoothedBearing = interpolateBearing(lastBearing, targetBearing, 0.25);
+        // Interpolation plus douce (0.2 au lieu de 0.25) pour transitions ultra-fluides
+        const smoothedBearing = interpolateBearing(lastBearing, targetBearing, 0.2);
         lastBearing = smoothedBearing; // Mémoriser pour la prochaine frame
 
-        // Smoothly fly to current point with low-altitude "drone" perspective
+        // Vue drone immersive : très proche de la route avec transition fluide
         map3d.easeTo({
           center: [coord[0], coord[1]],
-          zoom: 16.5,
-          pitch: 80,
+          zoom: 17.5,       // Plus proche qu'avant (16.5 → 17.5)
+          pitch: 75,        // Légèrement moins vertical (80 → 75) pour mieux voir la route
           bearing: smoothedBearing,
-          duration: 200, // Augmenté de 120ms à 200ms pour plus de fluidité
-          easing: t => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t, // Easing quadratique pour accélération/décélération
-          offset: [0, 60]
+          duration: 250,    // Transitions encore plus longues pour fluidité maximale
+          easing: t => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t, // Easing quadratique
+          offset: [0, 80]   // Caméra légèrement plus haute sur l'écran
         });
       }
 
