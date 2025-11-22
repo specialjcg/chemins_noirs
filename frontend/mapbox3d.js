@@ -25,6 +25,64 @@ function computeBearing(from, to) {
   return (bearing + 360) % 360;
 }
 
+/**
+ * Pure function: Calcule le bearing moyen sur un segment de route pour un lissage optimal
+ * @param {Array<[number, number]>} coords - Coordonnées de la route
+ * @param {number} currentIndex - Index actuel
+ * @param {number} lookAhead - Nombre de points à regarder en avant (default: 5)
+ * @returns {number} Bearing lissé en degrés
+ */
+function computeSmoothedBearing(coords, currentIndex, lookAhead = 5) {
+  if (!coords || coords.length < 2) {
+    return 0;
+  }
+
+  // Calculer les bearings des segments suivants
+  const bearings = [];
+  const maxIndex = Math.min(currentIndex + lookAhead, coords.length - 1);
+
+  for (let i = currentIndex; i < maxIndex; i++) {
+    const bearing = computeBearing(coords[i], coords[i + 1]);
+    bearings.push(bearing);
+  }
+
+  // Cas particulier: gérer le passage de 359° à 0° (wrap around)
+  // Convertir en vecteurs puis moyenner pour éviter les sauts
+  if (bearings.length === 0) {
+    return computeBearing(
+      coords[Math.max(0, currentIndex - 1)],
+      coords[currentIndex]
+    );
+  }
+
+  // Moyenne circulaire pour gérer le wrap-around (0°-360°)
+  const sinSum = bearings.reduce((sum, b) => sum + Math.sin(b * Math.PI / 180), 0);
+  const cosSum = bearings.reduce((sum, b) => sum + Math.cos(b * Math.PI / 180), 0);
+  const avgBearing = Math.atan2(sinSum, cosSum) * 180 / Math.PI;
+
+  return (avgBearing + 360) % 360;
+}
+
+/**
+ * Pure function: Interpole deux angles avec gestion du wrap-around
+ * @param {number} current - Angle actuel en degrés
+ * @param {number} target - Angle cible en degrés
+ * @param {number} factor - Facteur d'interpolation (0-1)
+ * @returns {number} Angle interpolé
+ */
+function interpolateBearing(current, target, factor = 0.3) {
+  // Gérer le plus court chemin entre les angles
+  let diff = target - current;
+
+  if (diff > 180) {
+    diff -= 360;
+  } else if (diff < -180) {
+    diff += 360;
+  }
+
+  return (current + diff * factor + 360) % 360;
+}
+
 export function initMapbox3D() {
   if (map3d) {
     return;
@@ -191,6 +249,7 @@ export function playRouteAnimation() {
     let currentIndex = 0;
     const totalDuration = 15000; // 15 seconds total animation
     const startTime = Date.now();
+    let lastBearing = map3d.getBearing(); // Bearing initial pour l'interpolation
 
     console.debug("[mapbox] Starting animation with", currentRouteCoords.length, "points");
 
@@ -205,17 +264,22 @@ export function playRouteAnimation() {
 
       if (currentIndex < currentRouteCoords.length) {
         const coord = currentRouteCoords[currentIndex];
-        const nextCoord = currentRouteCoords[Math.min(currentRouteCoords.length - 1, currentIndex + 1)];
-        const bearing = computeBearing(coord, nextCoord);
+
+        // Calculer le bearing lissé en regardant plusieurs points en avant
+        const targetBearing = computeSmoothedBearing(currentRouteCoords, currentIndex, 8);
+
+        // Interpoler progressivement vers le nouveau bearing pour éviter les sauts brusques
+        const smoothedBearing = interpolateBearing(lastBearing, targetBearing, 0.25);
+        lastBearing = smoothedBearing; // Mémoriser pour la prochaine frame
 
         // Smoothly fly to current point with low-altitude "drone" perspective
         map3d.easeTo({
           center: [coord[0], coord[1]],
           zoom: 16.5,
           pitch: 80,
-          bearing,
-          duration: 120,
-          easing: t => t,
+          bearing: smoothedBearing,
+          duration: 200, // Augmenté de 120ms à 200ms pour plus de fluidité
+          easing: t => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t, // Easing quadratique pour accélération/décélération
           offset: [0, 60]
         });
       }
