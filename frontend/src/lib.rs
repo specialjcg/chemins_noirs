@@ -28,25 +28,11 @@ extern "C" {
     #[wasm_bindgen(js_name = updateRoute3DMapbox)]
     fn update_route_3d_mapbox(coords: JsValue, elevations: JsValue);
     #[wasm_bindgen(js_name = playRouteAnimation)]
-    fn play_route_animation_mapbox();
+    fn play_route_animation();
     #[wasm_bindgen(js_name = pauseRouteAnimation)]
-    fn pause_route_animation_mapbox();
+    fn pause_route_animation();
     #[wasm_bindgen(js_name = toggleMapbox3DView)]
     fn toggle_mapbox_3d_view(enabled: bool);
-}
-
-#[wasm_bindgen(module = "/cesium.js")]
-extern "C" {
-    #[wasm_bindgen(js_name = initCesiumViewer)]
-    fn init_cesium_viewer();
-    #[wasm_bindgen(js_name = updateRoute3D)]
-    fn update_route_3d_cesium(coords: JsValue, elevations: JsValue);
-    #[wasm_bindgen(js_name = playRouteAnimation)]
-    fn play_route_animation_cesium(speed: f64);
-    #[wasm_bindgen(js_name = pauseRouteAnimation)]
-    fn pause_route_animation_cesium();
-    #[wasm_bindgen(js_name = toggleCesiumView)]
-    fn toggle_cesium_view(enabled: bool);
 }
 
 fn api_root() -> String {
@@ -241,7 +227,7 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                             .as_ref()
                             .and_then(|p| to_value(&p.elevations).ok())
                             .unwrap_or(JsValue::NULL);
-                        update_route_3d_cesium(coords_value, elevations_value);
+                        update_route_3d_mapbox(coords_value, elevations_value);
                     }
 
                     model.last_response = Some(route);
@@ -269,7 +255,7 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                 ViewMode::Map2D => ViewMode::Map3D,
                 ViewMode::Map3D => ViewMode::Map2D,
             };
-            toggle_cesium_view(model.view_mode == ViewMode::Map3D);
+            toggle_mapbox_3d_view(model.view_mode == ViewMode::Map3D);
 
             // If switching to 3D and we have a route, render it in 3D
             if model.view_mode == ViewMode::Map3D
@@ -280,18 +266,18 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                         .as_ref()
                         .and_then(|p| to_value(&p.elevations).ok())
                         .unwrap_or(JsValue::NULL);
-                    update_route_3d_cesium(coords_value, elevations_value);
+                    update_route_3d_mapbox(coords_value, elevations_value);
                 }
         }
         Msg::PlayAnimation => {
             if model.view_mode == ViewMode::Map3D {
                 model.animation_state = AnimationState::Playing;
-                play_route_animation_cesium(1.0);
+                play_route_animation();
             }
         }
         Msg::PauseAnimation => {
             model.animation_state = AnimationState::Stopped;
-            pause_route_animation_cesium();
+            pause_route_animation();
         }
         Msg::SaveRoute => {
             if let Some(ref route) = model.last_response {

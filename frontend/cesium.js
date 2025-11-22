@@ -7,9 +7,8 @@ let isAnimating = false;
 let lastAnimationTime = 0;
 let animationSpeed = 1.0;
 
-// Cesium Ion token - using public demo token
-// To get your own free token: https://ion.cesium.com/signup
-Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJkN2MyNmUzNC1jNzQ5LTRmZTUtOWJjNi0zOTk1YjUyMDc1NjgiLCJpZCI6MjU5LCJpYXQiOjE3MTIwNjM4MTV9.HlCfoaw-vZPTHcXXYNL5kSgVujjGfCR-8pnLgvVPJ0M';
+// NO TOKEN NEEDED - Using free OSM imagery and basic terrain
+// For better imagery and terrain, get a free token at: https://ion.cesium.com/signup
 
 export async function initCesiumViewer() {
   if (viewer) {
@@ -42,15 +41,15 @@ export async function initCesiumViewer() {
       timeline: false,
       fullscreenButton: false,
       vrButton: false,
-      // Use Cesium Ion satellite imagery
-      imageryProvider: new Cesium.IonImageryProvider({ assetId: 2 })
+      // Use free OpenStreetMap imagery (no token needed)
+      imageryProvider: new Cesium.OpenStreetMapImageryProvider({
+        url: 'https://a.tile.openstreetmap.org/'
+      })
     });
 
-    // Load Cesium World Terrain
-    viewer.terrainProvider = Cesium.Terrain.fromWorldTerrain({
-      requestWaterMask: true,
-      requestVertexNormals: true
-    });
+    // Use basic ellipsoid terrain (no token needed)
+    // For real terrain data, you need a Cesium Ion token
+    viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
 
     // Configure scene for better 3D visualization
     viewer.scene.globe.enableLighting = true; // Enable sun lighting for depth
@@ -325,20 +324,30 @@ export function pauseRouteAnimation() {
 
 export function toggleCesiumView(enabled) {
   try {
+    console.log("[cesium] toggleCesiumView called with enabled =", enabled);
+
     const cesiumContainer = document.getElementById('cesiumContainer');
     const mapContainer = document.getElementById('map');
+    const mapbox3dContainer = document.getElementById('mapbox3dContainer');
 
     if (!cesiumContainer || !mapContainer) {
       console.error("[cesium] Required DOM elements not found");
+      console.error("[cesium] cesiumContainer:", cesiumContainer);
+      console.error("[cesium] mapContainer:", mapContainer);
       return;
     }
 
     if (enabled) {
+      console.log("[cesium] Enabling Cesium view...");
       cesiumContainer.style.display = 'block';
       mapContainer.style.display = 'none';
+      if (mapbox3dContainer) {
+        mapbox3dContainer.style.display = 'none';
+      }
       initCesiumViewer();
       console.debug("[cesium] 3D view enabled");
     } else {
+      console.log("[cesium] Disabling Cesium view...");
       cesiumContainer.style.display = 'none';
       mapContainer.style.display = 'block';
       pauseRouteAnimation();
