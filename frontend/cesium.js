@@ -240,24 +240,35 @@ export function playRouteAnimation(speed = 1.0) {
             return;
           }
 
-          // Calculate camera orientation for STREET-LEVEL FPV view with smoothing
-          const targetHeading = computeSmoothedBearing(animationPath, currentAnimationIndex, 15);
-          const smoothedHeading = interpolateBearing(lastHeading, targetHeading, 0.15);
+          // ULTRA-LOW FPV: Suivi précis de la trace au ras du sol
+
+          // 1. Position exacte sur la trace (coordonnées géographiques)
+          const currentCartographic = Cesium.Cartographic.fromCartesian(position);
+          const currentLon = Cesium.Math.toDegrees(currentCartographic.longitude);
+          const currentLat = Cesium.Math.toDegrees(currentCartographic.latitude);
+
+          // 2. Altitude très basse (0.8m = hauteur des yeux d'une personne assise)
+          const heightAboveGround = 0.8;
+          const cameraHeight = currentCartographic.height + heightAboveGround;
+
+          // 3. Direction précise : calculer le vecteur vers le point suivant
+          const nextCartographic = Cesium.Cartographic.fromCartesian(nextPosition);
+          const nextLon = Cesium.Math.toDegrees(nextCartographic.longitude);
+          const nextLat = Cesium.Math.toDegrees(nextCartographic.latitude);
+
+          // Bearing précis entre les deux points
+          const targetHeading = bearing(position, nextPosition);
+          const smoothedHeading = interpolateBearing(lastHeading, targetHeading, 0.3);
           lastHeading = smoothedHeading;
 
+          // 4. Caméra : position + orientation
+          const cameraPosition = Cesium.Cartesian3.fromDegrees(currentLon, currentLat, cameraHeight);
+
+          // Pitch : regarder DROIT DEVANT (0°) comme un conducteur
           const heading = Cesium.Math.toRadians(smoothedHeading);
+          const pitch = Cesium.Math.toRadians(0);  // Vue parfaitement horizontale
 
-          // STREET-LEVEL CONFIGURATION
-          const pitch = Cesium.Math.toRadians(-10); // Vue quasi-horizontale (conducteur)
-          const heightAboveGround = 2.0; // 2 mètres au-dessus du sol (hauteur d'homme)
-
-          // Position de la caméra : point de la route + hauteur
-          const cameraPosition = Cesium.Cartesian3.fromDegrees(
-            Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(position).longitude),
-            Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(position).latitude),
-            Cesium.Cartographic.fromCartesian(position).height + heightAboveGround
-          );
-
+          // 5. Positionner la caméra immédiatement (pas de transition)
           viewer.camera.setView({
             destination: cameraPosition,
             orientation: {
