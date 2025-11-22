@@ -6,7 +6,7 @@ use backend::{
     elevation::create_elevation_profile,
     engine::RouteEngine,
     graph::{BoundingBox, GraphBuilder, GraphBuilderConfig},
-    models::{ApiError, RouteRequest, RouteResponse as RouteResponseModel},
+    models::RouteRequest,
     partial_graph::PartialGraphConfig,
     routing::haversine_km,
 };
@@ -190,6 +190,8 @@ async fn main() {
     tracing::info!("API endpoints:");
     tracing::info!("  POST /api/route - Find route with on-demand graph generation");
     tracing::info!("  POST /api/graph/partial - Generate partial graph");
+    tracing::info!("  POST /api/routes/save - Save route to disk");
+    tracing::info!("  GET /api/routes/load - Load saved route from disk");
     tracing::info!("  GET /api/click_mode - Get click mode");
     tracing::info!("Ready to generate graphs on-demand!");
 
