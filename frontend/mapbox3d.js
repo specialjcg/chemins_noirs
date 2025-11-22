@@ -272,15 +272,15 @@ export function playRouteAnimation() {
         const smoothedBearing = interpolateBearing(lastBearing, targetBearing, 0.2);
         lastBearing = smoothedBearing; // Mémoriser pour la prochaine frame
 
-        // Vue drone immersive : très proche de la route avec transition fluide
+        // Vue STREET-LEVEL : à hauteur d'homme (~4m) pour immersion maximale
         map3d.easeTo({
           center: [coord[0], coord[1]],
-          zoom: 17.5,       // Plus proche qu'avant (16.5 → 17.5)
-          pitch: 75,        // Légèrement moins vertical (80 → 75) pour mieux voir la route
+          zoom: 22.0,       // MAXIMUM Mapbox → ~4m altitude (hauteur de toit de voiture)
+          pitch: 50,        // Vue quasi-horizontale (comme un conducteur)
           bearing: smoothedBearing,
-          duration: 250,    // Transitions encore plus longues pour fluidité maximale
+          duration: 300,    // Transitions très longues pour compenser la vitesse visuelle
           easing: t => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t, // Easing quadratique
-          offset: [0, 80]   // Caméra légèrement plus haute sur l'écran
+          offset: [0, 0]    // Centré (vue conducteur)
         });
       }
 
