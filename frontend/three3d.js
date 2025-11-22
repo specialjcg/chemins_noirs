@@ -2,8 +2,9 @@
 // No tokens, no paid services
 
 import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-let scene, camera, renderer;
+let scene, camera, renderer, controls;
 let routeLine;
 let currentRouteCoords = [];
 let currentElevations = [];
@@ -72,6 +73,15 @@ export function initThree3D() {
   gridHelper.position.y = -0.9;
   scene.add(gridHelper);
 
+  // Add orbit controls for mouse interaction
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; // Smooth camera movements
+  controls.dampingFactor = 0.05;
+  controls.screenSpacePanning = false; // Pan in horizontal plane
+  controls.minDistance = 10;
+  controls.maxDistance = 500;
+  controls.maxPolarAngle = Math.PI / 2; // Don't allow camera to go below ground
+
   // Handle window resize
   window.addEventListener('resize', () => {
     if (container.style.display !== 'none') {
@@ -81,7 +91,27 @@ export function initThree3D() {
     }
   });
 
+  // Start render loop
+  animate();
+
   console.log("[three3d] Three.js initialized successfully");
+}
+
+/**
+ * Animation loop for continuous rendering (needed for OrbitControls)
+ */
+function animate() {
+  requestAnimationFrame(animate);
+
+  // Update controls for damping
+  if (controls) {
+    controls.update();
+  }
+
+  // Render the scene
+  if (renderer && scene && camera) {
+    renderer.render(scene, camera);
+  }
 }
 
 /**
@@ -302,10 +332,13 @@ export function updateRoute3D(coords, elevations) {
       centerZ + maxRange * 0.8
     );
     camera.lookAt(centerX, centerY, centerZ);
-  }
 
-  // Render
-  renderer.render(scene, camera);
+    // Update controls target to center of route
+    if (controls) {
+      controls.target.set(centerX, centerY, centerZ);
+      controls.update();
+    }
+  }
 
   console.log("[three3d] Route rendered");
 }
@@ -326,6 +359,11 @@ export function playRouteAnimation() {
 
   isAnimating = true;
   currentAnimationIndex = 0;
+
+  // Disable orbit controls during FPV animation
+  if (controls) {
+    controls.enabled = false;
+  }
 
   console.log("[three3d] Starting FPV animation");
 
@@ -372,9 +410,6 @@ export function playRouteAnimation() {
         lookAtPoint.y + eyeHeight,
         lookAtPoint.z
       );
-
-      // Render
-      renderer.render(scene, camera);
     }
 
     if (progress < 1.0) {
@@ -397,6 +432,12 @@ export function pauseRouteAnimation() {
     animationFrameId = null;
   }
   isAnimating = false;
+
+  // Re-enable orbit controls after FPV animation
+  if (controls) {
+    controls.enabled = true;
+  }
+
   console.log("[three3d] Animation paused");
 }
 
