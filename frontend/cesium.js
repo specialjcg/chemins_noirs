@@ -266,23 +266,19 @@ export function playRouteAnimation(speed = 1.0) {
           // Position de la caméra au-dessus du point actuel
           const cameraPosition = Cesium.Cartesian3.fromDegrees(currentLon, currentLat, cameraHeight);
 
-          // Point vers lequel regarder : un peu plus loin sur la trace (30m devant)
-          const lookAheadDistance = 0.0003; // ~30 mètres en degrés
+          // Bearing lissé pour rotation de la carte
           const headingRad = Cesium.Math.toRadians(smoothedHeading);
+          const pitchRad = Cesium.Math.toRadians(-5);  // Légèrement vers le bas
 
-          const lookAtLon = currentLon + lookAheadDistance * Math.sin(headingRad);
-          const lookAtLat = currentLat + lookAheadDistance * Math.cos(headingRad);
-          const lookAtPosition = Cesium.Cartesian3.fromDegrees(lookAtLon, lookAtLat, cameraHeight);
-
-          // 5. Faire "regarder vers" ce point (la carte tournera automatiquement)
-          viewer.camera.lookAt(
-            cameraPosition,
-            new Cesium.HeadingPitchRange(
-              headingRad,      // Direction (la carte tourne)
-              Cesium.Math.toRadians(-5),  // Légèrement vers le bas
-              0                // Distance (0 = on est à la position)
-            )
-          );
+          // Utiliser setView pour un contrôle précis de la position et orientation
+          viewer.camera.setView({
+            destination: cameraPosition,
+            orientation: {
+              heading: headingRad,
+              pitch: pitchRad,
+              roll: 0.0
+            }
+          });
 
           // IMPORTANT: Désactiver le contrôle manuel pendant l'animation
           viewer.scene.screenSpaceCameraController.enableRotate = false;
