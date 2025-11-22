@@ -261,22 +261,33 @@ export function playRouteAnimation(speed = 1.0) {
           const smoothedHeading = interpolateBearing(lastHeading, targetHeading, 0.3);
           lastHeading = smoothedHeading;
 
-          // 4. Caméra : position + orientation
+          // 4. MODE GPS "HEADING UP" : la carte tourne pour montrer la route vers le haut
+
+          // Position de la caméra au-dessus du point actuel
           const cameraPosition = Cesium.Cartesian3.fromDegrees(currentLon, currentLat, cameraHeight);
 
-          // Pitch : regarder DROIT DEVANT (0°) comme un conducteur
-          const heading = Cesium.Math.toRadians(smoothedHeading);
-          const pitch = Cesium.Math.toRadians(0);  // Vue parfaitement horizontale
+          // Point vers lequel regarder : un peu plus loin sur la trace (30m devant)
+          const lookAheadDistance = 0.0003; // ~30 mètres en degrés
+          const headingRad = Cesium.Math.toRadians(smoothedHeading);
 
-          // 5. Positionner la caméra immédiatement (pas de transition)
-          viewer.camera.setView({
-            destination: cameraPosition,
-            orientation: {
-              heading: heading,
-              pitch: pitch,
-              roll: 0.0
-            }
-          });
+          const lookAtLon = currentLon + lookAheadDistance * Math.sin(headingRad);
+          const lookAtLat = currentLat + lookAheadDistance * Math.cos(headingRad);
+          const lookAtPosition = Cesium.Cartesian3.fromDegrees(lookAtLon, lookAtLat, cameraHeight);
+
+          // 5. Faire "regarder vers" ce point (la carte tournera automatiquement)
+          viewer.camera.lookAt(
+            cameraPosition,
+            new Cesium.HeadingPitchRange(
+              headingRad,      // Direction (la carte tourne)
+              Cesium.Math.toRadians(-5),  // Légèrement vers le bas
+              0                // Distance (0 = on est à la position)
+            )
+          );
+
+          // IMPORTANT: Désactiver le contrôle manuel pendant l'animation
+          viewer.scene.screenSpaceCameraController.enableRotate = false;
+          viewer.scene.screenSpaceCameraController.enableTranslate = false;
+          viewer.scene.screenSpaceCameraController.enableZoom = false;
 
           currentAnimationIndex++;
         }
@@ -305,6 +316,14 @@ export function pauseRouteAnimation() {
     animationFrameId = null;
   }
   isAnimating = false;
+
+  // Re-enable camera controls when animation stops
+  if (viewer) {
+    viewer.scene.screenSpaceCameraController.enableRotate = true;
+    viewer.scene.screenSpaceCameraController.enableTranslate = true;
+    viewer.scene.screenSpaceCameraController.enableZoom = true;
+  }
+
   console.debug("[cesium] Animation paused");
 }
 
