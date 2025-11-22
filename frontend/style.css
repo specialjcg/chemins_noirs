@@ -99,7 +99,7 @@ button[disabled] {
 }
 
 
-#map, #mapbox3dContainer {
+#map, #three3dContainer {
     width: min(960px, calc(100% - 4rem));
     height: 540px;
     margin: 1.5rem auto 0;
@@ -109,14 +109,15 @@ button[disabled] {
     overflow: hidden;
 }
 
-#mapbox3dContainer {
+#three3dContainer {
     position: relative;
+    background: #000;
 }
 
-/* Hide Mapbox attribution for cleaner UI (keep it small) */
-.mapboxgl-ctrl-attrib {
-    font-size: 10px;
-    opacity: 0.6;
+#three3dContainer canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
 }
 
 .metadata-grid {
