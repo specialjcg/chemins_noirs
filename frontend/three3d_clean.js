@@ -134,9 +134,37 @@ function latLonToXYZ(lat, lon, elevation, centerLat, centerLon) {
 }
 
 /**
+ * Fetch real terrain elevation data from Open-Meteo API
+ */
+async function fetchTerrainElevations(latitudes, longitudes) {
+  try {
+    // Open-Meteo API accepts comma-separated lists
+    const latStr = latitudes.join(',');
+    const lonStr = longitudes.join(',');
+
+    const url = `https://api.open-meteo.com/v1/elevation?latitude=${latStr}&longitude=${lonStr}`;
+
+    console.log(`[three3d] Fetching elevation data for ${latitudes.length} points...`);
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log(`[three3d] Received elevation data:`, data);
+
+    return data.elevation || [];
+  } catch (error) {
+    console.error('[three3d] Failed to fetch elevation data:', error);
+    return [];
+  }
+}
+
+/**
  * Create 3D terrain mesh from route coordinates and elevations
  */
-function createTerrain(coords, elevations, centerLat, centerLon) {
+async function createTerrain(coords, elevations, centerLat, centerLon) {
   if (!coords || coords.length === 0) return null;
 
   // Calculate bounds
@@ -151,8 +179,8 @@ function createTerrain(coords, elevations, centerLat, centerLon) {
   const latPadding = (maxLat - minLat) * 0.3;
   const lonPadding = (maxLon - minLon) * 0.3;
 
-  // Create terrain grid (higher resolution for smoother terrain)
-  const segments = 100;
+  // Create terrain grid (moderate resolution to balance detail and API limits)
+  const segments = 50; // 50x50 = 2500 points
   const geometry = new THREE.PlaneGeometry(1, 1, segments, segments);
 
   // Get terrain bounds in 3D space
@@ -166,8 +194,11 @@ function createTerrain(coords, elevations, centerLat, centerLon) {
   geometry.scale(width, depth, 1);
   geometry.translate((minPos.x + maxPos.x) / 2, 0, (minPos.z + maxPos.z) / 2);
 
-  // Modify vertices to add elevation
+  // Collect all lat/lon pairs for elevation API
   const positions = geometry.attributes.position;
+  const terrainLats = [];
+  const terrainLons = [];
+
   for (let i = 0; i < positions.count; i++) {
     const x = positions.getX(i);
     const z = positions.getZ(i);
@@ -176,23 +207,46 @@ function createTerrain(coords, elevations, centerLat, centerLon) {
     const lon = centerLon + (x * SCALE_FACTOR) / (METERS_PER_DEGREE_LAT * Math.cos(centerLat * Math.PI / 180));
     const lat = centerLat - (z * SCALE_FACTOR) / METERS_PER_DEGREE_LAT;
 
-    // Find nearest route point for elevation
-    let nearestElevation = 0;
-    let minDistance = Infinity;
+    terrainLats.push(lat.toFixed(6));
+    terrainLons.push(lon.toFixed(6));
+  }
 
-    coords.forEach((coord, idx) => {
-      const dist = Math.sqrt(
-        Math.pow(coord.lat - lat, 2) +
-        Math.pow(coord.lon - lon, 2)
-      );
-      if (dist < minDistance) {
-        minDistance = dist;
-        nearestElevation = elevations[idx] || 0;
-      }
-    });
+  // Fetch real elevation data from API
+  console.log(`[three3d] Fetching elevation for ${terrainLats.length} terrain points...`);
+  const terrainElevations = await fetchTerrainElevations(terrainLats, terrainLons);
 
-    // Set vertex elevation
-    positions.setY(i, nearestElevation * ELEVATION_SCALE / SCALE_FACTOR);
+  // Apply elevations to vertices
+  if (terrainElevations.length === positions.count) {
+    console.log('[three3d] Applying real terrain elevations...');
+    for (let i = 0; i < positions.count; i++) {
+      const elevation = terrainElevations[i] || 0;
+      positions.setY(i, elevation * ELEVATION_SCALE / SCALE_FACTOR);
+    }
+  } else {
+    console.warn('[three3d] Elevation data mismatch, falling back to route-based interpolation');
+    // Fallback to old method if API fails
+    for (let i = 0; i < positions.count; i++) {
+      const x = positions.getX(i);
+      const z = positions.getZ(i);
+      const lon = centerLon + (x * SCALE_FACTOR) / (METERS_PER_DEGREE_LAT * Math.cos(centerLat * Math.PI / 180));
+      const lat = centerLat - (z * SCALE_FACTOR) / METERS_PER_DEGREE_LAT;
+
+      let nearestElevation = 0;
+      let minDistance = Infinity;
+
+      coords.forEach((coord, idx) => {
+        const dist = Math.sqrt(
+          Math.pow(coord.lat - lat, 2) +
+          Math.pow(coord.lon - lon, 2)
+        );
+        if (dist < minDistance) {
+          minDistance = dist;
+          nearestElevation = elevations[idx] || 0;
+        }
+      });
+
+      positions.setY(i, nearestElevation * ELEVATION_SCALE / SCALE_FACTOR);
+    }
   }
 
   geometry.computeVertexNormals();
@@ -243,7 +297,7 @@ function createTerrain(coords, elevations, centerLat, centerLon) {
 /**
  * Update the 3D route visualization
  */
-export function updateRoute3D(coords, elevations) {
+export async function updateRoute3D(coords, elevations) {
   if (!scene) {
     console.warn("[three3d] Scene not initialized");
     return;
@@ -273,9 +327,9 @@ export function updateRoute3D(coords, elevations) {
   const centerLat = currentRouteCoords[Math.floor(currentRouteCoords.length / 2)].lat;
   const centerLon = currentRouteCoords[Math.floor(currentRouteCoords.length / 2)].lon;
 
-  // Create 3D terrain with satellite texture
-  console.log("[three3d] Creating terrain mesh...");
-  terrainMesh = createTerrain(currentRouteCoords, currentElevations, centerLat, centerLon);
+  // Create 3D terrain with satellite texture and real elevation data
+  console.log("[three3d] Creating terrain mesh with real elevation data...");
+  terrainMesh = await createTerrain(currentRouteCoords, currentElevations, centerLat, centerLon);
   if (terrainMesh) {
     scene.add(terrainMesh);
     console.log("[three3d] Terrain added to scene");
@@ -497,4 +551,3 @@ document.addEventListener('DOMContentLoaded', () => {
     three3dContainer.style.display = 'none';
   }
 });
-// Updated dim. 23 nov. 2025 15:59:57 CET
