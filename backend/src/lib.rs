@@ -7,11 +7,17 @@ pub mod models;
 pub mod partial_graph;
 pub mod routing;
 
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::{post, get}};
-use tower_http::cors::{CorsLayer, Any};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::engine::RouteEngine;
 use crate::error::RouteError;
@@ -55,7 +61,10 @@ pub fn create_router_with_partial(
         .route("/api/routes/save", post(save_route_handler))
         .route("/api/routes/load", get(load_route_handler))
         .with_state(state.clone())
-        .route("/api/graph/partial", post(partial_graph::partial_graph_handler))
+        .route(
+            "/api/graph/partial",
+            post(partial_graph::partial_graph_handler),
+        )
         .with_state(partial_config)
         .layer(cors)
 }

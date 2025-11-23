@@ -9,9 +9,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test with a few coordinates in the Rhône-Alpes region
     let test_coords = vec![
-        (45.764, 4.835),   // Lyon
-        (45.9305, 4.577),  // Villefranche-sur-Saône
-        (45.999, 4.546),   // Near the node we found with elevation
+        (45.764, 4.835),  // Lyon
+        (45.9305, 4.577), // Villefranche-sur-Saône
+        (45.999, 4.546),  // Near the node we found with elevation
     ];
 
     println!("Fetching elevations for {} coordinates:", test_coords.len());
@@ -22,7 +22,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match fetch_elevations(test_coords.clone()).await {
         Ok(elevations) => {
-            println!("✅ Successfully fetched {} elevation values:\n", elevations.len());
+            println!(
+                "✅ Successfully fetched {} elevation values:\n",
+                elevations.len()
+            );
             for (i, elev) in elevations.iter().enumerate() {
                 let (lat, lon) = test_coords[i];
                 println!("  Coordinate ({}, {}): {} meters", lat, lon, elev);

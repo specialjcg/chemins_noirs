@@ -1,4 +1,4 @@
 pub use shared::{
-    ApiError, Coordinate, RouteBounds, RouteMetadata, RouteRequest, RouteResponse, SurfaceType,
-    default_weight,
+    default_weight, ApiError, Coordinate, RouteBounds, RouteMetadata, RouteRequest, RouteResponse,
+    SurfaceType,
 };

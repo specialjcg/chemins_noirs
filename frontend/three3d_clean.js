@@ -18,6 +18,7 @@ const SCALE_FACTOR = 10; // Much smaller scale for better visualization
 const ELEVATION_SCALE = 5; // Stronger exaggeration for visible 3D relief
 
 let terrainMesh = null;
+const elevationPanelId = 'elevationPanel';
 
 /**
  * Initialize the Three.js 3D scene
@@ -134,27 +135,62 @@ function latLonToXYZ(lat, lon, elevation, centerLat, centerLon) {
 }
 
 /**
- * Fetch real terrain elevation data from Open-Meteo API
+ * Fetch real terrain elevation data from Open-Meteo API in batches
  */
 async function fetchTerrainElevations(latitudes, longitudes) {
   try {
-    // Open-Meteo API accepts comma-separated lists
-    const latStr = latitudes.join(',');
-    const lonStr = longitudes.join(',');
+    const batchSize = 50; // keep batches small to avoid 429
+    const allElevations = [];
+    const baseDelay = 400;
+    const retryDelay = 800;
+    const maxRetries = 3;
 
-    const url = `https://api.open-meteo.com/v1/elevation?latitude=${latStr}&longitude=${lonStr}`;
+    console.log(`[three3d] Fetching elevation data for ${latitudes.length} points in batches of ${batchSize}...`);
 
-    console.log(`[three3d] Fetching elevation data for ${latitudes.length} points...`);
+    for (let i = 0; i < latitudes.length; i += batchSize) {
+      const batchLats = latitudes.slice(i, i + batchSize);
+      const batchLons = longitudes.slice(i, i + batchSize);
 
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const latStr = batchLats.join(',');
+      const lonStr = batchLons.join(',');
+
+      const url = `https://api.open-meteo.com/v1/elevation?latitude=${latStr}&longitude=${lonStr}`;
+
+      console.log(`[three3d] Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(latitudes.length / batchSize)}`);
+
+      let attempt = 0;
+      // Retry on transient failures (429/5xx)
+      while (true) {
+        const response = await fetch(url);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.elevation && Array.isArray(data.elevation)) {
+            allElevations.push(...data.elevation);
+          }
+          break;
+        }
+
+        // If rate limited or server error, backoff and retry
+        if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
+          attempt += 1;
+          const waitMs = retryDelay * attempt;
+          console.warn(`[three3d] Elevation batch retry ${attempt}/${maxRetries} after ${response.status}, waiting ${waitMs}ms`);
+          await new Promise(resolve => setTimeout(resolve, waitMs));
+          continue;
+        }
+
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      // Small delay to avoid rate limiting
+      if (i + batchSize < latitudes.length) {
+        const jitter = Math.random() * 150;
+        await new Promise(resolve => setTimeout(resolve, baseDelay + jitter));
+      }
     }
 
-    const data = await response.json();
-    console.log(`[three3d] Received elevation data:`, data);
-
-    return data.elevation || [];
+    console.log(`[three3d] Successfully fetched ${allElevations.length} elevation points`);
+    return allElevations;
   } catch (error) {
     console.error('[three3d] Failed to fetch elevation data:', error);
     return [];
@@ -180,8 +216,10 @@ async function createTerrain(coords, elevations, centerLat, centerLon) {
   const lonPadding = (maxLon - minLon) * 0.3;
 
   // Create terrain grid (moderate resolution to balance detail and API limits)
-  const segments = 50; // 50x50 = 2500 points
+  const segments = 20; // 20x20 = 441 points - further reduce API volume
   const geometry = new THREE.PlaneGeometry(1, 1, segments, segments);
+
+  console.log(`[three3d] Creating terrain with ${(segments + 1) * (segments + 1)} vertices`);
 
   // Get terrain bounds in 3D space
   const minPos = latLonToXYZ(minLat - latPadding, minLon - lonPadding, 0, centerLat, centerLon);
@@ -217,13 +255,21 @@ async function createTerrain(coords, elevations, centerLat, centerLon) {
 
   // Apply elevations to vertices
   if (terrainElevations.length === positions.count) {
-    console.log('[three3d] Applying real terrain elevations...');
+    console.log(`[three3d] Applying ${terrainElevations.length} real terrain elevations...`);
+
+    let minElev = Infinity;
+    let maxElev = -Infinity;
+
     for (let i = 0; i < positions.count; i++) {
       const elevation = terrainElevations[i] || 0;
+      minElev = Math.min(minElev, elevation);
+      maxElev = Math.max(maxElev, elevation);
       positions.setY(i, elevation * ELEVATION_SCALE / SCALE_FACTOR);
     }
+
+    console.log(`[three3d] Elevation range: ${minElev.toFixed(1)}m to ${maxElev.toFixed(1)}m (scale: ${ELEVATION_SCALE}x)`);
   } else {
-    console.warn('[three3d] Elevation data mismatch, falling back to route-based interpolation');
+    console.warn(`[three3d] Elevation data mismatch (got ${terrainElevations.length}, expected ${positions.count}), falling back to route-based interpolation`);
     // Fallback to old method if API fails
     for (let i = 0; i < positions.count; i++) {
       const x = positions.getX(i);
@@ -308,6 +354,7 @@ export async function updateRoute3D(coords, elevations) {
   // Store for animation
   currentRouteCoords = coords || [];
   currentElevations = elevations || [];
+  renderElevationPanel(currentRouteCoords, currentElevations);
 
   if (currentRouteCoords.length === 0) {
     return;
@@ -410,6 +457,45 @@ export async function updateRoute3D(coords, elevations) {
   }
 
   console.log("[three3d] Route rendered");
+}
+
+/**
+ * Render a small overlay with altitudes for each route point
+ */
+function renderElevationPanel(coords, elevations) {
+  const panel = document.getElementById(elevationPanelId);
+  if (!panel) {
+    return;
+  }
+
+  if (!coords || coords.length === 0) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+
+  panel.style.display = 'block';
+
+  const rows = coords.map((coord, idx) => {
+    const lat = typeof coord.lat === 'number' ? coord.lat : parseFloat(coord.lat);
+    const lon = typeof coord.lon === 'number' ? coord.lon : parseFloat(coord.lon);
+    const elevation = elevations && typeof elevations[idx] === 'number'
+      ? `${elevations[idx].toFixed(1)} m`
+      : 'n/a';
+
+    return `
+      <div class="elevation-row">
+        <span class="idx">#${idx}</span>
+        <span class="latlon">${lat.toFixed(5)} / ${lon.toFixed(5)}</span>
+        <span class="elev">${elevation}</span>
+      </div>
+    `;
+  });
+
+  panel.innerHTML = `
+    <div class="elevation-title">Altitudes (${rows.length} points)</div>
+    ${rows.join('')}
+  `;
 }
 
 /**

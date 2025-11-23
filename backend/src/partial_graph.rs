@@ -2,10 +2,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{
-    graph::GraphBuilder,
-    models::Coordinate,
-};
+use crate::{graph::GraphBuilder, models::Coordinate};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartialGraphRequest {
@@ -67,10 +64,7 @@ pub async fn partial_graph_handler(
 
     // Validate coordinates
     if !is_valid_coordinate(&req.start) || !is_valid_coordinate(&req.end) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "Invalid coordinates".to_string(),
-        ));
+        return Err((StatusCode::BAD_REQUEST, "Invalid coordinates".to_string()));
     }
 
     // Check if cache directory exists

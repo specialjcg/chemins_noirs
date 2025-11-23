@@ -113,8 +113,10 @@ impl RouteEngine {
 
         tracing::debug!(
             "Closest nodes - Start: {:?} (target: {:?}), End: {:?} (target: {:?})",
-            self.nodes[start.index()].coord, req.start,
-            self.nodes[end.index()].coord, req.end
+            self.nodes[start.index()].coord,
+            req.start,
+            self.nodes[end.index()].coord,
+            req.end
         );
 
         let weights = WeightConfig {
@@ -249,7 +251,10 @@ mod tests {
         let engine = engine();
 
         // Sample graph is around 45.0, 5.0
-        let in_bounds_coord = Coordinate { lat: 45.0, lon: 5.0 };
+        let in_bounds_coord = Coordinate {
+            lat: 45.0,
+            lon: 5.0,
+        };
         let node = engine.closest_node(in_bounds_coord);
         assert!(node.is_some(), "Should find node within graph bounds");
     }
@@ -260,14 +265,23 @@ mod tests {
 
         // Test coordinates far outside the graph (Paris area)
         let far_req = RouteRequest {
-            start: Coordinate { lat: 48.8566, lon: 2.3522 },
-            end: Coordinate { lat: 48.8606, lon: 2.3376 },
+            start: Coordinate {
+                lat: 48.8566,
+                lon: 2.3522,
+            },
+            end: Coordinate {
+                lat: 48.8606,
+                lon: 2.3376,
+            },
             w_pop: 1.0,
             w_paved: 1.0,
         };
 
         let path = engine.find_path(&far_req);
-        assert!(path.is_none(), "Should return None for coordinates outside graph");
+        assert!(
+            path.is_none(),
+            "Should return None for coordinates outside graph"
+        );
     }
 
     #[test]
@@ -275,12 +289,19 @@ mod tests {
         let engine = engine();
 
         // Test that closest_node finds a node within reasonable distance
-        let test_coord = Coordinate { lat: 45.0, lon: 5.0 };
+        let test_coord = Coordinate {
+            lat: 45.0,
+            lon: 5.0,
+        };
         let node_idx = engine.closest_node(test_coord).expect("should find node");
         let actual_coord = engine.nodes[node_idx.index()].coord;
 
         let distance = crate::routing::haversine_km(test_coord, actual_coord);
-        assert!(distance < 5.0, "Closest node should be within 5km, got {}km", distance);
+        assert!(
+            distance < 5.0,
+            "Closest node should be within 5km, got {}km",
+            distance
+        );
     }
 
     #[test]
@@ -288,8 +309,14 @@ mod tests {
         let engine = engine();
 
         let req = RouteRequest {
-            start: Coordinate { lat: 45.0, lon: 5.0 },
-            end: Coordinate { lat: 45.0, lon: 5.0 },
+            start: Coordinate {
+                lat: 45.0,
+                lon: 5.0,
+            },
+            end: Coordinate {
+                lat: 45.0,
+                lon: 5.0,
+            },
             w_pop: 1.0,
             w_paved: 1.0,
         };
@@ -322,12 +349,18 @@ mod tests {
         let connected_nodes = edges_by_node.values().filter(|v| !v.is_empty()).count();
         let connectivity_ratio = connected_nodes as f64 / total_nodes as f64;
 
-        println!("Graph connectivity: {}/{} nodes connected ({:.1}%)",
-                 connected_nodes, total_nodes, connectivity_ratio * 100.0);
+        println!(
+            "Graph connectivity: {}/{} nodes connected ({:.1}%)",
+            connected_nodes,
+            total_nodes,
+            connectivity_ratio * 100.0
+        );
 
         // At least 50% of nodes should be connected
-        assert!(connectivity_ratio >= 0.5,
-                "Graph is too disconnected: only {:.1}% of nodes have neighbors",
-                connectivity_ratio * 100.0);
+        assert!(
+            connectivity_ratio >= 0.5,
+            "Graph is too disconnected: only {:.1}% of nodes have neighbors",
+            connectivity_ratio * 100.0
+        );
     }
 }

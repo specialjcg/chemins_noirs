@@ -36,9 +36,9 @@ while true; do
     }
 
     # Also watch JS files
-    inotifywait -q -e modify three3d_v2.js map.js index.html style.css 2>/dev/null && {
+    inotifywait -q -e modify three3d_clean.js map.js index.html style.css 2>/dev/null && {
         echo "🔄 Static file changed, copying..."
-        cp three3d_v2.js map.js index.html style.css dist/
+        cp three3d_clean.js map.js index.html style.css dist/
         echo "✅ Files updated!"
     }
 done

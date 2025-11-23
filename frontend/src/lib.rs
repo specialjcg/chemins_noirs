@@ -215,9 +215,10 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                     push_route_to_map(&route.path);
                     // Update bbox if metadata is present
                     if let Some(ref metadata) = route.metadata
-                        && let Ok(bounds_value) = to_value(&metadata.bounds) {
-                            update_bbox_js(bounds_value);
-                        }
+                        && let Ok(bounds_value) = to_value(&metadata.bounds)
+                    {
+                        update_bbox_js(bounds_value);
+                    }
 
                     // Update 3D view if in 3D mode
                     if model.view_mode == ViewMode::Map3D {
@@ -259,15 +260,16 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
 
             // If switching to 3D and we have a route, render it in 3D
             if model.view_mode == ViewMode::Map3D
-                && let Some(ref route) = model.last_response {
-                    let coords_value = to_value(&route.path).unwrap_or(JsValue::NULL);
-                    let elevations_value = route
-                        .elevation_profile
-                        .as_ref()
-                        .and_then(|p| to_value(&p.elevations).ok())
-                        .unwrap_or(JsValue::NULL);
-                    update_route_3d(coords_value, elevations_value);
-                }
+                && let Some(ref route) = model.last_response
+            {
+                let coords_value = to_value(&route.path).unwrap_or(JsValue::NULL);
+                let elevations_value = route
+                    .elevation_profile
+                    .as_ref()
+                    .and_then(|p| to_value(&p.elevations).ok())
+                    .unwrap_or(JsValue::NULL);
+                update_route_3d(coords_value, elevations_value);
+            }
         }
         Msg::PlayAnimation => {
             if model.view_mode == ViewMode::Map3D {
@@ -325,10 +327,7 @@ async fn send_route_request(payload: RouteRequest) -> Msg {
         )
         .into(),
     );
-    let response = match Request::new(api_root())
-        .method(Method::Post)
-        .json(&payload)
-    {
+    let response = match Request::new(api_root()).method(Method::Post).json(&payload) {
         Err(err) => Err(format!("{err:?}")),
         Ok(request) => match request.fetch().await {
             Err(err) => Err(format!("{err:?}")),
@@ -531,11 +530,21 @@ fn view_preview(model: &Model) -> Node<Msg> {
             small!["Téléchargez le GPX via l'API (payload base64)"],
         ];
 
-        let path_points = route
-            .path
-            .iter()
-            .enumerate()
-            .map(|(idx, coord)| li![format!("{idx}: {:.5} / {:.5}", coord.lat, coord.lon)]);
+        let path_points = route.path.iter().enumerate().map(|(idx, coord)| {
+            let elevation = route
+                .elevation_profile
+                .as_ref()
+                .and_then(|profile| profile.elevations.get(idx).cloned().flatten());
+
+            li![format!(
+                "{idx}: {:.5} / {:.5}{}",
+                coord.lat,
+                coord.lon,
+                elevation
+                    .map(|e| format!(" — {:.1} m", e))
+                    .unwrap_or_else(|| "".to_string())
+            )]
+        });
 
         let path_list = ul![C!["path-preview"], path_points];
 
@@ -646,23 +655,19 @@ fn view_elevation_profile(profile: &shared::ElevationProfile) -> Node<Msg> {
 
     let elevation_stats = div![
         C!["metadata-grid"],
-        card(
-            "Dénivelé +",
-            format!("{:.0} m", profile.total_ascent)
-        ),
-        card(
-            "Dénivelé -",
-            format!("{:.0} m", profile.total_descent)
-        ),
+        card("Dénivelé +", format!("{:.0} m", profile.total_ascent)),
+        card("Dénivelé -", format!("{:.0} m", profile.total_descent)),
         card(
             "Altitude min",
-            profile.min_elevation
+            profile
+                .min_elevation
                 .map(|e| format!("{:.0} m", e))
                 .unwrap_or_else(|| "N/A".to_string())
         ),
         card(
             "Altitude max",
-            profile.max_elevation
+            profile
+                .max_elevation
                 .map(|e| format!("{:.0} m", e))
                 .unwrap_or_else(|| "N/A".to_string())
         ),
@@ -730,7 +735,7 @@ mod tests {
     fn test_view_mode_toggle() {
         assert_eq!(ViewMode::Map2D, ViewMode::Map2D);
         assert_ne!(ViewMode::Map2D, ViewMode::Map3D);
-        
+
         let mode_2d = ViewMode::Map2D;
         let toggled = match mode_2d {
             ViewMode::Map2D => ViewMode::Map3D,
@@ -744,7 +749,7 @@ mod tests {
         let stopped = AnimationState::Stopped;
         let playing = AnimationState::Playing;
         let paused = AnimationState::Paused;
-        
+
         assert_eq!(stopped, AnimationState::Stopped);
         assert_ne!(stopped, playing);
         assert_ne!(playing, paused);
@@ -760,7 +765,7 @@ mod tests {
     fn test_map_view_mode_toggle() {
         let standard = MapViewMode::Standard;
         let satellite = MapViewMode::Satellite;
-        
+
         assert_eq!(standard, MapViewMode::Standard);
         assert_ne!(standard, satellite);
     }

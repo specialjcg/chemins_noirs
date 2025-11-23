@@ -54,8 +54,8 @@ pub struct ElevationProfile {
     pub elevations: Vec<Option<f64>>, // Elevation in meters for each point in path
     pub min_elevation: Option<f64>,
     pub max_elevation: Option<f64>,
-    pub total_ascent: f64,    // Total meters climbed
-    pub total_descent: f64,   // Total meters descended
+    pub total_ascent: f64,  // Total meters climbed
+    pub total_descent: f64, // Total meters descended
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

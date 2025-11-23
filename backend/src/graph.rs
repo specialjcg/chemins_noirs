@@ -219,19 +219,18 @@ impl GraphBuilder {
         let cache_key = bbox.cache_key();
 
         // Check cache first
-        let cache_path = cache_dir.as_ref().join(format!("partial_{}.json", cache_key));
+        let cache_path = cache_dir
+            .as_ref()
+            .join(format!("partial_{}.json", cache_key));
         if cache_path.exists() {
             tracing::debug!("Cache hit for bbox {:?}", bbox);
-            return GraphFile::read_from_path(&cache_path)
-                .map_err(GraphBuildError::Io);
+            return GraphFile::read_from_path(&cache_path).map_err(GraphBuildError::Io);
         }
 
         tracing::info!("Cache miss, generating partial graph for bbox {:?}", bbox);
 
         // Build graph with bbox filter
-        let config = GraphBuilderConfig {
-            bbox: Some(bbox),
-        };
+        let config = GraphBuilderConfig { bbox: Some(bbox) };
         let builder = GraphBuilder::new(config);
         let graph = builder.build_from_pbf(pbf_path)?;
 
@@ -249,10 +248,7 @@ impl GraphBuilder {
         Ok(graph)
     }
 
-    fn collect_nodes(
-        &self,
-        path: &Path,
-    ) -> Result<NodeCollectionState, GraphBuildError> {
+    fn collect_nodes(&self, path: &Path) -> Result<NodeCollectionState, GraphBuildError> {
         let bbox = self.config.bbox;
 
         // If no bbox, collect all nodes
@@ -283,13 +279,17 @@ impl GraphBuilder {
                     }
                 },
                 Vec::new,
-                |mut acc, nodes| { acc.extend(nodes); acc },
+                |mut acc, nodes| {
+                    acc.extend(nodes);
+                    acc
+                },
             )?;
 
-            let state = osm_nodes.into_iter().fold(
-                NodeCollectionState::new(),
-                |state, node| state.with_node(node.osm_id, node.lat, node.lon, node.elevation),
-            );
+            let state = osm_nodes
+                .into_iter()
+                .fold(NodeCollectionState::new(), |state, node| {
+                    state.with_node(node.osm_id, node.lat, node.lon, node.elevation)
+                });
             return Ok(state);
         }
 
@@ -298,64 +298,82 @@ impl GraphBuilder {
 
         // PASS 1: Collect nodes IN bbox to identify which ways touch the bbox
         let reader_nodes_in_bbox = ElementReader::from_path(path)?;
-        let nodes_in_bbox: std::collections::HashSet<i64> = reader_nodes_in_bbox.par_map_reduce(
-            |element| -> Vec<i64> {
-                match element {
-                    Element::Node(node) => {
-                        let coord = Coordinate { lat: node.lat(), lon: node.lon() };
-                        if bbox.contains(coord) {
-                            vec![node.id()]
-                        } else {
-                            Vec::new()
+        let nodes_in_bbox: std::collections::HashSet<i64> = reader_nodes_in_bbox
+            .par_map_reduce(
+                |element| -> Vec<i64> {
+                    match element {
+                        Element::Node(node) => {
+                            let coord = Coordinate {
+                                lat: node.lat(),
+                                lon: node.lon(),
+                            };
+                            if bbox.contains(coord) {
+                                vec![node.id()]
+                            } else {
+                                Vec::new()
+                            }
                         }
-                    }
-                    Element::DenseNode(node) => {
-                        let coord = Coordinate { lat: node.lat(), lon: node.lon() };
-                        if bbox.contains(coord) {
-                            vec![node.id()]
-                        } else {
-                            Vec::new()
+                        Element::DenseNode(node) => {
+                            let coord = Coordinate {
+                                lat: node.lat(),
+                                lon: node.lon(),
+                            };
+                            if bbox.contains(coord) {
+                                vec![node.id()]
+                            } else {
+                                Vec::new()
+                            }
                         }
+                        _ => Vec::new(),
                     }
-                    _ => Vec::new(),
-                }
-            },
-            Vec::new,
-            |mut acc, nodes| { acc.extend(nodes); acc },
-        )?.into_iter().collect();
+                },
+                Vec::new,
+                |mut acc, nodes| {
+                    acc.extend(nodes);
+                    acc
+                },
+            )?
+            .into_iter()
+            .collect();
 
         // PASS 2: Find ways that have at least one node in bbox
         let reader_ways = ElementReader::from_path(path)?;
-        let needed_node_ids: std::collections::HashSet<i64> = reader_ways.par_map_reduce(
-            |element| -> Vec<i64> {
-                if let Element::Way(way) = element {
-                    let tags: Vec<(String, String)> = way
-                        .tags()
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                        .collect();
+        let needed_node_ids: std::collections::HashSet<i64> = reader_ways
+            .par_map_reduce(
+                |element| -> Vec<i64> {
+                    if let Element::Way(way) = element {
+                        let tags: Vec<(String, String)> = way
+                            .tags()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect();
 
-                    if !has_supported_highway(&tags) {
-                        return Vec::new();
-                    }
+                        if !has_supported_highway(&tags) {
+                            return Vec::new();
+                        }
 
-                    let node_refs: Vec<i64> = way.refs().collect();
+                        let node_refs: Vec<i64> = way.refs().collect();
 
-                    // Check if this way has AT LEAST ONE node in bbox
-                    let touches_bbox = node_refs.iter().any(|id| nodes_in_bbox.contains(id));
+                        // Check if this way has AT LEAST ONE node in bbox
+                        let touches_bbox = node_refs.iter().any(|id| nodes_in_bbox.contains(id));
 
-                    if touches_bbox {
-                        // Include ALL nodes from this way to maintain connectivity
-                        node_refs
+                        if touches_bbox {
+                            // Include ALL nodes from this way to maintain connectivity
+                            node_refs
+                        } else {
+                            Vec::new()
+                        }
                     } else {
                         Vec::new()
                     }
-                } else {
-                    Vec::new()
-                }
-            },
-            Vec::new,
-            |mut acc, nodes| { acc.extend(nodes); acc },
-        )?.into_iter().collect();
+                },
+                Vec::new,
+                |mut acc, nodes| {
+                    acc.extend(nodes);
+                    acc
+                },
+            )?
+            .into_iter()
+            .collect();
 
         // PASS 3: Collect actual node data for the needed nodes
         let reader = ElementReader::from_path(path)?;
@@ -392,13 +410,17 @@ impl GraphBuilder {
                 }
             },
             Vec::new,
-            |mut acc, nodes| { acc.extend(nodes); acc },
+            |mut acc, nodes| {
+                acc.extend(nodes);
+                acc
+            },
         )?;
 
-        let state = osm_nodes.into_iter().fold(
-            NodeCollectionState::new(),
-            |state, node| state.with_node(node.osm_id, node.lat, node.lon, node.elevation),
-        );
+        let state = osm_nodes
+            .into_iter()
+            .fold(NodeCollectionState::new(), |state, node| {
+                state.with_node(node.osm_id, node.lat, node.lon, node.elevation)
+            });
 
         Ok(state)
     }
@@ -447,7 +469,12 @@ fn process_node_element(
     let in_bbox = bbox.map(|b| b.contains(coord)).unwrap_or(true);
 
     if in_bbox {
-        vec![OsmNode { osm_id, lat, lon, elevation }]
+        vec![OsmNode {
+            osm_id,
+            lat,
+            lon,
+            elevation,
+        }]
     } else {
         Vec::new()
     }
@@ -479,9 +506,7 @@ fn process_way_element(
     // Create edges for consecutive node pairs
     node_refs
         .windows(2)
-        .filter_map(|pair| {
-            create_edge_record(pair[0], pair[1], surface, coords, osm_to_graph)
-        })
+        .filter_map(|pair| create_edge_record(pair[0], pair[1], surface, coords, osm_to_graph))
         .collect()
 }
 
@@ -536,10 +561,8 @@ fn is_supported_highway(highway_value: &str) -> bool {
 
 // Pure function to infer surface type from tags
 fn infer_surface(tags: &[(String, String)]) -> SurfaceType {
-    let tags_map: HashMap<&str, &str> = tags
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let tags_map: HashMap<&str, &str> =
+        tags.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
     // Check explicit surface tag first
     if let Some(surface) = tags_map.get("surface") {
@@ -554,9 +577,7 @@ fn infer_surface(tags: &[(String, String)]) -> SurfaceType {
     if let Some(highway) = tags_map.get("highway") {
         return match *highway {
             "path" | "footway" | "track" => SurfaceType::Trail,
-            "service" | "residential" | "primary" | "secondary" | "tertiary" => {
-                SurfaceType::Paved
-            }
+            "service" | "residential" | "primary" | "secondary" | "tertiary" => SurfaceType::Paved,
             _ => SurfaceType::Trail,
         };
     }

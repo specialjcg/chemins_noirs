@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use backend::{AppState, create_router, engine::RouteEngine};
+use backend::{create_router, engine::RouteEngine, AppState};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const DEFAULT_PBF: &str = "data/rhone-alpes-251111.osm.pbf";
@@ -18,7 +18,10 @@ async fn main() {
 
     // Generate graph for Lyon metropolitan area (covers ~45.7-46.0, 4.5-4.9)
     let pbf = std::env::var("PBF_PATH").unwrap_or_else(|_| DEFAULT_PBF.to_string());
-    let cache_path = format!("{}/lyon_area.json", std::env::var("CACHE_DIR").unwrap_or_else(|_| DEFAULT_CACHE.to_string()));
+    let cache_path = format!(
+        "{}/lyon_area.json",
+        std::env::var("CACHE_DIR").unwrap_or_else(|_| DEFAULT_CACHE.to_string())
+    );
 
     let graph = if std::path::Path::new(&cache_path).exists() {
         tracing::info!("Loading cached graph from {cache_path}");
@@ -42,7 +45,10 @@ async fn main() {
     };
 
     // Save to temp file and load (RouteEngine expects file path)
-    let temp_path = format!("{}/temp_graph.json", std::env::var("CACHE_DIR").unwrap_or_else(|_| DEFAULT_CACHE.to_string()));
+    let temp_path = format!(
+        "{}/temp_graph.json",
+        std::env::var("CACHE_DIR").unwrap_or_else(|_| DEFAULT_CACHE.to_string())
+    );
     graph.write_to_path(&temp_path).expect("write temp");
     let engine = RouteEngine::from_file(&temp_path).expect("create engine");
     tracing::info!("Engine ready");

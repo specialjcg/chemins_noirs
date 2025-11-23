@@ -120,6 +120,56 @@ button[disabled] {
     height: 100%;
 }
 
+.elevation-panel {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    max-height: 240px;
+    width: 320px;
+    overflow: auto;
+    background: rgba(0, 0, 0, 0.62);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 12px 14px;
+    color: #e7ecf3;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.8rem;
+    backdrop-filter: blur(6px);
+}
+
+.elevation-panel .elevation-title {
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    margin-bottom: 8px;
+    color: #a3ffb5;
+}
+
+.elevation-row {
+    display: grid;
+    grid-template-columns: 34px 1fr 70px;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.elevation-row:last-child {
+    border-bottom: none;
+}
+
+.elevation-row .idx {
+    color: #8ab4ff;
+}
+
+.elevation-row .latlon {
+    color: #cfd7e4;
+    word-break: break-all;
+}
+
+.elevation-row .elev {
+    text-align: right;
+    color: #ffd166;
+}
+
 .metadata-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
