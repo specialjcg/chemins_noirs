@@ -1,8 +1,8 @@
 // Custom 3D engine using Three.js (100% free and open-source)
 // No tokens, no paid services
 
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
 
 let scene, camera, renderer, controls;
 let routeLine;
