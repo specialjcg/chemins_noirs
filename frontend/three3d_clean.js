@@ -15,7 +15,7 @@ let currentAnimationIndex = 0;
 // Constants for conversion
 const METERS_PER_DEGREE_LAT = 111000; // Approximate meters per degree of latitude
 const SCALE_FACTOR = 10; // Much smaller scale for better visualization
-const ELEVATION_SCALE = 5; // Stronger exaggeration for visible 3D relief
+const ELEVATION_SCALE = 15; // Much stronger exaggeration for clearly visible 3D relief
 
 let terrainMesh = null;
 const elevationPanelId = 'elevationPanel';
@@ -50,20 +50,24 @@ export function initThree3D() {
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
 
-  // Add enhanced lighting for 3D relief visibility
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  // Enhanced lighting setup for maximum relief visibility
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
   scene.add(ambientLight);
 
-  // Main directional light (sun) from above-right
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
-  directionalLight.position.set(100, 150, 50);
-  directionalLight.castShadow = false; // Disable shadows for performance
+  // Main directional light (sun) from low angle to emphasize terrain
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+  directionalLight.position.set(200, 80, 100); // Low angle creates strong shadows
   scene.add(directionalLight);
 
   // Secondary light from opposite side for better relief definition
-  const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
-  fillLight.position.set(-100, 100, -50);
+  const fillLight = new THREE.DirectionalLight(0xffffff, 0.6);
+  fillLight.position.set(-150, 60, -100);
   scene.add(fillLight);
+
+  // Top light to prevent complete darkness in valleys
+  const topLight = new THREE.DirectionalLight(0xffffff, 0.3);
+  topLight.position.set(0, 200, 0);
+  scene.add(topLight);
 
   // Add a ground plane for reference
   const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
@@ -298,46 +302,86 @@ async function createTerrain(coords, elevations, centerLat, centerLon) {
   geometry.computeVertexNormals();
   geometry.rotateX(-Math.PI / 2); // Rotate to horizontal
 
-  // Create material with enhanced terrain shading
+  // Create material with enhanced terrain shading for better relief visibility
   const material = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
+    color: 0xe0e0e0, // Light gray to show terrain even without texture
     wireframe: false,
-    roughness: 0.8,
-    metalness: 0.2,
-    flatShading: false
+    roughness: 0.9,
+    metalness: 0.1,
+    flatShading: false,
+    side: THREE.DoubleSide
   });
 
-  // Load satellite imagery from Esri World Imagery (free)
-  const textureLoader = new THREE.TextureLoader();
-
-  // Calculate tile coordinates for the center of the route
-  const zoom = 14; // Higher zoom for better detail
-  const centerTileX = Math.floor((centerLon + 180) / 360 * Math.pow(2, zoom));
-  const centerTileY = Math.floor((1 - Math.log(Math.tan(centerLat * Math.PI / 180) + 1 / Math.cos(centerLat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
-
-  // Use Esri World Imagery (same as used in map.js for consistency)
-  const satelliteUrl = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${centerTileY}/${centerTileX}`;
-
-  console.log(`[three3d] Loading satellite texture from zoom=${zoom}, x=${centerTileX}, y=${centerTileY}`);
-
-  // Load texture asynchronously
-  textureLoader.load(
-    satelliteUrl,
-    (texture) => {
-      texture.wrapS = THREE.RepeatWrapping;
-      texture.wrapT = THREE.RepeatWrapping;
-      material.map = texture;
-      material.needsUpdate = true;
-      console.log("[three3d] Satellite texture loaded successfully");
-    },
-    undefined,
-    (error) => {
-      console.warn("[three3d] Failed to load satellite texture, using terrain color");
-      material.color.setHex(0x8B7355); // Brown terrain color
-    }
-  );
+  // Load satellite imagery covering the entire terrain area
+  loadTerrainTexture(material, minLat - latPadding, maxLat + latPadding, minLon - lonPadding, maxLon + lonPadding);
 
   return new THREE.Mesh(geometry, material);
+}
+
+/**
+ * Load satellite texture tiles for the terrain
+ */
+async function loadTerrainTexture(material, minLat, maxLat, minLon, maxLon) {
+  try {
+    const zoom = 13; // Good balance between detail and coverage
+
+    // Calculate tile range
+    const minTileX = Math.floor((minLon + 180) / 360 * Math.pow(2, zoom));
+    const maxTileX = Math.floor((maxLon + 180) / 360 * Math.pow(2, zoom));
+    const minTileY = Math.floor((1 - Math.log(Math.tan(maxLat * Math.PI / 180) + 1 / Math.cos(maxLat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+    const maxTileY = Math.floor((1 - Math.log(Math.tan(minLat * Math.PI / 180) + 1 / Math.cos(minLat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+
+    const tilesX = maxTileX - minTileX + 1;
+    const tilesY = maxTileY - minTileY + 1;
+
+    console.log(`[three3d] Loading ${tilesX}x${tilesY} satellite tiles at zoom ${zoom}`);
+
+    // Create canvas to combine tiles
+    const tileSize = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = tilesX * tileSize;
+    canvas.height = tilesY * tileSize;
+    const ctx = canvas.getContext('2d');
+
+    // Load all tiles
+    const tilePromises = [];
+    for (let ty = minTileY; ty <= maxTileY; ty++) {
+      for (let tx = minTileX; tx <= maxTileX; tx++) {
+        const url = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${ty}/${tx}`;
+        const x = (tx - minTileX) * tileSize;
+        const y = (ty - minTileY) * tileSize;
+
+        tilePromises.push(
+          new Promise((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+              ctx.drawImage(img, x, y, tileSize, tileSize);
+              resolve();
+            };
+            img.onerror = () => resolve(); // Continue even if some tiles fail
+            img.src = url;
+          })
+        );
+      }
+    }
+
+    await Promise.all(tilePromises);
+
+    // Create texture from canvas
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.minFilter = THREE.LinearFilter;
+
+    material.map = texture;
+    material.needsUpdate = true;
+
+    console.log(`[three3d] Satellite texture loaded (${tilesX}x${tilesY} tiles)`);
+  } catch (error) {
+    console.warn('[three3d] Failed to load satellite texture:', error);
+    material.color.setHex(0x8B7355); // Brown terrain color as fallback
+  }
 }
 
 /**
