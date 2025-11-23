@@ -135,3 +135,4 @@ export function updateBbox(bounds) {
     console.debug("[map] BBox rectangle added");
   }
 }
+// Updated dim. 23 nov. 2025 15:59:57 CET

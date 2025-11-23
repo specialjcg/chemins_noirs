@@ -21,7 +21,7 @@ extern "C" {
     fn update_bbox_js(bounds: JsValue);
 }
 
-#[wasm_bindgen(module = "/three3d.js")]
+#[wasm_bindgen(module = "/three3d_clean.js")]
 extern "C" {
     #[wasm_bindgen(js_name = initThree3D)]
     fn init_three_3d();
@@ -39,7 +39,7 @@ fn api_root() -> String {
     if let Some(url) = option_env!("FRONTEND_API_ROOT") {
         return url.trim_end_matches('/').to_string();
     }
-    "/api/route".to_string()
+    "http://localhost:8080/api/route".to_string()
 }
 
 pub struct Model {
@@ -685,7 +685,7 @@ struct MapClickPayload {
 fn save_route_to_disk(route: &RouteResponse) {
     let route_clone = route.clone();
     spawn_local(async move {
-        match Request::new("/api/routes/save")
+        match Request::new("http://localhost:8080/api/routes/save")
             .method(Method::Post)
             .json(&route_clone)
         {
@@ -706,7 +706,7 @@ fn save_route_to_disk(route: &RouteResponse) {
 
 // Load route from disk via API (async function)
 async fn load_route_from_disk_async() -> Result<RouteResponse, String> {
-    let request = Request::new("/api/routes/load").method(Method::Get);
+    let request = Request::new("http://localhost:8080/api/routes/load").method(Method::Get);
     match request.fetch().await {
         Err(err) => Err(format!("Failed to fetch: {:?}", err)),
         Ok(raw) => match raw.check_status() {

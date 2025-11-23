@@ -1,7 +1,7 @@
 // Custom 3D engine using Three.js (100% free and open-source)
 // No tokens, no paid services
 
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import * as THREE from 'three';
 import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
 
 let scene, camera, renderer, controls;
@@ -15,7 +15,7 @@ let currentAnimationIndex = 0;
 // Constants for conversion
 const METERS_PER_DEGREE_LAT = 111000; // Approximate meters per degree of latitude
 const SCALE_FACTOR = 10; // Much smaller scale for better visualization
-const ELEVATION_SCALE = 3; // Exaggerate elevation for visibility
+const ELEVATION_SCALE = 5; // Stronger exaggeration for visible 3D relief
 
 let terrainMesh = null;
 
@@ -49,13 +49,20 @@ export function initThree3D() {
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
 
-  // Add lighting
-  const ambientLight = new THREE.AmbientLight(0x404040, 2);
+  // Add enhanced lighting for 3D relief visibility
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
   scene.add(ambientLight);
 
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-  directionalLight.position.set(100, 100, 50);
+  // Main directional light (sun) from above-right
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
+  directionalLight.position.set(100, 150, 50);
+  directionalLight.castShadow = false; // Disable shadows for performance
   scene.add(directionalLight);
+
+  // Secondary light from opposite side for better relief definition
+  const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+  fillLight.position.set(-100, 100, -50);
+  scene.add(fillLight);
 
   // Add a ground plane for reference
   const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
@@ -191,34 +198,42 @@ function createTerrain(coords, elevations, centerLat, centerLon) {
   geometry.computeVertexNormals();
   geometry.rotateX(-Math.PI / 2); // Rotate to horizontal
 
-  // Load satellite texture from OpenStreetMap
+  // Create material with enhanced terrain shading
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    wireframe: false,
+    roughness: 0.8,
+    metalness: 0.2,
+    flatShading: false
+  });
+
+  // Load satellite imagery from Esri World Imagery (free)
   const textureLoader = new THREE.TextureLoader();
 
   // Calculate tile coordinates for the center of the route
-  const zoom = 13; // Zoom level for satellite imagery
+  const zoom = 14; // Higher zoom for better detail
   const centerTileX = Math.floor((centerLon + 180) / 360 * Math.pow(2, zoom));
   const centerTileY = Math.floor((1 - Math.log(Math.tan(centerLat * Math.PI / 180) + 1 / Math.cos(centerLat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
 
-  // Use OpenStreetMap satellite layer (free)
-  const satelliteUrl = `https://a.tile.openstreetmap.org/${zoom}/${centerTileX}/${centerTileY}.png`;
+  // Use Esri World Imagery (same as used in map.js for consistency)
+  const satelliteUrl = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${centerTileY}/${centerTileX}`;
 
-  const material = new THREE.MeshLambertMaterial({
-    color: 0xffffff,
-    wireframe: false
-  });
+  console.log(`[three3d] Loading satellite texture from zoom=${zoom}, x=${centerTileX}, y=${centerTileY}`);
 
   // Load texture asynchronously
   textureLoader.load(
     satelliteUrl,
     (texture) => {
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
       material.map = texture;
       material.needsUpdate = true;
-      console.log("[three3d] Satellite texture loaded");
+      console.log("[three3d] Satellite texture loaded successfully");
     },
     undefined,
     (error) => {
-      console.warn("[three3d] Failed to load satellite texture, using color instead");
-      material.color.setHex(0x90EE90); // Fallback to green
+      console.warn("[three3d] Failed to load satellite texture, using terrain color");
+      material.color.setHex(0x8B7355); // Brown terrain color
     }
   );
 
@@ -482,3 +497,4 @@ document.addEventListener('DOMContentLoaded', () => {
     three3dContainer.style.display = 'none';
   }
 });
+// Updated dim. 23 nov. 2025 15:59:57 CET

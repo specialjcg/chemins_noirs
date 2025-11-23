@@ -92,8 +92,12 @@ printf 'Backend_partial started with PID %s (listening on %s).\n' "$BACKEND_PID"
 printf 'PBF: %s\n' "$PBF_PATH"
 printf 'Cache: %s\n' "$CACHE_DIR"
 
+echo "Building frontend with wasm-pack..."
+(cd "$FRONTEND_DIR" && ./build.sh)
+
 echo "Starting frontend dev server on http://localhost:$FRONTEND_PORT ..."
-(cd "$FRONTEND_DIR" && trunk serve --port "$FRONTEND_PORT" --open) &
+(cd "$FRONTEND_DIR/dist" && python3 -m http.server "$FRONTEND_PORT") &
 FRONTEND_PID=$!
+printf 'Frontend server started with PID %s on http://localhost:%s\n' "$FRONTEND_PID" "$FRONTEND_PORT"
 
 wait "$FRONTEND_PID"

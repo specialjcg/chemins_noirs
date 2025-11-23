@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::path::PathBuf;
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::{post, get}};
+use tower_http::cors::{CorsLayer, Any};
 
 use crate::engine::RouteEngine;
 use crate::error::RouteError;
@@ -26,10 +27,16 @@ pub struct AppState {
 }
 
 pub fn create_router(state: AppState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     Router::new()
         .route("/api/route", post(route_handler))
         .route("/api/routes/save", post(save_route_handler))
         .route("/api/routes/load", get(load_route_handler))
+        .layer(cors)
         .with_state(state)
 }
 
@@ -38,6 +45,11 @@ pub fn create_router_with_partial(
     state: AppState,
     partial_config: Arc<partial_graph::PartialGraphConfig>,
 ) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     Router::new()
         .route("/api/route", post(route_handler))
         .route("/api/routes/save", post(save_route_handler))
@@ -45,6 +57,7 @@ pub fn create_router_with_partial(
         .with_state(state.clone())
         .route("/api/graph/partial", post(partial_graph::partial_graph_handler))
         .with_state(partial_config)
+        .layer(cors)
 }
 
 async fn route_handler(

@@ -2,6 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::{extract::State, http::StatusCode, Json};
 use serde_json;
+use tower_http::cors::{CorsLayer, Any};
 use backend::{
     elevation::create_elevation_profile,
     engine::RouteEngine,
@@ -173,6 +174,12 @@ async fn main() {
         cache_dir: PathBuf::from(cache_dir),
     });
 
+    // Create CORS layer to allow frontend requests
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     // Create router WITHOUT pre-loading any graph
     let app = axum::Router::new()
         .route(
@@ -183,6 +190,7 @@ async fn main() {
         .route("/api/routes/save", axum::routing::post(save_route_handler))
         .route("/api/routes/load", axum::routing::get(load_route_handler))
         .route("/api/click_mode", axum::routing::get(click_mode_handler))
+        .layer(cors)
         .with_state(config);
 
     let addr: SocketAddr = "0.0.0.0:8080".parse().expect("valid socket address");
