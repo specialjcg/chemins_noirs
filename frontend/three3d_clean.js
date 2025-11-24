@@ -15,10 +15,14 @@ let currentAnimationIndex = 0;
 // Constants for conversion
 const METERS_PER_DEGREE_LAT = 111000; // Approximate meters per degree of latitude
 const SCALE_FACTOR = 10; // Much smaller scale for better visualization
-const ELEVATION_SCALE = 15; // Much stronger exaggeration for clearly visible 3D relief
+const ELEVATION_SCALE = 30; // Very strong exaggeration for dramatic mountain relief
 
 let terrainMesh = null;
 const elevationPanelId = 'elevationPanel';
+
+// Cache for elevation data to avoid redundant API calls
+const elevationCache = new Map();
+let isUpdatingRoute = false; // Prevent concurrent route updates
 
 /**
  * Initialize the Three.js 3D scene
@@ -140,13 +144,23 @@ function latLonToXYZ(lat, lon, elevation, centerLat, centerLon) {
 
 /**
  * Fetch real terrain elevation data from Open-Meteo API in batches
+ * Uses caching to avoid redundant API calls
  */
 async function fetchTerrainElevations(latitudes, longitudes) {
   try {
+    // Create cache key from the area bounds
+    const cacheKey = `${latitudes[0]}_${longitudes[0]}_${latitudes[latitudes.length-1]}_${longitudes[longitudes.length-1]}_${latitudes.length}`;
+
+    // Check cache first
+    if (elevationCache.has(cacheKey)) {
+      console.log(`[three3d] ⚡ Using cached elevation data for ${latitudes.length} points`);
+      return elevationCache.get(cacheKey);
+    }
+
     const batchSize = 50; // keep batches small to avoid 429
     const allElevations = [];
-    const baseDelay = 400;
-    const retryDelay = 800;
+    const baseDelay = 600; // Increased from 400ms to be more conservative
+    const retryDelay = 2000; // Increased from 800ms
     const maxRetries = 3;
 
     console.log(`[three3d] Fetching elevation data for ${latitudes.length} points in batches of ${batchSize}...`);
@@ -163,37 +177,44 @@ async function fetchTerrainElevations(latitudes, longitudes) {
       console.log(`[three3d] Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(latitudes.length / batchSize)}`);
 
       let attempt = 0;
+      let success = false;
+
       // Retry on transient failures (429/5xx)
-      while (true) {
+      while (!success && attempt <= maxRetries) {
         const response = await fetch(url);
+
         if (response.ok) {
           const data = await response.json();
           if (data.elevation && Array.isArray(data.elevation)) {
             allElevations.push(...data.elevation);
           }
-          break;
-        }
-
-        // If rate limited or server error, backoff and retry
-        if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
+          success = true;
+        } else if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
+          // Rate limited or server error, backoff and retry
           attempt += 1;
           const waitMs = retryDelay * attempt;
           console.warn(`[three3d] Elevation batch retry ${attempt}/${maxRetries} after ${response.status}, waiting ${waitMs}ms`);
           await new Promise(resolve => setTimeout(resolve, waitMs));
-          continue;
+        } else {
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
-
-        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      // Small delay to avoid rate limiting
+      // Delay between batches to avoid rate limiting
       if (i + batchSize < latitudes.length) {
-        const jitter = Math.random() * 150;
+        const jitter = Math.random() * 200;
         await new Promise(resolve => setTimeout(resolve, baseDelay + jitter));
       }
     }
 
     console.log(`[three3d] Successfully fetched ${allElevations.length} elevation points`);
+
+    // Cache the results
+    if (allElevations.length === latitudes.length) {
+      elevationCache.set(cacheKey, allElevations);
+      console.log(`[three3d] Cached elevation data for future use`);
+    }
+
     return allElevations;
   } catch (error) {
     console.error('[three3d] Failed to fetch elevation data:', error);
@@ -219,8 +240,9 @@ async function createTerrain(coords, elevations, centerLat, centerLon) {
   const latPadding = (maxLat - minLat) * 0.3;
   const lonPadding = (maxLon - minLon) * 0.3;
 
-  // Create terrain grid (moderate resolution to balance detail and API limits)
-  const segments = 20; // 20x20 = 441 points - further reduce API volume
+  // Create terrain grid with higher resolution for better relief detail
+  // 64x64 = 4225 points - high detail with caching to minimize API calls
+  const segments = 64;
   const geometry = new THREE.PlaneGeometry(1, 1, segments, segments);
 
   console.log(`[three3d] Creating terrain with ${(segments + 1) * (segments + 1)} vertices`);
@@ -299,27 +321,77 @@ async function createTerrain(coords, elevations, centerLat, centerLon) {
     }
   }
 
-  geometry.computeVertexNormals();
-  geometry.rotateX(-Math.PI / 2); // Rotate to horizontal
+  // Rotate to horizontal BEFORE computing normals
+  geometry.rotateX(-Math.PI / 2);
 
-  // Create material with enhanced terrain shading for better relief visibility
+  // Compute normals AFTER all transformations for correct lighting
+  geometry.computeVertexNormals();
+
+  // Mark position attribute as needing update
+  positions.needsUpdate = true;
+
+  // Create material with white color to show true satellite texture colors
   const material = new THREE.MeshStandardMaterial({
-    color: 0xe0e0e0, // Light gray to show terrain even without texture
+    color: 0xffffff, // White - won't tint the satellite texture
     wireframe: false,
-    roughness: 0.9,
-    metalness: 0.1,
-    flatShading: false,
+    roughness: 0.9, // High roughness to reduce shininess and enhance shadows
+    metalness: 0.0,
+    flatShading: false, // Smooth shading with computed normals for realistic terrain
     side: THREE.DoubleSide
   });
 
-  // Load satellite imagery covering the entire terrain area
-  loadTerrainTexture(material, minLat - latPadding, maxLat + latPadding, minLon - lonPadding, maxLon + lonPadding);
+  // Create mesh first
+  const mesh = new THREE.Mesh(geometry, material);
 
-  return new THREE.Mesh(geometry, material);
+  // Load satellite imagery covering the entire terrain area and adjust UVs
+  loadTerrainTexture(material, minLat - latPadding, maxLat + latPadding, minLon - lonPadding, maxLon + lonPadding)
+    .then(uvBounds => {
+      if (uvBounds) {
+        // Adjust UV coordinates to match actual tile coverage
+        adjustUVMapping(geometry, minLat - latPadding, maxLat + latPadding, minLon - lonPadding, maxLon + lonPadding, uvBounds);
+      }
+    });
+
+  return mesh;
+}
+
+/**
+ * Adjust UV mapping to align texture with terrain geometry
+ */
+function adjustUVMapping(geometry, terrainMinLat, terrainMaxLat, terrainMinLon, terrainMaxLon, uvBounds) {
+  const { tileCoverageMinLat, tileCoverageMaxLat, tileCoverageMinLon, tileCoverageMaxLon } = uvBounds;
+
+  // Calculate how the terrain fits within the tile coverage
+  const uMin = (terrainMinLon - tileCoverageMinLon) / (tileCoverageMaxLon - tileCoverageMinLon);
+  const uMax = (terrainMaxLon - tileCoverageMinLon) / (tileCoverageMaxLon - tileCoverageMinLon);
+  const vMin = (terrainMinLat - tileCoverageMinLat) / (tileCoverageMaxLat - tileCoverageMinLat);
+  const vMax = (terrainMaxLat - tileCoverageMinLat) / (tileCoverageMaxLat - tileCoverageMinLat);
+
+  console.log(`[three3d] UV adjustment: u[${uMin.toFixed(4)}, ${uMax.toFixed(4)}], v[${vMin.toFixed(4)}, ${vMax.toFixed(4)}]`);
+
+  // Get UV attribute
+  const uvAttribute = geometry.attributes.uv;
+
+  // Adjust each UV coordinate
+  for (let i = 0; i < uvAttribute.count; i++) {
+    let u = uvAttribute.getX(i);
+    let v = uvAttribute.getY(i);
+
+    // Remap from [0,1] to actual coverage within tiles
+    u = uMin + u * (uMax - uMin);
+    v = vMin + v * (vMax - vMin);
+
+    uvAttribute.setXY(i, u, v);
+  }
+
+  uvAttribute.needsUpdate = true;
+
+  console.log('[three3d] UV mapping adjusted for perfect texture alignment');
 }
 
 /**
  * Load satellite texture tiles for the terrain
+ * Returns UV bounds for proper texture alignment
  */
 async function loadTerrainTexture(material, minLat, maxLat, minLon, maxLon) {
   try {
@@ -335,6 +407,22 @@ async function loadTerrainTexture(material, minLat, maxLat, minLon, maxLon) {
     const tilesY = maxTileY - minTileY + 1;
 
     console.log(`[three3d] Loading ${tilesX}x${tilesY} satellite tiles at zoom ${zoom}`);
+
+    // Calculate exact bounds of tile coverage in lat/lon
+    // This is crucial for UV mapping alignment
+    const tileToLon = (x, z) => x / Math.pow(2, z) * 360 - 180;
+    const tileToLat = (y, z) => {
+      const n = Math.PI - 2 * Math.PI * y / Math.pow(2, z);
+      return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+    };
+
+    // Actual tile coverage (tiles cover slightly more than requested area)
+    const tileCoverageMinLon = tileToLon(minTileX, zoom);
+    const tileCoverageMaxLon = tileToLon(maxTileX + 1, zoom);
+    const tileCoverageMinLat = tileToLat(maxTileY + 1, zoom);
+    const tileCoverageMaxLat = tileToLat(minTileY, zoom);
+
+    console.log(`[three3d] Tile coverage: lat [${tileCoverageMinLat.toFixed(5)}, ${tileCoverageMaxLat.toFixed(5)}], lon [${tileCoverageMinLon.toFixed(5)}, ${tileCoverageMaxLon.toFixed(5)}]`);
 
     // Create canvas to combine tiles
     const tileSize = 256;
@@ -378,9 +466,18 @@ async function loadTerrainTexture(material, minLat, maxLat, minLon, maxLon) {
     material.needsUpdate = true;
 
     console.log(`[three3d] Satellite texture loaded (${tilesX}x${tilesY} tiles)`);
+
+    // Return UV bounds for alignment - the texture covers a slightly different area than requested
+    return {
+      tileCoverageMinLat,
+      tileCoverageMaxLat,
+      tileCoverageMinLon,
+      tileCoverageMaxLon
+    };
   } catch (error) {
     console.warn('[three3d] Failed to load satellite texture:', error);
     material.color.setHex(0x8B7355); // Brown terrain color as fallback
+    return null;
   }
 }
 
@@ -393,16 +490,25 @@ export async function updateRoute3D(coords, elevations) {
     return;
   }
 
-  console.log("[three3d] Updating route with", coords?.length, "points");
-
-  // Store for animation
-  currentRouteCoords = coords || [];
-  currentElevations = elevations || [];
-  renderElevationPanel(currentRouteCoords, currentElevations);
-
-  if (currentRouteCoords.length === 0) {
+  // Prevent concurrent updates
+  if (isUpdatingRoute) {
+    console.log("[three3d] Update already in progress, skipping duplicate call");
     return;
   }
+
+  isUpdatingRoute = true;
+
+  try {
+    console.log("[three3d] Updating route with", coords?.length, "points");
+
+    // Store for animation
+    currentRouteCoords = coords || [];
+    currentElevations = elevations || [];
+    renderElevationPanel(currentRouteCoords, currentElevations);
+
+    if (currentRouteCoords.length === 0) {
+      return;
+    }
 
   // Remove existing route and terrain
   if (routeLine) {
@@ -501,6 +607,10 @@ export async function updateRoute3D(coords, elevations) {
   }
 
   console.log("[three3d] Route rendered");
+  } finally {
+    // Always release the lock, even if an error occurred
+    isUpdatingRoute = false;
+  }
 }
 
 /**
