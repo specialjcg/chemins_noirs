@@ -18,9 +18,9 @@ cp pkg/frontend.js dist/
 cp pkg/frontend_bg.js dist/ 2>/dev/null || true
 
 # Copy static assets
-cp index.html style.css map.js three3d_clean.js dist/
+cp index.html style.css maplibre_map.js dist/
 
-# Copy the wasm-bindgen snippets (map.js / three3d_clean.js) with the generated hash
+# Copy the wasm-bindgen snippets (maplibre_map.js) with the generated hash
 SNIPPET_DIR="$(find pkg/snippets -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | head -n 1)"
 if [[ -z "$SNIPPET_DIR" ]]; then
   echo "❌ Could not locate pkg/snippets directory produced by wasm-pack."
@@ -29,7 +29,7 @@ fi
 mkdir -p "dist/snippets"
 cp -r "pkg/snippets/${SNIPPET_DIR}" "dist/snippets/"
 # Ensure the latest JS helpers are also mirrored (in case they changed without rebuilding wasm-bindgen snippets)
-cp map.js three3d_clean.js "dist/snippets/${SNIPPET_DIR}/"
+cp maplibre_map.js "dist/snippets/${SNIPPET_DIR}/"
 
 # Create a simple index.html that loads the WASM
 cat > dist/index.html << 'EOF'
@@ -42,17 +42,13 @@ cat > dist/index.html << 'EOF'
     <link rel="stylesheet" href="style.css" />
     <link
       rel="stylesheet"
-      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
       crossorigin=""
     />
-    <script
-      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-      crossorigin=""
-    ></script>
     <script type="importmap">
       {
         "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+          "maplibre-gl": "https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm"
         }
       }
     </script>
@@ -60,7 +56,6 @@ cat > dist/index.html << 'EOF'
   <body>
     <div id="app"></div>
     <div id="map"></div>
-    <div id="three3dContainer"></div>
 
     <script type="module">
       import init from './frontend.js';
@@ -72,8 +67,7 @@ cat > dist/index.html << 'EOF'
       run();
     </script>
 
-    <script type="module" src="map.js"></script>
-    <script type="module" src="three3d_clean.js"></script>
+    <script type="module" src="maplibre_map.js"></script>
   </body>
 </html>
 EOF

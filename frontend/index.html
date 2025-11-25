@@ -8,30 +8,21 @@
     <link data-trunk rel="css" href="style.css" />
     <link
       rel="stylesheet"
-      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
       crossorigin=""
     />
-    <script
-      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-      crossorigin=""
-    ></script>
     <script type="importmap">
       {
         "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+          "maplibre-gl": "https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm"
         }
       }
     </script>
-    <link data-trunk rel="copy-file" href="map.js" />
-    <link data-trunk rel="copy-file" href="three3d_clean.js" />
+    <link data-trunk rel="copy-file" href="maplibre_map.js" />
   </head>
   <body>
     <div id="app"></div>
     <div id="map"></div>
-    <div id="three3dContainer">
-      <div id="elevationPanel" class="elevation-panel" aria-live="polite"></div>
-    </div>
-    <script type="module" src="map.js"></script>
-    <script type="module" src="three3d_clean.js"></script>
+    <script type="module" src="maplibre_map.js"></script>
   </body>
 </html>

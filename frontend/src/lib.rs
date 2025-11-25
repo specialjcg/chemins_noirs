@@ -7,7 +7,7 @@ use wasm_bindgen::{
     prelude::{JsValue, wasm_bindgen},
 };
 
-#[wasm_bindgen(module = "/map.js")]
+#[wasm_bindgen(module = "/maplibre_map.js")]
 extern "C" {
     #[wasm_bindgen(js_name = initMap)]
     fn init_map();
@@ -19,20 +19,10 @@ extern "C" {
     fn toggle_satellite_view(enabled: bool);
     #[wasm_bindgen(js_name = updateBbox)]
     fn update_bbox_js(bounds: JsValue);
-}
-
-#[wasm_bindgen(module = "/three3d_clean.js")]
-extern "C" {
-    #[wasm_bindgen(js_name = initThree3D)]
-    fn init_three_3d();
-    #[wasm_bindgen(js_name = updateRoute3D)]
-    fn update_route_3d(coords: JsValue, elevations: JsValue);
-    #[wasm_bindgen(js_name = playRouteAnimation)]
-    fn play_route_animation();
-    #[wasm_bindgen(js_name = pauseRouteAnimation)]
-    fn pause_route_animation();
     #[wasm_bindgen(js_name = toggleThree3DView)]
     fn toggle_three_3d_view(enabled: bool);
+    #[wasm_bindgen(js_name = centerOnMarkers)]
+    fn center_on_markers(start: JsValue, end: JsValue);
 }
 
 fn api_root() -> String {
@@ -172,6 +162,16 @@ pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
 
     sync_selection_markers(&model.form);
 
+    // Center map on initial start and end coordinates
+    if let (Some(start), Some(end)) = (
+        model.form.coordinate_pair(&model.form.start_lat, &model.form.start_lon),
+        model.form.coordinate_pair(&model.form.end_lat, &model.form.end_lon),
+    ) {
+        if let (Ok(start_js), Ok(end_js)) = (to_value(&start), to_value(&end)) {
+            center_on_markers(start_js, end_js);
+        }
+    }
+
     model
 }
 
@@ -213,6 +213,15 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
             match result {
                 Ok(route) => {
                     push_route_to_map(&route.path);
+
+                    // Extract start and end points from the route and update form
+                    if let (Some(start), Some(end)) = (route.path.first(), route.path.last()) {
+                        model.form.start_lat = format_coord(start.lat);
+                        model.form.start_lon = format_coord(start.lon);
+                        model.form.end_lat = format_coord(end.lat);
+                        model.form.end_lon = format_coord(end.lon);
+                    }
+
                     // Update bbox if metadata is present
                     if let Some(ref metadata) = route.metadata
                         && let Ok(bounds_value) = to_value(&metadata.bounds)
@@ -220,20 +229,20 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                         update_bbox_js(bounds_value);
                     }
 
-                    // Update 3D view if in 3D mode
-                    if model.view_mode == ViewMode::Map3D {
-                        let coords_value = to_value(&route.path).unwrap_or(JsValue::NULL);
-                        let elevations_value = route
-                            .elevation_profile
-                            .as_ref()
-                            .and_then(|p| to_value(&p.elevations).ok())
-                            .unwrap_or(JsValue::NULL);
-                        update_route_3d(coords_value, elevations_value);
-                    }
-
+                    // Maplibre handles terrain automatically, no separate 3D update needed
                     model.last_response = Some(route);
                     model.error = None;
                     sync_selection_markers(&model.form);
+
+                    // Center map on start and end markers
+                    if let (Some(start), Some(end)) = (
+                        model.form.coordinate_pair(&model.form.start_lat, &model.form.start_lon),
+                        model.form.coordinate_pair(&model.form.end_lat, &model.form.end_lon),
+                    ) {
+                        if let (Ok(start_js), Ok(end_js)) = (to_value(&start), to_value(&end)) {
+                            center_on_markers(start_js, end_js);
+                        }
+                    }
                 }
                 Err(err) => {
                     push_route_to_map(&[]);
@@ -256,30 +265,15 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                 ViewMode::Map2D => ViewMode::Map3D,
                 ViewMode::Map3D => ViewMode::Map2D,
             };
+            // Maplibre toggles terrain view directly
             toggle_three_3d_view(model.view_mode == ViewMode::Map3D);
-
-            // If switching to 3D and we have a route, render it in 3D
-            if model.view_mode == ViewMode::Map3D
-                && let Some(ref route) = model.last_response
-            {
-                let coords_value = to_value(&route.path).unwrap_or(JsValue::NULL);
-                let elevations_value = route
-                    .elevation_profile
-                    .as_ref()
-                    .and_then(|p| to_value(&p.elevations).ok())
-                    .unwrap_or(JsValue::NULL);
-                update_route_3d(coords_value, elevations_value);
-            }
         }
         Msg::PlayAnimation => {
-            if model.view_mode == ViewMode::Map3D {
-                model.animation_state = AnimationState::Playing;
-                play_route_animation();
-            }
+            // Animation not implemented in Maplibre version yet
+            model.animation_state = AnimationState::Playing;
         }
         Msg::PauseAnimation => {
             model.animation_state = AnimationState::Stopped;
-            pause_route_animation();
         }
         Msg::SaveRoute => {
             if let Some(ref route) = model.last_response {
@@ -439,17 +433,6 @@ fn view_form(model: &Model) -> Node<Msg> {
                     Msg::ToggleMapView
                 }),
                 C!["map-toggle"],
-            ],
-            button![
-                match model.view_mode {
-                    ViewMode::Map2D => "Vue 3D",
-                    ViewMode::Map3D => "Vue 2D",
-                },
-                ev(Ev::Click, |event| {
-                    event.prevent_default();
-                    Msg::Toggle3DView
-                }),
-                C!["view-toggle"],
             ],
         ],
         if model.view_mode == ViewMode::Map3D && model.last_response.is_some() {

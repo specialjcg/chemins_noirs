@@ -3,13 +3,15 @@ use shared::{Coordinate, ElevationProfile};
 use std::error::Error;
 
 const OPEN_METEO_ELEVATION_API: &str = "https://api.open-meteo.com/v1/elevation";
-const BATCH_SIZE: usize = 100; // Open-Meteo recommends keeping lists short; we also stay under URL limits
+const BATCH_SIZE: usize = 80; // smaller batches to play nicer with rate limits
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct ElevationRequest {
     locations: Vec<Location>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct Location {
     latitude: f64,
@@ -30,6 +32,7 @@ pub async fn fetch_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Box<d
     let client = reqwest::Client::new();
     let mut all_elevations = Vec::with_capacity(coords.len());
     let max_retries = 2;
+    let mut backoff_ms: u64 = 1000;
 
     // Process in batches to respect API limits
     for chunk in coords.chunks(BATCH_SIZE) {
@@ -66,21 +69,21 @@ pub async fn fetch_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Box<d
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
 
-            // Retry on 429/5xx with small backoff
+            // Retry on 429/5xx with backoff
             if (status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error())
                 && attempt < max_retries
             {
                 attempt += 1;
-                let wait_ms = 500 * attempt;
                 tracing::warn!(
                     "Elevation batch retry {}/{} after {}: {}, waiting {}ms",
                     attempt,
                     max_retries,
                     status,
                     error_text,
-                    wait_ms
+                    backoff_ms
                 );
-                tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms as u64)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+                backoff_ms *= 2;
                 continue;
             }
 
@@ -89,11 +92,110 @@ pub async fn fetch_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Box<d
 
         // Small delay between batches to be nice to the API
         if coords.len() > BATCH_SIZE {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
         }
     }
 
     Ok(all_elevations)
+}
+
+/// Try a local DEM (GeoTIFF) when available, otherwise fall back to remote API.
+pub async fn get_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Box<dyn Error>> {
+    #[cfg(feature = "local_dem")]
+    {
+        if let Some(path) = local_dem_path() {
+            match sample_dem_async(coords.clone(), &path).await {
+                Ok(vals) => return Ok(vals),
+                Err(err) => {
+                    tracing::warn!("Local DEM sampling failed (falling back to API): {}", err);
+                }
+            }
+        }
+    }
+
+    fetch_elevations(coords).await
+}
+
+#[cfg(feature = "local_dem")]
+fn local_dem_path() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let p = std::env::var("LOCAL_DEM_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("backend/data/dem/region.tif"));
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "local_dem")]
+async fn sample_dem_async(
+    coords: Vec<(f64, f64)>,
+    path: &std::path::Path,
+) -> Result<Vec<f64>, Box<dyn Error>> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || sample_dem_blocking(&coords, &path)).await?
+}
+
+#[cfg(feature = "local_dem")]
+fn sample_dem_blocking(
+    coords: &[(f64, f64)],
+    path: &std::path::Path,
+) -> Result<Vec<f64>, Box<dyn Error>> {
+    use gdal::raster::Buffer;
+    use gdal::Dataset;
+
+    let ds = Dataset::open(path)?;
+    let band = ds.rasterband(1)?;
+    let gt = ds.geo_transform()?;
+
+    // Precompute inverse transform for north-up (assumed)
+    let (gt0, gt1, gt2, gt3, gt4, gt5) = (gt[0], gt[1], gt[2], gt[3], gt[4], gt[5]);
+
+    let width = band.x_size();
+    let height = band.y_size();
+
+    let mut out = Vec::with_capacity(coords.len());
+
+    for (lat, lon) in coords {
+        // Inverse geotransform for north-up (gt2 = gt4 = 0)
+        let px = (lon - gt0) / gt1;
+        let py = (lat - gt3) / gt5; // gt5 is negative
+
+        let x0 = px.floor() as isize;
+        let y0 = py.floor() as isize;
+        let x1 = x0 + 1;
+        let y1 = y0 + 1;
+
+        if x0 < 0 || y0 < 0 || x1 >= width as isize || y1 >= height as isize {
+            out.push(0.0);
+            continue;
+        }
+
+        // Read 2x2 window
+        let win_x = x0 as isize;
+        let win_y = y0 as isize;
+        let buf: Buffer<f64> = band.read_as(win_x, win_y, 2, 2, 2, 2)?;
+
+        let q11 = buf.data[0];
+        let q21 = buf.data[1];
+        let q12 = buf.data[2];
+        let q22 = buf.data[3];
+
+        let fx = px - x0 as f64;
+        let fy = py - y0 as f64;
+
+        // Bilinear interpolation
+        let e = q11 * (1.0 - fx) * (1.0 - fy)
+            + q21 * fx * (1.0 - fy)
+            + q12 * (1.0 - fx) * fy
+            + q22 * fx * fy;
+
+        out.push(e);
+    }
+
+    Ok(out)
 }
 
 fn median(values: &mut [f64]) -> Option<f64> {

@@ -170,12 +170,14 @@ async fn route_handler(
             // For now, GPX base64 is empty - we can implement it later
             let gpx_base64 = String::new();
 
+            // Terrain mesh generation removed - MapLibre GL JS handles terrain rendering client-side
             let response = RouteResponse {
                 path,
                 distance_km,
                 gpx_base64,
                 metadata: None,
                 elevation_profile,
+                terrain: None,
             };
 
             Ok(Json(response))

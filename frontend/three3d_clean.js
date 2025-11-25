@@ -15,13 +15,45 @@ let currentAnimationIndex = 0;
 // Constants for conversion
 const METERS_PER_DEGREE_LAT = 111000; // Approximate meters per degree of latitude
 const SCALE_FACTOR = 10; // Much smaller scale for better visualization
-const ELEVATION_SCALE = 30; // Very strong exaggeration for dramatic mountain relief
+const ELEVATION_SCALE = 3; // Softer exaggeration for natural relief
 
 let terrainMesh = null;
 const elevationPanelId = 'elevationPanel';
 
-// Cache for elevation data to avoid redundant API calls
-const elevationCache = new Map();
+// Cache for elevation data to avoid redundant API calls (persisted)
+const CACHE_KEY_PREFIX = 'elevation_cache_';
+
+function buildCacheKey(latMin, latMax, lonMin, lonMax, vertexCount) {
+  return `${CACHE_KEY_PREFIX}${latMin.toFixed(4)}_${latMax.toFixed(4)}_${lonMin.toFixed(4)}_${lonMax.toFixed(4)}_${vertexCount}`;
+}
+
+function loadCache(cacheKey, expectedLength) {
+  try {
+    const raw = localStorage.getItem(cacheKey);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length === expectedLength) {
+      console.log(`[three3d] ⚡ Using cached elevation data (${parsed.length} points)`);
+      return parsed;
+    }
+    return null;
+  } catch (err) {
+    console.warn('[three3d] Failed to read elevation cache:', err);
+    return null;
+  }
+}
+
+function saveCache(cacheKey, elevations) {
+  try {
+    localStorage.setItem(cacheKey, JSON.stringify(elevations));
+    console.log(`[three3d] Cached ${elevations.length} elevation values`);
+  } catch (err) {
+    console.warn('[three3d] Failed to persist elevation cache:', err);
+  }
+}
+
 let isUpdatingRoute = false; // Prevent concurrent route updates
 
 /**
@@ -146,21 +178,18 @@ function latLonToXYZ(lat, lon, elevation, centerLat, centerLon) {
  * Fetch real terrain elevation data from Open-Meteo API in batches
  * Uses caching to avoid redundant API calls
  */
-async function fetchTerrainElevations(latitudes, longitudes) {
+async function fetchTerrainElevations(latitudes, longitudes, cacheKey) {
   try {
-    // Create cache key from the area bounds
-    const cacheKey = `${latitudes[0]}_${longitudes[0]}_${latitudes[latitudes.length-1]}_${longitudes[longitudes.length-1]}_${latitudes.length}`;
-
-    // Check cache first
-    if (elevationCache.has(cacheKey)) {
-      console.log(`[three3d] ⚡ Using cached elevation data for ${latitudes.length} points`);
-      return elevationCache.get(cacheKey);
+    // Check cache first (localStorage)
+    const cached = loadCache(cacheKey, latitudes.length);
+    if (cached) {
+      return cached;
     }
 
     const batchSize = 50; // keep batches small to avoid 429
     const allElevations = [];
-    const baseDelay = 600; // Increased from 400ms to be more conservative
-    const retryDelay = 2000; // Increased from 800ms
+    const baseDelay = 1200; // further increase to play nicely with Open-Meteo
+    const retryDelay = 2000;
     const maxRetries = 3;
 
     console.log(`[three3d] Fetching elevation data for ${latitudes.length} points in batches of ${batchSize}...`);
@@ -211,8 +240,7 @@ async function fetchTerrainElevations(latitudes, longitudes) {
 
     // Cache the results
     if (allElevations.length === latitudes.length) {
-      elevationCache.set(cacheKey, allElevations);
-      console.log(`[three3d] Cached elevation data for future use`);
+      saveCache(cacheKey, allElevations);
     }
 
     return allElevations;
@@ -225,7 +253,16 @@ async function fetchTerrainElevations(latitudes, longitudes) {
 /**
  * Create 3D terrain mesh from route coordinates and elevations
  */
-async function createTerrain(coords, elevations, centerLat, centerLon) {
+const CLIENT_FALLBACK_SEGMENTS = 20; // when no backend terrain, use modest resolution to avoid 429s
+
+async function createTerrain(
+  coords,
+  elevations,
+  centerLat,
+  centerLon,
+  segmentsOverride,
+  useRealElevation = true
+) {
   if (!coords || coords.length === 0) return null;
 
   // Calculate bounds
@@ -240,9 +277,7 @@ async function createTerrain(coords, elevations, centerLat, centerLon) {
   const latPadding = (maxLat - minLat) * 0.3;
   const lonPadding = (maxLon - minLon) * 0.3;
 
-  // Create terrain grid with higher resolution for better relief detail
-  // 64x64 = 4225 points - high detail with caching to minimize API calls
-  const segments = 64;
+  const segments = segmentsOverride ?? 64;
   const geometry = new THREE.PlaneGeometry(1, 1, segments, segments);
 
   console.log(`[three3d] Creating terrain with ${(segments + 1) * (segments + 1)} vertices`);
@@ -275,9 +310,19 @@ async function createTerrain(coords, elevations, centerLat, centerLon) {
     terrainLons.push(lon.toFixed(6));
   }
 
-  // Fetch real elevation data from API
-  console.log(`[three3d] Fetching elevation for ${terrainLats.length} terrain points...`);
-  const terrainElevations = await fetchTerrainElevations(terrainLats, terrainLons);
+  // Build cache key on padded bounds and vertex count
+  const cacheKey = buildCacheKey(
+    minLat - latPadding,
+    maxLat + latPadding,
+    minLon - lonPadding,
+    maxLon + lonPadding,
+    (segments + 1) * (segments + 1)
+  );
+
+  // Fetch real elevation data from API (or cache) unless disabled
+  const terrainElevations = useRealElevation
+    ? await fetchTerrainElevations(terrainLats, terrainLons, cacheKey)
+    : [];
 
   // Apply elevations to vertices
   if (terrainElevations.length === positions.count) {
@@ -356,6 +401,54 @@ async function createTerrain(coords, elevations, centerLat, centerLon) {
 }
 
 /**
+ * Build terrain mesh directly from backend-provided payload (positions/uvs/indices)
+ */
+async function createTerrainFromPayload(terrain) {
+  try {
+    const positions = new Float32Array(terrain.positions || []);
+    const uvs = new Float32Array(terrain.uvs || []);
+    const indices = new Uint32Array(terrain.indices || []);
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    geometry.computeVertexNormals();
+
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      wireframe: false,
+      roughness: 0.9,
+      metalness: 0.0,
+      flatShading: false,
+      side: THREE.DoubleSide
+    });
+
+    const mesh = new THREE.Mesh(geometry, material);
+
+    // Load texture based on provided bounds
+    const b = terrain.bounds;
+    if (b) {
+      await loadTerrainTexture(material, b.min_lat, b.max_lat, b.min_lon, b.max_lon)
+        .then(uvBounds => {
+          if (uvBounds) {
+            adjustUVMapping(geometry, b.min_lat, b.max_lat, b.min_lon, b.max_lon, uvBounds);
+          }
+        });
+    }
+
+    console.log(
+      `[three3d] Terrain payload: vertices=${positions.length / 3}, elev range=${terrain.min_elevation}..${terrain.max_elevation}`
+    );
+
+    return mesh;
+  } catch (err) {
+    console.warn('[three3d] Failed to build terrain from payload:', err);
+    return null;
+  }
+}
+
+/**
  * Adjust UV mapping to align texture with terrain geometry
  */
 function adjustUVMapping(geometry, terrainMinLat, terrainMaxLat, terrainMinLon, terrainMaxLon, uvBounds) {
@@ -395,16 +488,42 @@ function adjustUVMapping(geometry, terrainMinLat, terrainMaxLat, terrainMinLon, 
  */
 async function loadTerrainTexture(material, minLat, maxLat, minLon, maxLon) {
   try {
-    const zoom = 13; // Good balance between detail and coverage
+    // Choose the highest zoom that keeps tile count reasonable (<=16 tiles)
+    const zoomCandidates = [16, 15, 14, 13];
+    let zoom = 13;
+    let minTileX = 0;
+    let maxTileX = 0;
+    let minTileY = 0;
+    let maxTileY = 0;
+    let tilesX = 0;
+    let tilesY = 0;
 
-    // Calculate tile range
-    const minTileX = Math.floor((minLon + 180) / 360 * Math.pow(2, zoom));
-    const maxTileX = Math.floor((maxLon + 180) / 360 * Math.pow(2, zoom));
-    const minTileY = Math.floor((1 - Math.log(Math.tan(maxLat * Math.PI / 180) + 1 / Math.cos(maxLat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
-    const maxTileY = Math.floor((1 - Math.log(Math.tan(minLat * Math.PI / 180) + 1 / Math.cos(minLat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
-
-    const tilesX = maxTileX - minTileX + 1;
-    const tilesY = maxTileY - minTileY + 1;
+    for (const z of zoomCandidates) {
+      const minTx = Math.floor((minLon + 180) / 360 * Math.pow(2, z));
+      const maxTx = Math.floor((maxLon + 180) / 360 * Math.pow(2, z));
+      const minTy = Math.floor(
+        (1 - Math.log(Math.tan(maxLat * Math.PI / 180) + 1 / Math.cos(maxLat * Math.PI / 180)) / Math.PI) /
+          2 *
+          Math.pow(2, z)
+      );
+      const maxTy = Math.floor(
+        (1 - Math.log(Math.tan(minLat * Math.PI / 180) + 1 / Math.cos(minLat * Math.PI / 180)) / Math.PI) /
+          2 *
+          Math.pow(2, z)
+      );
+      const tx = maxTx - minTx + 1;
+      const ty = maxTy - minTy + 1;
+      if (tx * ty <= 16) {
+        zoom = z;
+        minTileX = minTx;
+        maxTileX = maxTx;
+        minTileY = minTy;
+        maxTileY = maxTy;
+        tilesX = tx;
+        tilesY = ty;
+        break;
+      }
+    }
 
     console.log(`[three3d] Loading ${tilesX}x${tilesY} satellite tiles at zoom ${zoom}`);
 
@@ -461,6 +580,9 @@ async function loadTerrainTexture(material, minLat, maxLat, minLon, maxLon) {
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.minFilter = THREE.LinearFilter;
+    if (renderer && renderer.capabilities) {
+      texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    }
 
     material.map = texture;
     material.needsUpdate = true;
@@ -484,7 +606,7 @@ async function loadTerrainTexture(material, minLat, maxLat, minLon, maxLon) {
 /**
  * Update the 3D route visualization
  */
-export async function updateRoute3D(coords, elevations) {
+export async function updateRoute3D(coords, elevations, terrain) {
   if (!scene) {
     console.warn("[three3d] Scene not initialized");
     return;
@@ -510,103 +632,123 @@ export async function updateRoute3D(coords, elevations) {
       return;
     }
 
-  // Remove existing route and terrain
-  if (routeLine) {
-    scene.remove(routeLine);
-    routeLine = null;
-  }
-  if (terrainMesh) {
-    scene.remove(terrainMesh);
-    terrainMesh = null;
-  }
-
-  // Calculate center point for coordinate conversion
-  const centerLat = currentRouteCoords[Math.floor(currentRouteCoords.length / 2)].lat;
-  const centerLon = currentRouteCoords[Math.floor(currentRouteCoords.length / 2)].lon;
-
-  // Create 3D terrain with satellite texture and real elevation data
-  console.log("[three3d] Creating terrain mesh with real elevation data...");
-  terrainMesh = await createTerrain(currentRouteCoords, currentElevations, centerLat, centerLon);
-  if (terrainMesh) {
-    scene.add(terrainMesh);
-    console.log("[three3d] Terrain added to scene");
-  }
-
-  // Create route line with tube geometry for better visibility
-  const points = currentRouteCoords.map((coord, idx) => {
-    const elevation = currentElevations[idx] || 0;
-    const pos = latLonToXYZ(coord.lat, coord.lon, elevation, centerLat, centerLon);
-    return new THREE.Vector3(pos.x, pos.y, pos.z);
-  });
-
-  // Create a tube geometry for a thick, visible line
-  const curve = new THREE.CatmullRomCurve3(points);
-  const tubeGeometry = new THREE.TubeGeometry(curve, points.length * 2, 0.5, 8, false);
-  const tubeMaterial = new THREE.MeshLambertMaterial({
-    color: 0xff6b35, // Bright orange
-    emissive: 0xff3300,
-    emissiveIntensity: 0.3
-  });
-  routeLine = new THREE.Mesh(tubeGeometry, tubeMaterial);
-  scene.add(routeLine);
-
-  // Add markers at start and end
-  const sphereGeometry = new THREE.SphereGeometry(1, 16, 16);
-
-  const startMaterial = new THREE.MeshLambertMaterial({
-    color: 0x00ff00,
-    emissive: 0x00ff00,
-    emissiveIntensity: 0.5
-  });
-  const startMarker = new THREE.Mesh(sphereGeometry, startMaterial);
-  startMarker.position.copy(points[0]);
-  scene.add(startMarker);
-
-  const endMaterial = new THREE.MeshLambertMaterial({
-    color: 0xff0000,
-    emissive: 0xff0000,
-    emissiveIntensity: 0.5
-  });
-  const endMarker = new THREE.Mesh(sphereGeometry, endMaterial);
-  endMarker.position.copy(points[points.length - 1]);
-  scene.add(endMarker);
-
-  // Position camera to see the whole route from above at angle
-  if (points.length > 0) {
-    // Calculate bounding box
-    const bounds = {
-      minX: Math.min(...points.map(p => p.x)),
-      maxX: Math.max(...points.map(p => p.x)),
-      minY: Math.min(...points.map(p => p.y)),
-      maxY: Math.max(...points.map(p => p.y)),
-      minZ: Math.min(...points.map(p => p.z)),
-      maxZ: Math.max(...points.map(p => p.z))
-    };
-
-    const centerX = (bounds.minX + bounds.maxX) / 2;
-    const centerY = (bounds.minY + bounds.maxY) / 2;
-    const centerZ = (bounds.minZ + bounds.maxZ) / 2;
-
-    const rangeX = bounds.maxX - bounds.minX;
-    const rangeZ = bounds.maxZ - bounds.minZ;
-    const maxRange = Math.max(rangeX, rangeZ);
-
-    // Position camera at 45-degree angle above the route
-    camera.position.set(
-      centerX + maxRange * 0.5,
-      centerY + maxRange * 1.2,
-      centerZ + maxRange * 0.8
-    );
-    camera.lookAt(centerX, centerY, centerZ);
-
-    // Update controls target to center of route
-    if (controls) {
-      controls.target.set(centerX, centerY, centerZ);
-      controls.update();
+    // Remove existing route and terrain
+    if (routeLine) {
+      scene.remove(routeLine);
+      routeLine = null;
     }
-  }
+    if (terrainMesh) {
+      scene.remove(terrainMesh);
+      terrainMesh = null;
+    }
 
-  console.log("[three3d] Route rendered");
+    // Calculate center point for coordinate conversion (overridden if terrain payload provided)
+    let centerLat = currentRouteCoords[Math.floor(currentRouteCoords.length / 2)].lat;
+    let centerLon = currentRouteCoords[Math.floor(currentRouteCoords.length / 2)].lon;
+
+    // If backend provided a ready-made terrain mesh, use it directly
+    if (terrain && terrain.positions && terrain.indices) {
+      centerLat = terrain.center_lat ?? centerLat;
+      centerLon = terrain.center_lon ?? centerLon;
+      console.log("[three3d] Using backend-provided terrain mesh");
+      terrainMesh = await createTerrainFromPayload(terrain);
+      if (terrainMesh) {
+        scene.add(terrainMesh);
+        console.log("[three3d] Terrain (backend) added to scene");
+      }
+    } else {
+    // Create 3D terrain with satellite texture and real elevation data
+    console.log("[three3d] Creating terrain mesh with real elevation data...");
+    // Use a modest resolution when we have to fetch elevations client-side to avoid 429s
+    terrainMesh = await createTerrain(
+      currentRouteCoords,
+      currentElevations,
+      centerLat,
+      centerLon,
+      CLIENT_FALLBACK_SEGMENTS,
+      false // do not hit Open-Meteo when no backend terrain; rely on route interpolation
+    );
+      if (terrainMesh) {
+        scene.add(terrainMesh);
+        console.log("[three3d] Terrain added to scene");
+      }
+    }
+
+    // Create route line with tube geometry for better visibility
+    const points = currentRouteCoords.map((coord, idx) => {
+      const elevation = currentElevations[idx] || 0;
+      const pos = latLonToXYZ(coord.lat, coord.lon, elevation, centerLat, centerLon);
+      return new THREE.Vector3(pos.x, pos.y, pos.z);
+    });
+
+    // Create a tube geometry for a thick, visible line
+    const curve = new THREE.CatmullRomCurve3(points);
+    const tubeGeometry = new THREE.TubeGeometry(curve, points.length * 2, 0.5, 8, false);
+    const tubeMaterial = new THREE.MeshLambertMaterial({
+      color: 0xff6b35, // Bright orange
+      emissive: 0xff3300,
+      emissiveIntensity: 0.3
+    });
+    routeLine = new THREE.Mesh(tubeGeometry, tubeMaterial);
+    scene.add(routeLine);
+
+    // Add markers at start and end
+    const sphereGeometry = new THREE.SphereGeometry(1, 16, 16);
+
+    const startMaterial = new THREE.MeshLambertMaterial({
+      color: 0x00ff00,
+      emissive: 0x00ff00,
+      emissiveIntensity: 0.5
+    });
+    const startMarker = new THREE.Mesh(sphereGeometry, startMaterial);
+    startMarker.position.copy(points[0]);
+    scene.add(startMarker);
+
+    const endMaterial = new THREE.MeshLambertMaterial({
+      color: 0xff0000,
+      emissive: 0xff0000,
+      emissiveIntensity: 0.5
+    });
+    const endMarker = new THREE.Mesh(sphereGeometry, endMaterial);
+    endMarker.position.copy(points[points.length - 1]);
+    scene.add(endMarker);
+
+    // Position camera to see the whole route from above at angle
+    if (points.length > 0) {
+      // Calculate bounding box
+      const bounds = {
+        minX: Math.min(...points.map(p => p.x)),
+        maxX: Math.max(...points.map(p => p.x)),
+        minY: Math.min(...points.map(p => p.y)),
+        maxY: Math.max(...points.map(p => p.y)),
+        minZ: Math.min(...points.map(p => p.z)),
+        maxZ: Math.max(...points.map(p => p.z))
+      };
+
+      const centerX = (bounds.minX + bounds.maxX) / 2;
+      const centerY = (bounds.minY + bounds.maxY) / 2;
+      const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+
+      const rangeX = bounds.maxX - bounds.minX;
+      const rangeZ = bounds.maxZ - bounds.minZ;
+      const maxRange = Math.max(rangeX, rangeZ);
+
+      // Position camera at 45-degree angle above the route
+      camera.position.set(
+        centerX + maxRange * 0.5,
+        centerY + maxRange * 1.2,
+        centerZ + maxRange * 0.8
+      );
+      camera.lookAt(centerX, centerY, centerZ);
+
+      // Update controls target to center of route
+      if (controls) {
+        controls.target.set(centerX, centerY, centerZ);
+        controls.update();
+      }
+    }
+
+    console.log("[three3d] Route rendered");
   } finally {
     // Always release the lock, even if an error occurred
     isUpdatingRoute = false;
