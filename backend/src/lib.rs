@@ -27,7 +27,6 @@ use crate::models::{
     ApiError, Coordinate, RouteBounds, RouteMetadata, RouteRequest, RouteResponse,
 };
 use crate::routing::{approximate_distance_km, generate_route};
-use crate::terrain::build_terrain_mesh;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -82,21 +81,13 @@ async fn route_handler(
     let distance_km = approximate_distance_km(&path);
     let gpx_base64 = encode_route_as_gpx(&path).map_err(internal_error)?;
     let metadata = build_metadata(&path);
-    let terrain = match build_terrain_mesh(&path).await {
-        Ok(mesh) => Some(mesh),
-        Err(err) => {
-            tracing::warn!("Failed to build terrain mesh: {}", err);
-            None
-        }
-    };
-
     let response = RouteResponse {
         path,
         distance_km,
         gpx_base64,
         metadata: Some(metadata),
         elevation_profile: None, // Not available in this handler (legacy backend)
-        terrain,
+        terrain: None,
     };
 
     Ok(Json(response))

@@ -23,6 +23,10 @@ extern "C" {
     fn toggle_three_3d_view(enabled: bool);
     #[wasm_bindgen(js_name = centerOnMarkers)]
     fn center_on_markers(start: JsValue, end: JsValue);
+    #[wasm_bindgen(js_name = startAnimation)]
+    fn start_animation();
+    #[wasm_bindgen(js_name = stopAnimation)]
+    fn stop_animation();
 }
 
 fn api_root() -> String {
@@ -223,10 +227,10 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                     }
 
                     // Update bbox if metadata is present
-                    if let Some(ref metadata) = route.metadata
-                        && let Ok(bounds_value) = to_value(&metadata.bounds)
-                    {
-                        update_bbox_js(bounds_value);
+                    if let Some(ref metadata) = route.metadata {
+                        if let Ok(bounds_value) = to_value(&metadata.bounds) {
+                            update_bbox_js(bounds_value);
+                        }
                     }
 
                     // Maplibre handles terrain automatically, no separate 3D update needed
@@ -269,10 +273,11 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
             toggle_three_3d_view(model.view_mode == ViewMode::Map3D);
         }
         Msg::PlayAnimation => {
-            // Animation not implemented in Maplibre version yet
+            start_animation();
             model.animation_state = AnimationState::Playing;
         }
         Msg::PauseAnimation => {
+            stop_animation();
             model.animation_state = AnimationState::Stopped;
         }
         Msg::SaveRoute => {
@@ -435,13 +440,13 @@ fn view_form(model: &Model) -> Node<Msg> {
                 C!["map-toggle"],
             ],
         ],
-        if model.view_mode == ViewMode::Map3D && model.last_response.is_some() {
+        if model.last_response.is_some() {
             let anim_state = model.animation_state;
             fieldset![
-                legend!["Animation 3D"],
+                legend!["Animation Caméra"],
                 button![
                     match anim_state {
-                        AnimationState::Stopped | AnimationState::Paused => "▶ Lire",
+                        AnimationState::Stopped | AnimationState::Paused => "▶ Suivre le tracé",
                         AnimationState::Playing => "⏸ Pause",
                     },
                     ev(Ev::Click, move |event| {

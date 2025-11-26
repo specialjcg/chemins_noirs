@@ -1,4 +1,4 @@
-import maplibregl from 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm';
+import maplibregl from 'maplibre-gl';
 
 let mapInstance;
 let routeSource;
@@ -7,13 +7,84 @@ let endMarker;
 let clickHandlerSet = false;
 let terrainEnabled = false;
 let bboxLayer;
+let currentRoute = null;
+let animationFrameId = null;
+let animationStartTimestamp = null;
+let routeLengthMeters = 0;
+let routeDistances = [];
+let animationDurationMs = 60000;
+let lastBearing = null;
+let lastAnimationMode = null;
+let terrainSampleWarned = false;
 
 // Terrain configuration - Using Terrarium format tiles from AWS
 const TERRAIN_EXAGGERATION = 1.5; // Amplify terrain for better visibility
 
-// Human-level perspective settings
-const HUMAN_PITCH = 75; // High pitch for human-level view (0-85 degrees)
-const HUMAN_ZOOM_OFFSET = 2; // Closer zoom for street-level view
+// Drone perspective settings (5m altitude)
+const DRONE_PITCH = 60; // Drone angle - less steep than human eye-level for better forward view
+const DRONE_ZOOM = 19.5; // Very high zoom for 5m altitude view
+const DRONE_ALTITUDE_METERS = 5.0; // Drone flying at 5m above terrain
+const BEARING_SMOOTHING = 0.55; // Increased from 0.18 for smoother direction changes
+const DRONE_LOOKAHEAD_METERS = 60; // Reduced from 120 for tighter path following
+const DRONE_MS_PER_METER = 6; // ~10 m/s
+const DRONE_MIN_DURATION = 20000;
+const DRONE_MAX_DURATION = 120000;
+const EARTH_RADIUS_M = 6371000;
+
+/**
+ * Set 3D camera position with advanced control
+ * Alternative to Free Camera API using easeTo/jumpTo
+ * @param {Object} options - Camera options
+ * @param {Array<number>} options.center - [lng, lat]
+ * @param {number} options.zoom - Zoom level
+ * @param {number} options.pitch - Camera pitch (0-85 degrees)
+ * @param {number} options.bearing - Camera bearing (0-360 degrees)
+ * @param {boolean} options.animate - Use animation (default: true)
+ * @param {number} options.duration - Animation duration in ms (default: 1000)
+ */
+function setCamera3DPosition(options) {
+  const {
+    center,
+    zoom,
+    pitch = DRONE_PITCH,
+    bearing = 0,
+    animate = true,
+    duration = 1000
+  } = options;
+
+  const cameraOptions = {
+    center,
+    zoom,
+    pitch,
+    bearing
+  };
+
+  if (animate) {
+    mapInstance.easeTo({
+      ...cameraOptions,
+      duration,
+      easing: (t) => t * (2 - t) // easeOutQuad
+    });
+  } else {
+    mapInstance.jumpTo(cameraOptions);
+  }
+}
+
+/**
+ * Fly to a location with a cinematic animation
+ * @param {Object} options - Flight options
+ * @param {Array<number>} options.center - [lng, lat]
+ * @param {number} options.zoom - Target zoom level
+ * @param {number} options.pitch - Target pitch
+ * @param {number} options.bearing - Target bearing
+ * @param {number} options.duration - Animation duration in ms
+ */
+function flyToLocation(options) {
+  mapInstance.flyTo({
+    ...options,
+    essential: true // Animation won't be interrupted by user interaction
+  });
+}
 
 // Calculate bearing between two coordinates (in degrees)
 function calculateBearing(start, end) {
@@ -46,12 +117,14 @@ function ensureMap() {
           type: 'raster',
           tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
           tileSize: 256,
+          maxzoom: 19,
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         },
         'satellite': {
           type: 'raster',
           tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
           tileSize: 256,
+          maxzoom: 19,
           attribution: 'Tiles &copy; Esri'
         }
       },
@@ -61,7 +134,7 @@ function ensureMap() {
           type: 'raster',
           source: 'osm',
           minzoom: 0,
-          maxzoom: 19
+          maxzoom: 22
         }
       ],
       terrain: {
@@ -78,6 +151,8 @@ function ensureMap() {
 
   // Add terrain source
   mapInstance.on('load', () => {
+    console.log('[maplibre] Map loaded - MapLibre GL v5.x with advanced camera controls');
+
     // Using Terrarium format terrain tiles from AWS (free, global coverage)
     mapInstance.addSource('terrainSource', {
       type: 'raster-dem',
@@ -154,9 +229,9 @@ function createTerrainControl() {
       terrainEnabled = !terrainEnabled;
 
       if (terrainEnabled) {
-        // Enable 3D terrain with human-level perspective
+        // Enable 3D terrain with drone perspective
         this._map.setTerrain({ source: 'terrainSource', exaggeration: TERRAIN_EXAGGERATION });
-        this._map.easeTo({ pitch: HUMAN_PITCH, duration: 1000 });
+        this._map.easeTo({ pitch: DRONE_PITCH, duration: 1000 });
         this._button.classList.add('active');
         this._button.style.backgroundColor = '#4dab7b';
         this._button.style.color = 'white';
@@ -232,8 +307,12 @@ export function updateRoute(coords) {
       type: 'FeatureCollection',
       features: []
     });
+    currentRoute = null;
     return;
   }
+
+  // Store route for animation
+  currentRoute = coords;
 
   // Convert to GeoJSON LineString
   const lineString = {
@@ -249,6 +328,12 @@ export function updateRoute(coords) {
     type: 'FeatureCollection',
     features: [lineString]
   });
+
+  updateRouteMetrics(coords);
+  animationStartTimestamp = null;
+  lastBearing = null;
+  lastAnimationMode = null;
+  terrainSampleWarned = false;
 
   // Convert coords to [lon, lat] array for camera positioning
   const coordinates = coords.map(c => [c.lon, c.lat]);
@@ -274,11 +359,11 @@ export function updateRoute(coords) {
   // Zoom level: closer for shorter routes, farther for longer routes
   const baseZoom = Math.max(10, Math.min(16, 18 - Math.log2(routeDistance * 100)));
 
-  // Position camera at human height looking along the route
+  // Position camera at drone height looking along the route
   mapInstance.easeTo({
     center: startCoord,
-    zoom: baseZoom,
-    pitch: HUMAN_PITCH,
+    zoom: DRONE_ZOOM,
+    pitch: DRONE_PITCH,
     bearing: bearing,
     duration: 2000
   });
@@ -335,7 +420,7 @@ export function toggleSatelliteView(enabled) {
         type: 'raster',
         source: 'satellite',
         minzoom: 0,
-        maxzoom: 19
+        maxzoom: 22
       }, 'hills'); // Add below hillshade
     } else {
       mapInstance.setLayoutProperty('satellite-tiles', 'visibility', 'visible');
@@ -402,14 +487,198 @@ export function toggleThree3DView(enabled) {
   console.debug('[maplibre] toggleThree3DView (using Maplibre terrain)', enabled);
 
   // This now controls the same terrain as the 3D button
-  // We'll programmatically trigger terrain with human-level perspective
+  // We'll programmatically trigger terrain with drone perspective
   if (enabled && !terrainEnabled) {
     mapInstance.setTerrain({ source: 'terrainSource', exaggeration: TERRAIN_EXAGGERATION });
-    mapInstance.easeTo({ pitch: HUMAN_PITCH, duration: 1000 });
+    mapInstance.easeTo({ pitch: DRONE_PITCH, duration: 1000 });
     terrainEnabled = true;
   } else if (!enabled && terrainEnabled) {
     mapInstance.setTerrain(null);
     mapInstance.easeTo({ pitch: 0, bearing: 0, duration: 1000 });
     terrainEnabled = false;
   }
+}
+
+// Animation functions for camera following the route
+export function startAnimation() {
+  ensureMap();
+
+  if (!currentRoute || currentRoute.length < 2) {
+    console.warn('[maplibre] No route to animate');
+    return;
+  }
+
+  // Enable terrain if not already enabled
+  if (!terrainEnabled) {
+    mapInstance.setTerrain({ source: 'terrainSource', exaggeration: TERRAIN_EXAGGERATION });
+    terrainEnabled = true;
+  }
+
+  if (!routeDistances.length) {
+    updateRouteMetrics(currentRoute);
+  }
+
+  console.debug('[maplibre] Starting camera animation');
+  animationStartTimestamp = null;
+  if (animationFrameId !== null) {
+    cancelAnimationFrame(animationFrameId);
+  }
+  animationFrameId = requestAnimationFrame(animateCamera);
+}
+
+export function stopAnimation() {
+  if (animationFrameId !== null) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+    console.debug('[maplibre] Animation stopped');
+  }
+  animationStartTimestamp = null;
+  lastBearing = null;
+  lastAnimationMode = null;
+  terrainSampleWarned = false;
+}
+
+function animateCamera(timestamp) {
+  if (!currentRoute || currentRoute.length < 2) {
+    stopAnimation();
+    return;
+  }
+
+  if (animationStartTimestamp === null) {
+    animationStartTimestamp = timestamp;
+  }
+
+  const duration = Math.max(DRONE_MIN_DURATION, animationDurationMs);
+  const loopTime = (timestamp - animationStartTimestamp) % duration;
+  const progress = duration === 0 ? 0 : loopTime / duration;
+  const targetDistance = routeLengthMeters * progress;
+  const cameraPoint = coordinateAtDistance(targetDistance);
+  const lookAheadDistance = Math.min(
+    targetDistance + DRONE_LOOKAHEAD_METERS,
+    routeLengthMeters
+  );
+  const lookAtPoint = coordinateAtDistance(lookAheadDistance);
+
+  const targetBearing = calculateBearing(
+    [cameraPoint.lon, cameraPoint.lat],
+    [lookAtPoint.lon, lookAtPoint.lat]
+  );
+  const smoothedBearing = smoothAngle(lastBearing, targetBearing, BEARING_SMOOTHING);
+  lastBearing = smoothedBearing;
+
+  // Use jumpTo for immediate, smooth frame-by-frame camera updates
+  // This eliminates the jerkiness from easeTo's 32ms animations overlapping
+  if (!lastAnimationMode) {
+    console.debug('[maplibre] Using jumpTo for camera animation with terrain-based altitude');
+    lastAnimationMode = 'jumpTo';
+  }
+
+  mapInstance.jumpTo({
+    center: [cameraPoint.lon, cameraPoint.lat],
+    bearing: smoothedBearing,
+    pitch: DRONE_PITCH,
+    zoom: DRONE_ZOOM
+  });
+
+  animationFrameId = requestAnimationFrame(animateCamera);
+}
+
+function computeHumanZoom(lengthMeters) {
+  if (!Number.isFinite(lengthMeters) || lengthMeters <= 0) {
+    return HUMAN_ZOOM_MAX;
+  }
+  const normalized = Math.log10(Math.max(lengthMeters, 500) / 500);
+  const zoom = HUMAN_ZOOM_MAX - normalized * 1.2;
+  return Math.max(HUMAN_ZOOM_MIN, Math.min(HUMAN_ZOOM_MAX, zoom));
+}
+
+function updateRouteMetrics(coords) {
+  routeDistances = [];
+  routeLengthMeters = 0;
+
+  if (!Array.isArray(coords) || coords.length === 0) {
+    animationDurationMs = DRONE_MIN_DURATION;
+    return;
+  }
+
+  routeDistances.push(0);
+  for (let i = 0; i < coords.length - 1; i++) {
+    const dist = haversineMeters(coords[i], coords[i + 1]);
+    routeLengthMeters += dist;
+    routeDistances.push(routeLengthMeters);
+  }
+
+  animationDurationMs = Math.min(
+    DRONE_MAX_DURATION,
+    Math.max(DRONE_MIN_DURATION, routeLengthMeters * DRONE_MS_PER_METER)
+  );
+}
+
+function coordinateAtDistance(distance) {
+  if (!currentRoute || currentRoute.length === 0) {
+    return { lat: 0, lon: 0 };
+  }
+  if (distance <= 0 || routeDistances.length === 0) {
+    return currentRoute[0];
+  }
+  if (distance >= routeLengthMeters) {
+    return currentRoute[currentRoute.length - 1];
+  }
+
+  let idx = 0;
+  while (idx < routeDistances.length - 1 && routeDistances[idx + 1] < distance) {
+    idx++;
+  }
+
+  const start = currentRoute[idx];
+  const end = currentRoute[Math.min(idx + 1, currentRoute.length - 1)];
+  const segmentStart = routeDistances[idx];
+  const segmentEnd = routeDistances[Math.min(idx + 1, routeDistances.length - 1)];
+  const segmentLength = Math.max(segmentEnd - segmentStart, 1e-6);
+  const t = (distance - segmentStart) / segmentLength;
+
+  return {
+    lat: start.lat + (end.lat - start.lat) * t,
+    lon: start.lon + (end.lon - start.lon) * t
+  };
+}
+
+function haversineMeters(a, b) {
+  if (!a || !b) {
+    return 0;
+  }
+  const lat1 = a.lat * Math.PI / 180;
+  const lat2 = b.lat * Math.PI / 180;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLon = (b.lon - a.lon) * Math.PI / 180;
+
+  const sinLat = Math.sin(dLat / 2);
+  const sinLon = Math.sin(dLon / 2);
+  const h =
+    sinLat * sinLat +
+    Math.cos(lat1) * Math.cos(lat2) * sinLon * sinLon;
+
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
+}
+
+function smoothAngle(previous, target, factor) {
+  if (!Number.isFinite(previous)) {
+    return target;
+  }
+  let delta = ((target - previous + 540) % 360) - 180;
+  return previous + delta * factor;
+}
+
+function queryElevation(point) {
+  if (
+    !point ||
+    typeof mapInstance?.queryTerrainElevation !== 'function'
+  ) {
+    return 0;
+  }
+  const elevation = mapInstance.queryTerrainElevation(
+    [point.lon, point.lat],
+    { exaggerated: false }
+  );
+  return Number.isFinite(elevation) ? elevation : 0;
 }
