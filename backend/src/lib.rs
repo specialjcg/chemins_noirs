@@ -1,8 +1,10 @@
+pub mod dem;
 pub mod elevation;
 pub mod engine;
 pub mod error;
 pub mod gpx_export;
 pub mod graph;
+pub mod loops;
 pub mod models;
 pub mod partial_graph;
 pub mod routing;
@@ -23,8 +25,9 @@ use tower_http::cors::{Any, CorsLayer};
 use crate::engine::RouteEngine;
 use crate::error::RouteError;
 use crate::gpx_export::encode_route_as_gpx;
+use crate::loops::LoopGenerationError;
 use crate::models::{
-    ApiError, Coordinate, RouteBounds, RouteMetadata, RouteRequest, RouteResponse,
+    ApiError, Coordinate, LoopRouteRequest, RouteBounds, RouteMetadata, RouteRequest, RouteResponse,
 };
 use crate::routing::{approximate_distance_km, generate_route};
 
@@ -41,6 +44,7 @@ pub fn create_router(state: AppState) -> Router {
 
     Router::new()
         .route("/api/route", post(route_handler))
+        .route("/api/loops", post(loop_route_handler))
         .route("/api/routes/save", post(save_route_handler))
         .route("/api/routes/load", get(load_route_handler))
         .layer(cors)
@@ -59,6 +63,7 @@ pub fn create_router_with_partial(
 
     Router::new()
         .route("/api/route", post(route_handler))
+        .route("/api/loops", post(loop_route_handler))
         .route("/api/routes/save", post(save_route_handler))
         .route("/api/routes/load", get(load_route_handler))
         .with_state(state.clone())
@@ -93,7 +98,17 @@ async fn route_handler(
     Ok(Json(response))
 }
 
-fn build_metadata(path: &[Coordinate]) -> RouteMetadata {
+async fn loop_route_handler(
+    State(state): State<AppState>,
+    Json(req): Json<LoopRouteRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    loops::generate_loops(&state.engine, &req)
+        .await
+        .map(Json)
+        .map_err(loop_error)
+}
+
+pub(crate) fn build_metadata(path: &[Coordinate]) -> RouteMetadata {
     let mut min_lat = f64::MAX;
     let mut max_lat = f64::MIN;
     let mut min_lon = f64::MAX;
@@ -128,6 +143,23 @@ fn build_metadata(path: &[Coordinate]) -> RouteMetadata {
 fn internal_error(err: RouteError) -> (StatusCode, Json<ApiError>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiError {
+            message: err.to_string(),
+        }),
+    )
+}
+
+fn loop_error(err: LoopGenerationError) -> (StatusCode, Json<ApiError>) {
+    let status = match err {
+        LoopGenerationError::InvalidTargetDistance => StatusCode::BAD_REQUEST,
+        LoopGenerationError::NoLoopFound => StatusCode::NOT_FOUND,
+        LoopGenerationError::Gpx(_) | LoopGenerationError::Elevation(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    };
+
+    (
+        status,
         Json(ApiError {
             message: err.to_string(),
         }),

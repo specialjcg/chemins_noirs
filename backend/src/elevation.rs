@@ -1,201 +1,82 @@
-use serde::{Deserialize, Serialize};
-use shared::{Coordinate, ElevationProfile};
 use std::error::Error;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
-const OPEN_METEO_ELEVATION_API: &str = "https://api.open-meteo.com/v1/elevation";
-const BATCH_SIZE: usize = 80; // smaller batches to play nicer with rate limits
+use shared::{Coordinate, ElevationProfile};
 
-#[allow(dead_code)]
-#[derive(Debug, Serialize)]
-struct ElevationRequest {
-    locations: Vec<Location>,
-}
+use crate::dem::ArcAsciiDem;
 
-#[allow(dead_code)]
-#[derive(Debug, Serialize)]
-struct Location {
-    latitude: f64,
-    longitude: f64,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenMeteoElevationResponse {
-    elevation: Option<Vec<f64>>,
-}
-
-/// Fetch elevation data for a batch of coordinates
-pub async fn fetch_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Box<dyn Error>> {
+/// Get elevation data for a batch of coordinates from local DEM
+pub async fn get_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Box<dyn Error>> {
     if coords.is_empty() {
         return Ok(Vec::new());
     }
 
-    let client = reqwest::Client::new();
-    let mut all_elevations = Vec::with_capacity(coords.len());
-    let max_retries = 2;
-    let mut backoff_ms: u64 = 1000;
+    let grid = local_dem_grid()
+        .ok_or("Local DEM not available. Please ensure LOCAL_DEM_PATH is set or backend/data/dem/region.asc exists.")?;
 
-    // Process in batches to respect API limits
-    for chunk in coords.chunks(BATCH_SIZE) {
-        // Open-Meteo expects comma-separated lists in the URL
-        let (latitudes, longitudes): (Vec<String>, Vec<String>) = chunk
-            .iter()
-            .map(|(lat, lon)| (format!("{:.6}", lat), format!("{:.6}", lon)))
-            .unzip();
-        let url = format!(
-            "{OPEN_METEO_ELEVATION_API}?latitude={}&longitude={}",
-            latitudes.join(","),
-            longitudes.join(",")
-        );
+    let mut values = Vec::with_capacity(coords.len());
+    let mut missing_coords = Vec::new();
 
-        tracing::info!(
-            "Fetching elevations (Open-Meteo) for {} coordinates...",
-            chunk.len()
-        );
-
-        let mut attempt = 0;
-        loop {
-            let response = client.get(&url).send().await?;
-
-            if response.status().is_success() {
-                let elevation_response: OpenMeteoElevationResponse = response.json().await?;
-                let elevations = elevation_response
-                    .elevation
-                    .ok_or_else(|| "Elevation API responded without elevations field")?;
-
-                all_elevations.extend(elevations);
-                break;
-            }
-
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-
-            // Retry on 429/5xx with backoff
-            if (status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error())
-                && attempt < max_retries
-            {
-                attempt += 1;
-                tracing::warn!(
-                    "Elevation batch retry {}/{} after {}: {}, waiting {}ms",
-                    attempt,
-                    max_retries,
-                    status,
-                    error_text,
-                    backoff_ms
-                );
-                tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
-                backoff_ms *= 2;
-                continue;
-            }
-
-            return Err(format!("Elevation API error {}: {}", status, error_text).into());
-        }
-
-        // Small delay between batches to be nice to the API
-        if coords.len() > BATCH_SIZE {
-            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
-        }
-    }
-
-    Ok(all_elevations)
-}
-
-/// Try a local DEM (GeoTIFF) when available, otherwise fall back to remote API.
-pub async fn get_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Box<dyn Error>> {
-    #[cfg(feature = "local_dem")]
-    {
-        if let Some(path) = local_dem_path() {
-            match sample_dem_async(coords.clone(), &path).await {
-                Ok(vals) => return Ok(vals),
-                Err(err) => {
-                    tracing::warn!("Local DEM sampling failed (falling back to API): {}", err);
-                }
+    for &(lat, lon) in &coords {
+        match grid.sample(lat, lon) {
+            Some(val) => values.push(val),
+            None => {
+                missing_coords.push((lat, lon));
             }
         }
     }
 
-    fetch_elevations(coords).await
+    if !missing_coords.is_empty() {
+        tracing::warn!(
+            "Local DEM does not cover {} coordinate(s): {:?}",
+            missing_coords.len(),
+            &missing_coords[..missing_coords.len().min(5)]
+        );
+        return Err(format!(
+            "DEM coverage incomplete: {} coordinates outside DEM bounds",
+            missing_coords.len()
+        )
+        .into());
+    }
+
+    tracing::debug!("Fetched {} elevations from local DEM", values.len());
+    Ok(values)
 }
 
-#[cfg(feature = "local_dem")]
-fn local_dem_path() -> Option<std::path::PathBuf> {
-    use std::path::PathBuf;
-    let p = std::env::var("LOCAL_DEM_PATH")
+fn local_dem_path() -> Option<PathBuf> {
+    let path = std::env::var("LOCAL_DEM_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("backend/data/dem/region.tif"));
-    if p.exists() {
-        Some(p)
+        .unwrap_or_else(|_| PathBuf::from("backend/data/dem/region.asc"));
+    if path.exists() {
+        Some(path)
     } else {
         None
     }
 }
 
-#[cfg(feature = "local_dem")]
-async fn sample_dem_async(
-    coords: Vec<(f64, f64)>,
-    path: &std::path::Path,
-) -> Result<Vec<f64>, Box<dyn Error>> {
-    let path = path.to_owned();
-    tokio::task::spawn_blocking(move || sample_dem_blocking(&coords, &path)).await?
-}
+fn local_dem_grid() -> Option<&'static ArcAsciiDem> {
+    static CACHE: OnceLock<Option<ArcAsciiDem>> = OnceLock::new();
 
-#[cfg(feature = "local_dem")]
-fn sample_dem_blocking(
-    coords: &[(f64, f64)],
-    path: &std::path::Path,
-) -> Result<Vec<f64>, Box<dyn Error>> {
-    use gdal::raster::Buffer;
-    use gdal::Dataset;
-
-    let ds = Dataset::open(path)?;
-    let band = ds.rasterband(1)?;
-    let gt = ds.geo_transform()?;
-
-    // Precompute inverse transform for north-up (assumed)
-    let (gt0, gt1, gt2, gt3, gt4, gt5) = (gt[0], gt[1], gt[2], gt[3], gt[4], gt[5]);
-
-    let width = band.x_size();
-    let height = band.y_size();
-
-    let mut out = Vec::with_capacity(coords.len());
-
-    for (lat, lon) in coords {
-        // Inverse geotransform for north-up (gt2 = gt4 = 0)
-        let px = (lon - gt0) / gt1;
-        let py = (lat - gt3) / gt5; // gt5 is negative
-
-        let x0 = px.floor() as isize;
-        let y0 = py.floor() as isize;
-        let x1 = x0 + 1;
-        let y1 = y0 + 1;
-
-        if x0 < 0 || y0 < 0 || x1 >= width as isize || y1 >= height as isize {
-            out.push(0.0);
-            continue;
-        }
-
-        // Read 2x2 window
-        let win_x = x0 as isize;
-        let win_y = y0 as isize;
-        let buf: Buffer<f64> = band.read_as(win_x, win_y, 2, 2, 2, 2)?;
-
-        let q11 = buf.data[0];
-        let q21 = buf.data[1];
-        let q12 = buf.data[2];
-        let q22 = buf.data[3];
-
-        let fx = px - x0 as f64;
-        let fy = py - y0 as f64;
-
-        // Bilinear interpolation
-        let e = q11 * (1.0 - fx) * (1.0 - fy)
-            + q21 * fx * (1.0 - fy)
-            + q12 * (1.0 - fx) * fy
-            + q22 * fx * fy;
-
-        out.push(e);
-    }
-
-    Ok(out)
+    CACHE
+        .get_or_init(|| {
+            let path = local_dem_path()?;
+            match ArcAsciiDem::from_path(&path) {
+                Ok(grid) => {
+                    tracing::info!("Loaded local DEM grid from {}", path.display());
+                    Some(grid)
+                }
+                Err(err) => {
+                    tracing::error!(
+                        "Failed to load local DEM from {}: {}",
+                        path.display(),
+                        err
+                    );
+                    None
+                }
+            }
+        })
+        .as_ref()
 }
 
 fn median(values: &mut [f64]) -> Option<f64> {
@@ -262,8 +143,7 @@ fn smooth_elevation_profile(path: &[Coordinate], raw: &[Option<f64>]) -> Vec<Opt
     smoothed
 }
 
-/// Create an elevation profile for a route path
-/// Fetches elevations from the API for all coordinates
+/// Create an elevation profile for a route path using local DEM
 pub async fn create_elevation_profile(
     path: &[Coordinate],
 ) -> Result<ElevationProfile, Box<dyn Error>> {
@@ -280,8 +160,8 @@ pub async fn create_elevation_profile(
     // Convert path to (lat, lon) tuples
     let coords: Vec<(f64, f64)> = path.iter().map(|c| (c.lat, c.lon)).collect();
 
-    // Fetch elevations from API
-    let elevations_vec = fetch_elevations(coords).await?;
+    // Get elevations from local DEM
+    let elevations_vec = get_elevations(coords).await?;
     let raw_elevations: Vec<Option<f64>> = elevations_vec.into_iter().map(Some).collect();
     let elevations = smooth_elevation_profile(path, &raw_elevations);
 
@@ -335,33 +215,6 @@ pub async fn create_elevation_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_fetch_elevation_single() {
-        // Test with Lyon coordinates
-        let coords = vec![(45.764, 4.835)];
-        let result = fetch_elevations(coords).await;
-
-        assert!(result.is_ok());
-        let elevations = result.unwrap();
-        assert_eq!(elevations.len(), 1);
-        // Lyon is around 170-200m elevation
-        assert!(elevations[0] > 100.0 && elevations[0] < 300.0);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_elevation_multiple() {
-        // Test with multiple coordinates in Rhone-Alpes
-        let coords = vec![
-            (45.764, 4.835),  // Lyon
-            (45.9305, 4.577), // Villefranche
-        ];
-        let result = fetch_elevations(coords).await;
-
-        assert!(result.is_ok());
-        let elevations = result.unwrap();
-        assert_eq!(elevations.len(), 2);
-    }
 
     #[test]
     fn smooths_outliers() {

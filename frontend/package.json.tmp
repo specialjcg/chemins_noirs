@@ -1,0 +1,14 @@
+{
+  "name": "chemins-noirs-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for Chemins Noirs application",
+  "type": "module",
+  "scripts": {
+    "build": "trunk build",
+    "serve": "trunk serve"
+  },
+  "dependencies": {
+    "maplibre-gl": "^5.0.0"
+  },
+  "devDependencies": {}
+}

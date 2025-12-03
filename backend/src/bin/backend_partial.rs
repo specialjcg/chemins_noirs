@@ -4,8 +4,9 @@ use axum::{extract::State, http::StatusCode, Json};
 use backend::{
     elevation::create_elevation_profile,
     engine::RouteEngine,
-    graph::{BoundingBox, GraphBuilder, GraphBuilderConfig},
-    models::RouteRequest,
+    graph::{BoundingBox, GraphBuilder, GraphBuilderConfig, GraphFile},
+    loops::{self, LoopGenerationError},
+    models::{Coordinate, LoopRouteRequest, LoopRouteResponse, RouteRequest},
     partial_graph::PartialGraphConfig,
     routing::haversine_km,
 };
@@ -82,52 +83,8 @@ async fn route_handler(
 
     // Calculate bounding box with margin for the route
     let bbox = BoundingBox::from_route(req.start, req.end, 5.0); // 2km margin
-    let cache_key = bbox.cache_key();
-    let cache_path = config.cache_dir.join(format!("{}.json", cache_key));
-
-    // Generate or load cached partial graph
-    let graph = if cache_path.exists() {
-        tracing::info!("Loading cached partial graph: {}", cache_path.display());
-        backend::graph::GraphFile::read_from_path(&cache_path).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to load cache: {}", e),
-            )
-        })?
-    } else {
-        tracing::info!("Generating partial graph for bbox: {:?}", bbox);
-        let builder_config = GraphBuilderConfig { bbox: Some(bbox) };
-        let builder = GraphBuilder::new(builder_config);
-        let graph = builder.build_from_pbf(&config.pbf_path).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to build graph: {}", e),
-            )
-        })?;
-
-        // Cache for future requests
-        std::fs::create_dir_all(&config.cache_dir).ok();
-        graph.write_to_path(&cache_path).ok();
-        tracing::info!("Cached partial graph to: {}", cache_path.display());
-        graph
-    };
-
-    // Create temporary file for RouteEngine
-    let temp_path = config.cache_dir.join("temp_route.json");
-    graph.write_to_path(&temp_path).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to write temp: {}", e),
-        )
-    })?;
-
-    // Load into RouteEngine and find path
-    let engine = RouteEngine::from_file(&temp_path).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to create engine: {}", e),
-        )
-    })?;
+    let graph = prepare_graph_for_bbox(&config, bbox)?;
+    let engine = engine_from_graph(&config, &graph, "temp_route.json")?;
 
     tracing::info!("Engine created from partial graph");
 
@@ -199,6 +156,36 @@ async fn route_handler(
     }
 }
 
+async fn loop_route_handler(
+    State(config): State<Arc<PartialGraphConfig>>,
+    Json(req): Json<LoopRouteRequest>,
+) -> Result<Json<LoopRouteResponse>, (StatusCode, String)> {
+    tracing::info!(
+        "Loop request from {:?} targeting {:.1} km",
+        req.start,
+        req.target_distance_km
+    );
+
+    let radius = (req.target_distance_km / 2.0).max(2.0) * 1.4 + req.distance_tolerance_km.max(1.0);
+    let bbox = bbox_from_center(req.start, radius);
+    let graph = prepare_graph_for_bbox(&config, bbox)?;
+    let engine = engine_from_graph(&config, &graph, "temp_loop.json")?;
+
+    match loops::generate_loops(&engine, &req).await {
+        Ok(response) => Ok(Json(response)),
+        Err(err) => {
+            let status = match err {
+                LoopGenerationError::InvalidTargetDistance => StatusCode::BAD_REQUEST,
+                LoopGenerationError::NoLoopFound => StatusCode::NOT_FOUND,
+                LoopGenerationError::Gpx(_) | LoopGenerationError::Elevation(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            };
+            Err((status, err.to_string()))
+        }
+    }
+}
+
 /// Backend binary that uses on-demand partial graph generation
 /// instead of loading a massive graph file into memory
 #[tokio::main]
@@ -240,6 +227,7 @@ async fn main() {
             "/api/graph/partial",
             axum::routing::post(backend::partial_graph::partial_graph_handler),
         )
+        .route("/api/loops", axum::routing::post(loop_route_handler))
         .route("/api/route", axum::routing::post(route_handler))
         .route("/api/routes/save", axum::routing::post(save_route_handler))
         .route("/api/routes/load", axum::routing::get(load_route_handler))
@@ -251,6 +239,7 @@ async fn main() {
     tracing::info!("Starting backend on http://{addr}");
     tracing::info!("API endpoints:");
     tracing::info!("  POST /api/route - Find route with on-demand graph generation");
+    tracing::info!("  POST /api/loops - Generate loop candidates");
     tracing::info!("  POST /api/graph/partial - Generate partial graph");
     tracing::info!("  POST /api/routes/save - Save route to disk");
     tracing::info!("  GET /api/routes/load - Load saved route from disk");
@@ -265,4 +254,70 @@ async fn main() {
 /// Handler for /api/click_mode - returns a simple status
 async fn click_mode_handler() -> &'static str {
     "RouteStart"
+}
+
+fn prepare_graph_for_bbox(
+    config: &PartialGraphConfig,
+    bbox: BoundingBox,
+) -> Result<GraphFile, (StatusCode, String)> {
+    let cache_key = bbox.cache_key();
+    let cache_path = config.cache_dir.join(format!("{}.json", cache_key));
+
+    if cache_path.exists() {
+        tracing::info!("Loading cached partial graph: {}", cache_path.display());
+        GraphFile::read_from_path(&cache_path).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to load cache: {}", e),
+            )
+        })
+    } else {
+        tracing::info!("Generating partial graph for bbox: {:?}", bbox);
+        let builder_config = GraphBuilderConfig { bbox: Some(bbox) };
+        let builder = GraphBuilder::new(builder_config);
+        let graph = builder.build_from_pbf(&config.pbf_path).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to build graph: {}", e),
+            )
+        })?;
+        std::fs::create_dir_all(&config.cache_dir).ok();
+        graph.write_to_path(&cache_path).ok();
+        tracing::info!("Cached partial graph to: {}", cache_path.display());
+        Ok(graph)
+    }
+}
+
+fn engine_from_graph(
+    config: &PartialGraphConfig,
+    graph: &GraphFile,
+    temp_name: &str,
+) -> Result<RouteEngine, (StatusCode, String)> {
+    let temp_path = config.cache_dir.join(temp_name);
+    graph.write_to_path(&temp_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to write temp: {}", e),
+        )
+    })?;
+
+    RouteEngine::from_file(&temp_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create engine: {}", e),
+        )
+    })
+}
+
+fn bbox_from_center(center: Coordinate, radius_km: f64) -> BoundingBox {
+    let lat_margin = radius_km / 111.0;
+    let cos_lat = center.lat.to_radians().cos().abs().max(0.1);
+    let lon_margin = radius_km / (111.0 * cos_lat);
+
+    BoundingBox {
+        min_lat: (center.lat - lat_margin).max(-90.0),
+        max_lat: (center.lat + lat_margin).min(90.0),
+        min_lon: (center.lon - lon_margin).clamp(-180.0, 180.0),
+        max_lon: (center.lon + lon_margin).clamp(-180.0, 180.0),
+    }
 }

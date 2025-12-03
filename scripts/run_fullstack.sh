@@ -11,6 +11,40 @@ BACKEND_PORT="8080"
 DEFAULT_PBF="$ROOT_DIR/backend/data/rhone-alpes-251111.osm.pbf"
 export PBF_PATH="${GRAPH_PBF:-$DEFAULT_PBF}"
 export CACHE_DIR="${CACHE_DIR:-data/cache}"
+DEFAULT_DEM_TIF="$ROOT_DIR/backend/data/dem/region.tif"
+DEFAULT_DEM_ASC="$ROOT_DIR/backend/data/dem/region.asc"
+
+if [[ -z "${LOCAL_DEM_PATH:-}" ]]; then
+    if [[ -f "$DEFAULT_DEM_ASC" ]]; then
+        LOCAL_DEM_PATH="$DEFAULT_DEM_ASC"
+    elif [[ -f "$DEFAULT_DEM_TIF" ]]; then
+        LOCAL_DEM_PATH="$DEFAULT_DEM_TIF"
+    fi
+fi
+
+if [[ -n "${LOCAL_DEM_PATH:-}" ]]; then
+    if [[ "${LOCAL_DEM_PATH##*.}" != "asc" ]]; then
+        if command -v gdal_translate >/dev/null 2>&1; then
+            dem_source="$LOCAL_DEM_PATH"
+            dem_ascii="${dem_source%.*}.asc"
+            if [[ ! -f "$dem_ascii" || "$dem_ascii" -ot "$dem_source" ]]; then
+                echo "Converting $dem_source to Arc/Info ASCII Grid ($dem_ascii)..."
+                gdal_translate -of AAIGrid "$dem_source" "$dem_ascii" >/dev/null
+            fi
+            LOCAL_DEM_PATH="$dem_ascii"
+        else
+            echo "gdal_translate not found; cannot convert $LOCAL_DEM_PATH to ASCII grid. Falling back to Open-Meteo."
+            unset LOCAL_DEM_PATH
+        fi
+    fi
+fi
+
+if [[ -n "${LOCAL_DEM_PATH:-}" ]]; then
+    echo "Using local DEM grid at $LOCAL_DEM_PATH"
+    export LOCAL_DEM_PATH
+else
+    echo "No usable local DEM grid detected; elevation will use Open-Meteo."
+fi
 
 mkdir -p "$TARGET_DIR"
 cd "$ROOT_DIR"
@@ -49,6 +83,7 @@ env \
   CARGO_TARGET_DIR="$TARGET_DIR" \
   PBF_PATH="$PBF_PATH" \
   CACHE_DIR="$CACHE_DIR" \
+  LOCAL_DEM_PATH="${LOCAL_DEM_PATH:-}" \
   cargo run -p backend --bin backend_partial "$@" &
 BACKEND_PID=$!
 

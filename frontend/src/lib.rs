@@ -1,10 +1,13 @@
 use seed::{prelude::*, virtual_dom::AtValue, *};
 use serde::Deserialize;
 use serde_wasm_bindgen::to_value;
-use shared::{Coordinate, RouteRequest, RouteResponse};
+use shared::{
+    default_distance_tolerance_km, default_loop_candidate_count, Coordinate, LoopCandidate,
+    LoopRouteRequest, LoopRouteResponse, RouteRequest, RouteResponse,
+};
 use wasm_bindgen::{
+    prelude::{wasm_bindgen, JsValue},
     JsCast,
-    prelude::{JsValue, wasm_bindgen},
 };
 
 #[wasm_bindgen(module = "/maplibre_map.js")]
@@ -36,12 +39,24 @@ fn api_root() -> String {
     "http://localhost:8080/api/route".to_string()
 }
 
+fn loop_api_root() -> String {
+    if let Some(url) = option_env!("FRONTEND_LOOP_API_ROOT") {
+        return url.trim_end_matches('/').to_string();
+    }
+    "http://localhost:8080/api/loops".to_string()
+}
+
 pub struct Model {
     form: RouteForm,
+    loop_form: LoopForm,
     pending: bool,
     last_response: Option<RouteResponse>,
+    loop_candidates: Vec<LoopCandidate>,
+    loop_meta: Option<LoopMeta>,
+    selected_loop_idx: Option<usize>,
     error: Option<String>,
     click_mode: ClickMode,
+    route_mode: RouteMode,
     map_view_mode: MapViewMode,
     view_mode: ViewMode,
     animation_state: AnimationState,
@@ -51,6 +66,12 @@ pub struct Model {
 pub enum ClickMode {
     Start,
     End,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RouteMode {
+    PointToPoint,
+    Loop,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -103,6 +124,87 @@ impl RouteForm {
             w_paved: parse(&self.w_paved, "poids bitume")?,
         })
     }
+
+    fn parse_weights(&self) -> Result<(f64, f64), String> {
+        let w_pop = parse_field(&self.w_pop, "poids densité")?;
+        let w_paved = parse_field(&self.w_paved, "poids bitume")?;
+        Ok((w_pop, w_paved))
+    }
+}
+
+#[derive(Clone)]
+struct LoopMeta {
+    target_distance_km: f64,
+    distance_tolerance_km: f64,
+}
+
+#[derive(Clone)]
+struct LoopForm {
+    distance_km: String,
+    tolerance_km: String,
+    candidate_count: String,
+    max_ascent_m: String,
+    min_ascent_m: String,
+}
+
+impl Default for LoopForm {
+    fn default() -> Self {
+        Self {
+            distance_km: "15".into(),
+            tolerance_km: format!("{:.1}", default_distance_tolerance_km()),
+            candidate_count: default_loop_candidate_count().to_string(),
+            max_ascent_m: String::new(),
+            min_ascent_m: String::new(),
+        }
+    }
+}
+
+impl LoopForm {
+    fn to_request(&self, form: &RouteForm) -> Result<LoopRouteRequest, String> {
+        let start = form
+            .coordinate_pair(&form.start_lat, &form.start_lon)
+            .ok_or_else(|| "Coordonnées de départ invalides".to_string())?;
+        let (w_pop, w_paved) = form.parse_weights()?;
+        let distance_km = parse_field(&self.distance_km, "distance cible (km)")?;
+        let tolerance_km = if self.tolerance_km.trim().is_empty() {
+            default_distance_tolerance_km()
+        } else {
+            parse_field(&self.tolerance_km, "tolérance (km)")?
+        };
+        let candidate_count =
+            parse_field::<usize>(&self.candidate_count, "nombre de boucles")?.max(1);
+        let max_ascent = parse_optional_field(&self.max_ascent_m)?;
+        let min_ascent = parse_optional_field(&self.min_ascent_m)?;
+
+        Ok(LoopRouteRequest {
+            start,
+            target_distance_km: distance_km,
+            distance_tolerance_km: tolerance_km,
+            candidate_count,
+            w_pop,
+            w_paved,
+            max_total_ascent: max_ascent,
+            min_total_ascent: min_ascent,
+        })
+    }
+}
+
+fn parse_optional_field(value: &str) -> Result<Option<f64>, String> {
+    if value.trim().is_empty() {
+        Ok(None)
+    } else {
+        parse_field(value, "dénivelé").map(Some)
+    }
+}
+
+fn parse_field<T>(value: &str, label: &str) -> Result<T, String>
+where
+    T: std::str::FromStr,
+{
+    value
+        .trim()
+        .parse::<T>()
+        .map_err(|_| format!("Champ {label} invalide"))
 }
 
 pub enum Msg {
@@ -112,8 +214,14 @@ pub enum Msg {
     EndLonChanged(String),
     PopWeightChanged(String),
     PavedWeightChanged(String),
+    LoopDistanceChanged(String),
+    LoopToleranceChanged(String),
+    LoopCandidateCountChanged(String),
+    LoopMaxAscentChanged(String),
+    LoopMinAscentChanged(String),
     Submit,
     SetClickMode(ClickMode),
+    ToggleRouteMode(RouteMode),
     ToggleMapView,
     Toggle3DView,
     PlayAnimation,
@@ -122,6 +230,8 @@ pub enum Msg {
     LoadRoute,
     MapClicked { lat: f64, lon: f64 },
     RouteFetched(Result<RouteResponse, String>),
+    LoopRouteFetched(Result<LoopRouteResponse, String>),
+    SelectLoopCandidate(usize),
 }
 
 pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
@@ -155,10 +265,15 @@ pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
             w_pop: "1.5".into(),
             w_paved: "4.0".into(),
         },
+        loop_form: LoopForm::default(),
         pending: false,
         last_response: None,
+        loop_candidates: Vec::new(),
+        loop_meta: None,
+        selected_loop_idx: None,
         error: None,
         click_mode: ClickMode::Start,
+        route_mode: RouteMode::PointToPoint,
         map_view_mode: MapViewMode::Standard,
         view_mode: ViewMode::Map2D,
         animation_state: AnimationState::Stopped,
@@ -168,8 +283,12 @@ pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
 
     // Center map on initial start and end coordinates
     if let (Some(start), Some(end)) = (
-        model.form.coordinate_pair(&model.form.start_lat, &model.form.start_lon),
-        model.form.coordinate_pair(&model.form.end_lat, &model.form.end_lon),
+        model
+            .form
+            .coordinate_pair(&model.form.start_lat, &model.form.start_lon),
+        model
+            .form
+            .coordinate_pair(&model.form.end_lat, &model.form.end_lon),
     ) {
         if let (Ok(start_js), Ok(end_js)) = (to_value(&start), to_value(&end)) {
             center_on_markers(start_js, end_js);
@@ -184,10 +303,12 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
         Msg::StartLatChanged(val) => {
             model.form.start_lat = val;
             sync_selection_markers(&model.form);
+            reset_loop_candidates(model);
         }
         Msg::StartLonChanged(val) => {
             model.form.start_lon = val;
             sync_selection_markers(&model.form);
+            reset_loop_candidates(model);
         }
         Msg::EndLatChanged(val) => {
             model.form.end_lat = val;
@@ -197,55 +318,90 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
             model.form.end_lon = val;
             sync_selection_markers(&model.form);
         }
-        Msg::PopWeightChanged(val) => model.form.w_pop = val,
-        Msg::PavedWeightChanged(val) => model.form.w_paved = val,
+        Msg::PopWeightChanged(val) => {
+            model.form.w_pop = val;
+            reset_loop_candidates(model);
+        }
+        Msg::PavedWeightChanged(val) => {
+            model.form.w_paved = val;
+            reset_loop_candidates(model);
+        }
+        Msg::LoopDistanceChanged(val) => {
+            model.loop_form.distance_km = val;
+            reset_loop_candidates(model);
+        }
+        Msg::LoopToleranceChanged(val) => {
+            model.loop_form.tolerance_km = val;
+            reset_loop_candidates(model);
+        }
+        Msg::LoopCandidateCountChanged(val) => {
+            model.loop_form.candidate_count = val;
+            reset_loop_candidates(model);
+        }
+        Msg::LoopMaxAscentChanged(val) => {
+            model.loop_form.max_ascent_m = val;
+            reset_loop_candidates(model);
+        }
+        Msg::LoopMinAscentChanged(val) => {
+            model.loop_form.min_ascent_m = val;
+            reset_loop_candidates(model);
+        }
         Msg::Submit => {
             if model.pending {
                 return;
             }
-            match model.form.to_request() {
-                Ok(payload) => {
-                    model.pending = true;
-                    model.error = None;
-                    orders.perform_cmd(send_route_request(payload));
-                }
-                Err(err) => model.error = Some(err),
+            model.error = None;
+            match model.route_mode {
+                RouteMode::PointToPoint => match model.form.to_request() {
+                    Ok(payload) => {
+                        model.pending = true;
+                        orders.perform_cmd(send_route_request(payload));
+                    }
+                    Err(err) => model.error = Some(err),
+                },
+                RouteMode::Loop => match model.loop_form.to_request(&model.form) {
+                    Ok(payload) => {
+                        model.pending = true;
+                        reset_loop_candidates(model);
+                        orders.perform_cmd(send_loop_request(payload));
+                    }
+                    Err(err) => model.error = Some(err),
+                },
             }
         }
         Msg::RouteFetched(result) => {
             model.pending = false;
             match result {
                 Ok(route) => {
-                    push_route_to_map(&route.path);
-
-                    // Extract start and end points from the route and update form
-                    if let (Some(start), Some(end)) = (route.path.first(), route.path.last()) {
-                        model.form.start_lat = format_coord(start.lat);
-                        model.form.start_lon = format_coord(start.lon);
-                        model.form.end_lat = format_coord(end.lat);
-                        model.form.end_lon = format_coord(end.lon);
+                    apply_route(model, route);
+                    reset_loop_candidates(model);
+                }
+                Err(err) => {
+                    push_route_to_map(&[]);
+                    model.error = Some(err);
+                    reset_loop_candidates(model);
+                }
+            }
+        }
+        Msg::LoopRouteFetched(result) => {
+            model.pending = false;
+            match result {
+                Ok(response) => {
+                    if response.candidates.is_empty() {
+                        push_route_to_map(&[]);
+                        model.loop_meta = None;
+                        model.error = Some("Aucune boucle trouvée pour ces paramètres".to_string());
+                        return;
                     }
-
-                    // Update bbox if metadata is present
-                    if let Some(ref metadata) = route.metadata {
-                        if let Ok(bounds_value) = to_value(&metadata.bounds) {
-                            update_bbox_js(bounds_value);
-                        }
-                    }
-
-                    // Maplibre handles terrain automatically, no separate 3D update needed
-                    model.last_response = Some(route);
+                    model.loop_meta = Some(LoopMeta {
+                        target_distance_km: response.target_distance_km,
+                        distance_tolerance_km: response.distance_tolerance_km,
+                    });
+                    model.loop_candidates = response.candidates;
                     model.error = None;
-                    sync_selection_markers(&model.form);
-
-                    // Center map on start and end markers
-                    if let (Some(start), Some(end)) = (
-                        model.form.coordinate_pair(&model.form.start_lat, &model.form.start_lon),
-                        model.form.coordinate_pair(&model.form.end_lat, &model.form.end_lon),
-                    ) {
-                        if let (Ok(start_js), Ok(end_js)) = (to_value(&start), to_value(&end)) {
-                            center_on_markers(start_js, end_js);
-                        }
+                    if let Some(first) = model.loop_candidates.get(0) {
+                        model.selected_loop_idx = Some(0);
+                        apply_route(model, first.route.clone());
                     }
                 }
                 Err(err) => {
@@ -254,8 +410,18 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                 }
             }
         }
+        Msg::SelectLoopCandidate(idx) => {
+            if let Some(candidate) = model.loop_candidates.get(idx) {
+                model.selected_loop_idx = Some(idx);
+                apply_route(model, candidate.route.clone());
+            }
+        }
         Msg::SetClickMode(mode) => {
             model.click_mode = mode;
+        }
+        Msg::ToggleRouteMode(mode) => {
+            model.route_mode = mode;
+            reset_loop_candidates(model);
         }
         Msg::ToggleMapView => {
             model.map_view_mode = match model.map_view_mode {
@@ -307,6 +473,7 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                 ClickMode::Start => {
                     model.form.start_lat = lat_str;
                     model.form.start_lon = lon_str;
+                    reset_loop_candidates(model);
                 }
                 ClickMode::End => {
                     model.form.end_lat = lat_str;
@@ -343,6 +510,34 @@ async fn send_route_request(payload: RouteRequest) -> Msg {
     Msg::RouteFetched(response)
 }
 
+async fn send_loop_request(payload: LoopRouteRequest) -> Msg {
+    web_sys::console::debug_1(
+        &format!(
+            "[frontend] sending loop request start=({:.5},{:.5}) target={:.1}km",
+            payload.start.lat, payload.start.lon, payload.target_distance_km
+        )
+        .into(),
+    );
+    let response = match Request::new(loop_api_root())
+        .method(Method::Post)
+        .json(&payload)
+    {
+        Err(err) => Err(format!("{err:?}")),
+        Ok(request) => match request.fetch().await {
+            Err(err) => Err(format!("{err:?}")),
+            Ok(raw) => match raw.check_status() {
+                Err(status_err) => Err(format!("{status_err:?}")),
+                Ok(resp) => match resp.json::<LoopRouteResponse>().await {
+                    Ok(route) => Ok(route),
+                    Err(err) => Err(format!("{err:?}")),
+                },
+            },
+        },
+    };
+
+    Msg::LoopRouteFetched(response)
+}
+
 pub fn view(model: &Model) -> Node<Msg> {
     let header = h1!["Chemins Noirs – générateur GPX anti-bitume"];
     let form = view_form(model);
@@ -352,7 +547,7 @@ pub fn view(model: &Model) -> Node<Msg> {
 }
 
 fn view_form(model: &Model) -> Node<Msg> {
-    let input_field = |label: &str, value: &str, msg: fn(String) -> Msg| {
+    let input_field = |label: &str, value: &str, msg: fn(String) -> Msg, disabled: bool| {
         div![
             C!["input-field"],
             label![label],
@@ -361,42 +556,131 @@ fn view_form(model: &Model) -> Node<Msg> {
                     At::Value => value,
                     At::AutoComplete => "off",
                     At::SpellCheck => "false",
+                    At::Disabled => bool_attr(disabled),
                 },
                 input_ev(Ev::Input, msg),
             ]
         ]
     };
+    let disable_end = model.route_mode == RouteMode::Loop;
 
     form![
         C!["controls"],
+        fieldset![
+            legend!["Type de tracé"],
+            div![
+                C!["route-type"],
+                label![
+                    input![
+                        attrs! {
+                            At::Type => "radio",
+                            At::Name => "route-mode",
+                            At::Checked => bool_attr(model.route_mode == RouteMode::PointToPoint),
+                        },
+                        ev(Ev::Change, |_| Msg::ToggleRouteMode(
+                            RouteMode::PointToPoint
+                        )),
+                    ],
+                    span!["Aller simple"],
+                ],
+                label![
+                    input![
+                        attrs! {
+                            At::Type => "radio",
+                            At::Name => "route-mode",
+                            At::Checked => bool_attr(model.route_mode == RouteMode::Loop),
+                        },
+                        ev(Ev::Change, |_| Msg::ToggleRouteMode(RouteMode::Loop)),
+                    ],
+                    span!["Boucle"],
+                ],
+            ],
+        ],
         fieldset![
             legend!["Points"],
             input_field(
                 "Latitude départ",
                 &model.form.start_lat,
-                Msg::StartLatChanged
+                Msg::StartLatChanged,
+                false
             ),
             input_field(
                 "Longitude départ",
                 &model.form.start_lon,
-                Msg::StartLonChanged
+                Msg::StartLonChanged,
+                false
             ),
-            input_field("Latitude arrivée", &model.form.end_lat, Msg::EndLatChanged),
-            input_field("Longitude arrivée", &model.form.end_lon, Msg::EndLonChanged),
+            input_field(
+                "Latitude arrivée",
+                &model.form.end_lat,
+                Msg::EndLatChanged,
+                disable_end
+            ),
+            input_field(
+                "Longitude arrivée",
+                &model.form.end_lon,
+                Msg::EndLonChanged,
+                disable_end
+            ),
+            if disable_end {
+                small!["Les coordonnées d'arrivée sont ignorées en mode boucle."]
+            } else {
+                empty![]
+            },
         ],
         fieldset![
             legend!["Poids"],
             input_field(
                 "Éviter population",
                 &model.form.w_pop,
-                Msg::PopWeightChanged
+                Msg::PopWeightChanged,
+                false
             ),
             input_field(
                 "Éviter bitume",
                 &model.form.w_paved,
-                Msg::PavedWeightChanged
+                Msg::PavedWeightChanged,
+                false
             ),
         ],
+        if model.route_mode == RouteMode::Loop {
+            fieldset![
+                legend!["Options boucle"],
+                input_field(
+                    "Distance cible (km)",
+                    &model.loop_form.distance_km,
+                    Msg::LoopDistanceChanged,
+                    false
+                ),
+                input_field(
+                    "Tolérance (km)",
+                    &model.loop_form.tolerance_km,
+                    Msg::LoopToleranceChanged,
+                    false
+                ),
+                input_field(
+                    "Nombre de propositions",
+                    &model.loop_form.candidate_count,
+                    Msg::LoopCandidateCountChanged,
+                    false
+                ),
+                input_field(
+                    "D+ max (m)",
+                    &model.loop_form.max_ascent_m,
+                    Msg::LoopMaxAscentChanged,
+                    false
+                ),
+                input_field(
+                    "D+ min (m)",
+                    &model.loop_form.min_ascent_m,
+                    Msg::LoopMinAscentChanged,
+                    false
+                ),
+                small!["Laissez D+ vide pour obtenir automatiquement la boucle la moins pentue."],
+            ]
+        } else {
+            empty![]
+        },
         fieldset![
             legend!["Sélection via la carte"],
             div![
@@ -440,28 +724,6 @@ fn view_form(model: &Model) -> Node<Msg> {
                 C!["map-toggle"],
             ],
         ],
-        if model.last_response.is_some() {
-            let anim_state = model.animation_state;
-            fieldset![
-                legend!["Animation Caméra"],
-                button![
-                    match anim_state {
-                        AnimationState::Stopped | AnimationState::Paused => "▶ Suivre le tracé",
-                        AnimationState::Playing => "⏸ Pause",
-                    },
-                    ev(Ev::Click, move |event| {
-                        event.prevent_default();
-                        match anim_state {
-                            AnimationState::Stopped | AnimationState::Paused => Msg::PlayAnimation,
-                            AnimationState::Playing => Msg::PauseAnimation,
-                        }
-                    }),
-                    C!["animation-toggle"],
-                ],
-            ]
-        } else {
-            empty![]
-        },
         if model.last_response.is_some() {
             fieldset![
                 legend!["Sauvegarder/Charger"],
@@ -517,6 +779,7 @@ fn view_preview(model: &Model) -> Node<Msg> {
             p![format!("{:.2} km parcourus", route.distance_km)],
             small!["Téléchargez le GPX via l'API (payload base64)"],
         ];
+        let loop_section = view_loop_candidates(model);
 
         let path_points = route.path.iter().enumerate().map(|(idx, coord)| {
             let elevation = route
@@ -548,7 +811,14 @@ fn view_preview(model: &Model) -> Node<Msg> {
             .map(view_elevation_profile)
             .unwrap_or_else(|| empty![]);
 
-        div![C!["preview"], stats, metadata, elevation, path_list]
+        div![
+            C!["preview"],
+            loop_section,
+            stats,
+            metadata,
+            elevation,
+            path_list
+        ]
     } else {
         div![
             C!["preview"],
@@ -588,10 +858,114 @@ fn view_metadata(meta: &shared::RouteMetadata) -> Node<Msg> {
     ]
 }
 
+fn view_loop_candidates(model: &Model) -> Node<Msg> {
+    if model.loop_candidates.is_empty() {
+        return empty![];
+    }
+
+    let heading = model
+        .loop_meta
+        .as_ref()
+        .map(|meta| {
+            format!(
+                "Boucles proposées – cible {:.1} km (± {:.1} km)",
+                meta.target_distance_km, meta.distance_tolerance_km
+            )
+        })
+        .unwrap_or_else(|| "Boucles proposées".to_string());
+
+    let entries = model
+        .loop_candidates
+        .iter()
+        .enumerate()
+        .map(|(idx, candidate)| {
+            let ascent_label = candidate
+                .route
+                .elevation_profile
+                .as_ref()
+                .map(|profile| format!("{:.0} m D+", profile.total_ascent))
+                .unwrap_or_else(|| "D+ ?".to_string());
+
+            let class_name = if model.selected_loop_idx == Some(idx) {
+                "loop-choice selected"
+            } else {
+                "loop-choice"
+            };
+
+            button![
+                format!(
+                    "#{idx} – {:.1} km • {} • Δ{:+.1} km • cap {:.0}°",
+                    candidate.route.distance_km,
+                    ascent_label,
+                    candidate.distance_error_km,
+                    candidate.bearing_deg
+                ),
+                ev(Ev::Click, move |event| {
+                    event.prevent_default();
+                    Msg::SelectLoopCandidate(idx)
+                }),
+                C![class_name],
+            ]
+        });
+
+    div![
+        C!["loop-candidates"],
+        h3![heading],
+        small!["Choisissez la boucle qui vous convient le mieux."],
+        div![entries.collect::<Vec<_>>()],
+    ]
+}
+
 #[wasm_bindgen(start)]
 pub fn start() {
     init_map();
     App::start("app", init, update, view);
+}
+
+fn apply_route(model: &mut Model, route: RouteResponse) {
+    push_route_to_map(&route.path);
+
+    let start_coord = route.path.first().copied();
+    let end_coord = route.path.last().copied();
+    let metadata = route.metadata.clone();
+
+    if let Some(start) = start_coord {
+        model.form.start_lat = format_coord(start.lat);
+        model.form.start_lon = format_coord(start.lon);
+    }
+    if let Some(end) = end_coord {
+        model.form.end_lat = format_coord(end.lat);
+        model.form.end_lon = format_coord(end.lon);
+    }
+
+    if let Some(ref metadata) = metadata {
+        if let Ok(bounds_value) = to_value(&metadata.bounds) {
+            update_bbox_js(bounds_value);
+        }
+    }
+
+    model.last_response = Some(route);
+    model.error = None;
+    sync_selection_markers(&model.form);
+
+    if let (Some(start), Some(end)) = (
+        model
+            .form
+            .coordinate_pair(&model.form.start_lat, &model.form.start_lon),
+        model
+            .form
+            .coordinate_pair(&model.form.end_lat, &model.form.end_lon),
+    ) {
+        if let (Ok(start_js), Ok(end_js)) = (to_value(&start), to_value(&end)) {
+            center_on_markers(start_js, end_js);
+        }
+    }
+}
+
+fn reset_loop_candidates(model: &mut Model) {
+    model.loop_candidates.clear();
+    model.loop_meta = None;
+    model.selected_loop_idx = None;
 }
 
 fn push_route_to_map(path: &[Coordinate]) {

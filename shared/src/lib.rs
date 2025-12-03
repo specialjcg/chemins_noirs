@@ -34,6 +34,24 @@ pub struct RouteRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopRouteRequest {
+    pub start: Coordinate,
+    pub target_distance_km: f64,
+    #[serde(default = "default_distance_tolerance_km")]
+    pub distance_tolerance_km: f64,
+    #[serde(default = "default_loop_candidate_count")]
+    pub candidate_count: usize,
+    #[serde(default = "default_weight")]
+    pub w_pop: f64,
+    #[serde(default = "default_weight")]
+    pub w_paved: f64,
+    #[serde(default)]
+    pub max_total_ascent: Option<f64>,
+    #[serde(default)]
+    pub min_total_ascent: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteMetadata {
     pub point_count: usize,
     pub bounds: RouteBounds,
@@ -93,4 +111,26 @@ pub struct TerrainMesh {
 
 pub fn default_weight() -> f64 {
     1.0
+}
+
+pub fn default_loop_candidate_count() -> usize {
+    6
+}
+
+pub fn default_distance_tolerance_km() -> f64 {
+    1.5
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopRouteResponse {
+    pub target_distance_km: f64,
+    pub distance_tolerance_km: f64,
+    pub candidates: Vec<LoopCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopCandidate {
+    pub route: RouteResponse,
+    pub distance_error_km: f64,
+    pub bearing_deg: f64,
 }

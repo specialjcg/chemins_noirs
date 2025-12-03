@@ -6,15 +6,15 @@
     <title>Chemins Noirs</title>
     <link data-trunk rel="rust" data-wasm-opt="z" />
     <link data-trunk rel="css" href="style.css" />
+    <link data-trunk rel="copy-dir" href="node_modules/maplibre-gl/dist" />
     <link
       rel="stylesheet"
-      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
-      crossorigin=""
+      href="./dist/maplibre-gl.css"
     />
     <script type="importmap">
       {
         "imports": {
-          "maplibre-gl": "https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm"
+          "maplibre-gl": "./dist/maplibre-gl.js"
         }
       }
     </script>

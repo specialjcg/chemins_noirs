@@ -16,20 +16,89 @@ let animationDurationMs = 60000;
 let lastBearing = null;
 let lastAnimationMode = null;
 let terrainSampleWarned = false;
+let lastTurnAngle = 0; // Track turn angle for banking effect
 
 // Terrain configuration - Using Terrarium format tiles from AWS
 const TERRAIN_EXAGGERATION = 1.5; // Amplify terrain for better visibility
-
-// Drone perspective settings (5m altitude)
-const DRONE_PITCH = 60; // Drone angle - less steep than human eye-level for better forward view
-const DRONE_ZOOM = 19.5; // Very high zoom for 5m altitude view
-const DRONE_ALTITUDE_METERS = 5.0; // Drone flying at 5m above terrain
-const BEARING_SMOOTHING = 0.55; // Increased from 0.18 for smoother direction changes
-const DRONE_LOOKAHEAD_METERS = 60; // Reduced from 120 for tighter path following
-const DRONE_MS_PER_METER = 6; // ~10 m/s
-const DRONE_MIN_DURATION = 20000;
-const DRONE_MAX_DURATION = 120000;
 const EARTH_RADIUS_M = 6371000;
+
+// Camera mode presets - SIGNIFICANTLY DIFFERENT for visibility
+const CAMERA_MODES = {
+  CINEMA: {
+    name: 'Cinéma',
+    icon: '🎬',
+    pitch: 65,
+    altitude: 12,
+    zoom: 19.0,
+    lookahead: 100,
+    speed: 15, // m/s - moderate speed
+    smoothing: 0.25,
+    banking: true,
+    bankingAmount: 8, // degrees
+    adaptiveSpeed: true,
+    minSpeed: 8, // m/s in sharp turns
+    turnThreshold: 40, // degrees
+    lateralOffset: 0, // No offset - follow path
+    bearingOffset: 0 // Look straight ahead
+  },
+  LATERAL: {
+    name: 'Cinéma Latéral',
+    icon: '🎥',
+    pitch: 55, // Gentler angle for side view
+    altitude: 25, // Higher up to see more
+    zoom: 18.5,
+    lookahead: 150, // Look further ahead for cinematic effect
+    speed: 12, // m/s - Slower for cinematic feel
+    smoothing: 0.35, // Smooth movements
+    banking: false, // No banking for stable shot
+    bankingAmount: 0,
+    adaptiveSpeed: true,
+    minSpeed: 7,
+    turnThreshold: 45,
+    lateralOffset: 40, // 40m to the side of the path
+    bearingOffset: -25 // Look towards the path (negative = look left towards path)
+  },
+  FPV: {
+    name: 'FPV Racing',
+    icon: '🏁',
+    pitch: 75, // Much steeper for racing feel
+    altitude: 5, // Very low
+    zoom: 19.8,
+    lookahead: 60, // Short lookahead for aggressive feel
+    speed: 35, // m/s - FAST!
+    smoothing: 0.15, // Quick reactions
+    banking: true,
+    bankingAmount: 18, // Aggressive banking
+    adaptiveSpeed: true,
+    minSpeed: 20, // Still fast in turns
+    turnThreshold: 30, // More aggressive
+    lateralOffset: 0,
+    bearingOffset: 0
+  },
+  DISCOVERY: {
+    name: 'Découverte',
+    icon: '🔭',
+    pitch: 50, // Much gentler angle
+    altitude: 20, // High up for overview
+    zoom: 18.3,
+    lookahead: 200, // Long lookahead
+    speed: 8, // m/s - Slow and contemplative
+    smoothing: 0.45, // Very smooth
+    banking: false,
+    bankingAmount: 0,
+    adaptiveSpeed: false, // Constant speed
+    minSpeed: 8,
+    turnThreshold: 60,
+    lateralOffset: 0,
+    bearingOffset: 0
+  }
+};
+
+// Current camera mode (default: CINEMA for nature trails)
+let currentCameraMode = CAMERA_MODES.CINEMA;
+
+const DRONE_MIN_DURATION = 5000;
+const DRONE_MAX_DURATION = 180000;
 
 /**
  * Set 3D camera position with advanced control
@@ -206,6 +275,14 @@ function ensureMap() {
   // Add terrain toggle control
   const terrainControl = createTerrainControl();
   mapInstance.addControl(terrainControl, 'top-right');
+
+  // Add camera animation control
+  const animationControl = createAnimationControl();
+  mapInstance.addControl(animationControl, 'top-right');
+
+  // Add camera mode control
+  const cameraModeControl = createCameraModeControl();
+  mapInstance.addControl(cameraModeControl, 'top-right');
 }
 
 function createTerrainControl() {
@@ -229,22 +306,29 @@ function createTerrainControl() {
       terrainEnabled = !terrainEnabled;
 
       if (terrainEnabled) {
-        // Enable 3D terrain with drone perspective
+        // Enable 3D terrain with realistic 45° perspective
         this._map.setTerrain({ source: 'terrainSource', exaggeration: TERRAIN_EXAGGERATION });
-        this._map.easeTo({ pitch: DRONE_PITCH, duration: 1000 });
+        this._map.easeTo({
+          pitch: 45,  // Realistic viewing angle
+          duration: 1000
+        });
         this._button.classList.add('active');
         this._button.style.backgroundColor = '#4dab7b';
         this._button.style.color = 'white';
       } else {
-        // Disable terrain
+        // Disable terrain and return to flat view
         this._map.setTerrain(null);
-        this._map.easeTo({ pitch: 0, bearing: 0, duration: 1000 });
+        this._map.easeTo({
+          pitch: 0,
+          bearing: 0,
+          duration: 1000
+        });
         this._button.classList.remove('active');
         this._button.style.backgroundColor = '';
         this._button.style.color = '';
       }
 
-      console.debug('[maplibre] Terrain toggled:', terrainEnabled);
+      console.debug('[maplibre] Terrain toggled:', terrainEnabled, '- Pitch:', terrainEnabled ? '45°' : '0°');
     }
 
     onRemove() {
@@ -254,6 +338,134 @@ function createTerrainControl() {
   }
 
   return new TerrainControl();
+}
+
+function createAnimationControl() {
+  class AnimationControl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+
+      this._button = document.createElement('button');
+      this._button.className = 'maplibregl-ctrl-animation';
+      this._button.innerHTML = '▶'; // Play icon
+      this._button.title = 'Start/Stop camera animation';
+      this._button.onclick = () => this.toggleAnimation();
+
+      this._container.appendChild(this._button);
+      return this._container;
+    }
+
+    toggleAnimation() {
+      if (animationFrameId !== null) {
+        // Stop animation
+        stopAnimation();
+        this._button.innerHTML = '▶';
+        this._button.classList.remove('active');
+        this._button.style.backgroundColor = '';
+        this._button.style.color = '';
+      } else {
+        // Start animation
+        startAnimation();
+        this._button.innerHTML = '⏸'; // Pause icon
+        this._button.classList.add('active');
+        this._button.style.backgroundColor = '#4dab7b';
+        this._button.style.color = 'white';
+      }
+
+      console.debug('[maplibre] Animation toggled:', animationFrameId !== null);
+    }
+
+    onRemove() {
+      this._container.parentNode.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+
+  return new AnimationControl();
+}
+
+function createCameraModeControl() {
+  class CameraModeControl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+
+      this._button = document.createElement('button');
+      this._button.className = 'maplibregl-ctrl-camera-mode';
+      this.updateButtonDisplay();
+      this._button.onclick = () => this.cycleMode();
+
+      this._container.appendChild(this._button);
+      return this._container;
+    }
+
+    updateButtonDisplay() {
+      this._button.textContent = currentCameraMode.icon;
+      const offsetInfo = currentCameraMode.lateralOffset !== 0 ?
+        `\nOffset latéral: ${currentCameraMode.lateralOffset}m` : '';
+      this._button.title = `Mode: ${currentCameraMode.name}\n` +
+        `Vitesse: ${currentCameraMode.speed}m/s | ` +
+        `Altitude: ${currentCameraMode.altitude}m | ` +
+        `Pitch: ${currentCameraMode.pitch}°${offsetInfo}`;
+
+      // Update visual indicator
+      const modeColors = {
+        'Cinéma': '#4dab7b',
+        'Cinéma Latéral': '#9b59b6',
+        'FPV Racing': '#ff6b35',
+        'Découverte': '#4a90e2'
+      };
+      this._button.style.backgroundColor = modeColors[currentCameraMode.name];
+      this._button.style.color = 'white';
+    }
+
+    cycleMode() {
+      // Cycle through modes: CINEMA -> LATERAL -> FPV -> DISCOVERY -> CINEMA
+      const modes = [CAMERA_MODES.CINEMA, CAMERA_MODES.LATERAL, CAMERA_MODES.FPV, CAMERA_MODES.DISCOVERY];
+      const currentIndex = modes.indexOf(currentCameraMode);
+      const nextIndex = (currentIndex + 1) % modes.length;
+      const previousMode = currentCameraMode;
+      currentCameraMode = modes[nextIndex];
+
+      this.updateButtonDisplay();
+
+      // If animation is running, recalculate metrics with new mode
+      if (currentRoute && currentRoute.length > 0) {
+        updateRouteMetrics(currentRoute);
+        // Reset animation state for smooth transition
+        lastBearing = null;
+        lastTurnAngle = 0;
+        lastAnimationMode = null;
+
+        // If animation is playing, immediately apply new camera settings
+        if (animationFrameId !== null) {
+          const center = this._map.getCenter();
+          const bearing = this._map.getBearing();
+          this._map.easeTo({
+            pitch: currentCameraMode.pitch,
+            zoom: currentCameraMode.zoom,
+            duration: 800
+          });
+        }
+      }
+
+      console.log(`[maplibre] 🎥 Mode: ${previousMode.name} → ${currentCameraMode.name}`);
+      console.log(`  Speed: ${previousMode.speed}m/s → ${currentCameraMode.speed}m/s`);
+      console.log(`  Pitch: ${previousMode.pitch}° → ${currentCameraMode.pitch}°`);
+      console.log(`  Altitude: ${previousMode.altitude}m → ${currentCameraMode.altitude}m`);
+      console.log(`  Banking: ${previousMode.banking ? previousMode.bankingAmount + '°' : 'OFF'} → ${currentCameraMode.banking ? currentCameraMode.bankingAmount + '°' : 'OFF'}`);
+    }
+
+    onRemove() {
+      this._container.parentNode.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+
+  return new CameraModeControl();
 }
 
 export function initMap() {
@@ -359,11 +571,12 @@ export function updateRoute(coords) {
   // Zoom level: closer for shorter routes, farther for longer routes
   const baseZoom = Math.max(10, Math.min(16, 18 - Math.log2(routeDistance * 100)));
 
-  // Position camera at drone height looking along the route
+  // Position camera at current mode's height looking along the route
+  const mode = currentCameraMode;
   mapInstance.easeTo({
     center: startCoord,
-    zoom: DRONE_ZOOM,
-    pitch: DRONE_PITCH,
+    zoom: mode.zoom,
+    pitch: mode.pitch,
     bearing: bearing,
     duration: 2000
   });
@@ -548,37 +761,86 @@ function animateCamera(timestamp) {
     animationStartTimestamp = timestamp;
   }
 
+  const mode = currentCameraMode;
   const duration = Math.max(DRONE_MIN_DURATION, animationDurationMs);
   const loopTime = (timestamp - animationStartTimestamp) % duration;
   const progress = duration === 0 ? 0 : loopTime / duration;
   const targetDistance = routeLengthMeters * progress;
   const cameraPoint = coordinateAtDistance(targetDistance);
   const lookAheadDistance = Math.min(
-    targetDistance + DRONE_LOOKAHEAD_METERS,
+    targetDistance + mode.lookahead,
     routeLengthMeters
   );
   const lookAtPoint = coordinateAtDistance(lookAheadDistance);
 
-  const targetBearing = calculateBearing(
+  const pathBearing = calculateBearing(
     [cameraPoint.lon, cameraPoint.lat],
     [lookAtPoint.lon, lookAtPoint.lat]
   );
-  const smoothedBearing = smoothAngle(lastBearing, targetBearing, BEARING_SMOOTHING);
+
+  // Apply lateral offset for cinematic side view
+  let actualCameraPoint = cameraPoint;
+  if (mode.lateralOffset !== 0) {
+    actualCameraPoint = calculateLateralOffset(cameraPoint, pathBearing, mode.lateralOffset);
+  }
+
+  // Calculate bearing from camera to look-at point (accounting for offset)
+  const targetBearing = calculateBearing(
+    [actualCameraPoint.lon, actualCameraPoint.lat],
+    [lookAtPoint.lon, lookAtPoint.lat]
+  );
+
+  // Apply bearing offset for angled view
+  const adjustedBearing = (targetBearing + mode.bearingOffset + 360) % 360;
+
+  // Calculate turn angle for adaptive speed and banking
+  let turnAngle = 0;
+  if (Number.isFinite(lastBearing)) {
+    turnAngle = Math.abs(((adjustedBearing - lastBearing + 540) % 360) - 180);
+  }
+
+  const smoothedBearing = smoothAngle(lastBearing, adjustedBearing, mode.smoothing);
   lastBearing = smoothedBearing;
+
+  // Calculate banking (roll) based on turn rate
+  let roll = 0;
+  if (mode.banking && Number.isFinite(lastTurnAngle)) {
+    // Smooth turn angle for natural banking
+    const smoothedTurnAngle = lastTurnAngle * 0.7 + turnAngle * 0.3;
+    lastTurnAngle = smoothedTurnAngle;
+
+    // Calculate roll based on turn intensity
+    const turnIntensity = Math.min(smoothedTurnAngle / 90, 1); // Normalize to 0-1
+    roll = turnIntensity * mode.bankingAmount;
+
+    // Apply direction based on turn direction
+    const turnDirection = ((adjustedBearing - lastBearing + 540) % 360) - 180;
+    roll = turnDirection > 0 ? roll : -roll;
+  } else {
+    lastTurnAngle = turnAngle;
+  }
 
   // Use jumpTo for immediate, smooth frame-by-frame camera updates
   // This eliminates the jerkiness from easeTo's 32ms animations overlapping
   if (!lastAnimationMode) {
-    console.debug('[maplibre] Using jumpTo for camera animation with terrain-based altitude');
+    const offsetInfo = mode.lateralOffset !== 0 ? ` offset=${mode.lateralOffset}m` : '';
+    console.debug(`[maplibre] Camera mode: ${mode.name} - pitch=${mode.pitch}° altitude=${mode.altitude}m speed=${mode.speed}m/s banking=${mode.banking}${offsetInfo}`);
     lastAnimationMode = 'jumpTo';
   }
 
-  mapInstance.jumpTo({
-    center: [cameraPoint.lon, cameraPoint.lat],
+  const cameraOptions = {
+    center: [actualCameraPoint.lon, actualCameraPoint.lat],
     bearing: smoothedBearing,
-    pitch: DRONE_PITCH,
-    zoom: DRONE_ZOOM
-  });
+    pitch: mode.pitch,
+    zoom: mode.zoom
+  };
+
+  // Add roll if banking is enabled (MapLibre GL v5+ supports this)
+  if (mode.banking && Math.abs(roll) > 0.5) {
+    cameraOptions.roll = roll;
+  }
+
+  mapInstance.jumpTo(cameraOptions);
 
   animationFrameId = requestAnimationFrame(animateCamera);
 }
@@ -601,16 +863,43 @@ function updateRouteMetrics(coords) {
     return;
   }
 
+  const mode = currentCameraMode;
   routeDistances.push(0);
+
+  // Calculate duration with adaptive speed if enabled
+  let totalDuration = 0;
+
   for (let i = 0; i < coords.length - 1; i++) {
     const dist = haversineMeters(coords[i], coords[i + 1]);
     routeLengthMeters += dist;
     routeDistances.push(routeLengthMeters);
+
+    // Calculate segment duration based on turn angle (adaptive speed)
+    if (mode.adaptiveSpeed && i > 0 && i < coords.length - 2) {
+      const prevPoint = [coords[i - 1].lon, coords[i - 1].lat];
+      const currPoint = [coords[i].lon, coords[i].lat];
+      const nextPoint = [coords[i + 1].lon, coords[i + 1].lat];
+
+      const bearing1 = calculateBearing(prevPoint, currPoint);
+      const bearing2 = calculateBearing(currPoint, nextPoint);
+      const turnAngle = Math.abs(((bearing2 - bearing1 + 540) % 360) - 180);
+
+      // Reduce speed in sharp turns
+      let segmentSpeed = mode.speed;
+      if (turnAngle > mode.turnThreshold) {
+        const turnFactor = Math.min((turnAngle - mode.turnThreshold) / 45, 1);
+        segmentSpeed = mode.speed - (mode.speed - mode.minSpeed) * turnFactor;
+      }
+
+      totalDuration += (dist / segmentSpeed) * 1000; // Convert to ms
+    } else {
+      totalDuration += (dist / mode.speed) * 1000;
+    }
   }
 
   animationDurationMs = Math.min(
     DRONE_MAX_DURATION,
-    Math.max(DRONE_MIN_DURATION, routeLengthMeters * DRONE_MS_PER_METER)
+    Math.max(DRONE_MIN_DURATION, totalDuration)
   );
 }
 
@@ -661,12 +950,57 @@ function haversineMeters(a, b) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
 }
 
+/**
+ * Calculate a point offset perpendicular to a bearing
+ * @param {Object} point - {lat, lon}
+ * @param {number} bearing - Direction in degrees
+ * @param {number} offsetMeters - Distance to offset (positive = right, negative = left)
+ * @returns {Object} - {lat, lon}
+ */
+function calculateLateralOffset(point, bearing, offsetMeters) {
+  if (offsetMeters === 0) {
+    return point;
+  }
+
+  // Calculate perpendicular bearing (90° to the right)
+  const perpBearing = (bearing + 90) % 360;
+  const perpBearingRad = perpBearing * Math.PI / 180;
+
+  const lat1 = point.lat * Math.PI / 180;
+  const lon1 = point.lon * Math.PI / 180;
+  const angularDistance = offsetMeters / EARTH_RADIUS_M;
+
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(angularDistance) +
+    Math.cos(lat1) * Math.sin(angularDistance) * Math.cos(perpBearingRad)
+  );
+
+  const lon2 = lon1 + Math.atan2(
+    Math.sin(perpBearingRad) * Math.sin(angularDistance) * Math.cos(lat1),
+    Math.cos(angularDistance) - Math.sin(lat1) * Math.sin(lat2)
+  );
+
+  return {
+    lat: lat2 * 180 / Math.PI,
+    lon: lon2 * 180 / Math.PI
+  };
+}
+
+/**
+ * Smooth angle interpolation with spline-like easing
+ * Uses a smooth hermite interpolation for more natural camera rotation
+ */
 function smoothAngle(previous, target, factor) {
   if (!Number.isFinite(previous)) {
     return target;
   }
   let delta = ((target - previous + 540) % 360) - 180;
-  return previous + delta * factor;
+
+  // Apply smooth hermite easing (similar to Catmull-Rom spline)
+  // This creates a more natural, rounded transition
+  const easedFactor = factor * factor * (3 - 2 * factor); // smoothstep
+
+  return previous + delta * easedFactor;
 }
 
 function queryElevation(point) {

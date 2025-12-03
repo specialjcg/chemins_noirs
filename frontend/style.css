@@ -204,3 +204,26 @@ button[disabled] {
     font-family: "JetBrains Mono", monospace;
     font-size: 0.85rem;
 }
+
+/* MapLibre camera animation control styling */
+.maplibregl-ctrl-animation {
+    font-size: 16px;
+    line-height: 1;
+    font-weight: bold;
+}
+
+.maplibregl-ctrl-animation:hover {
+    background-color: rgba(77, 171, 123, 0.1);
+}
+
+/* MapLibre camera mode control styling */
+.maplibregl-ctrl-camera-mode {
+    font-size: 18px;
+    line-height: 1;
+    font-weight: bold;
+    transition: all 0.3s ease;
+}
+
+.maplibregl-ctrl-camera-mode:hover {
+    transform: scale(1.1);
+}
