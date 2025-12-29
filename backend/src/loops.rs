@@ -1,4 +1,6 @@
-use std::f64::consts::PI;
+use std::{collections::HashSet, f64::consts::PI};
+
+use petgraph::graph::NodeIndex;
 
 use crate::{
     elevation::create_elevation_profile,
@@ -45,6 +47,11 @@ pub async fn generate_loops(
     let attempts_per_ring = candidate_goal.max(4);
     let half_distance = (req.target_distance_km / 2.0).max(0.5);
 
+    tracing::info!(
+        "Generating loops: target {:.1}km ± {:.1}km, {} candidates goal, {} attempts per ring ({} rings)",
+        req.target_distance_km, tolerance, candidate_goal, attempts_per_ring, TARGET_RING_FACTORS.len()
+    );
+
     let mut candidates = Vec::new();
 
     'rings: for (ring_idx, factor) in TARGET_RING_FACTORS.iter().enumerate() {
@@ -58,15 +65,21 @@ pub async fn generate_loops(
             let waypoint = destination_point(req.start, half_distance * factor, bearing);
 
             let Some(loop_path) = build_loop_path(engine, req, waypoint) else {
+                tracing::debug!("Rejected: no path found to/from waypoint at bearing {:.0}°", bearing.to_degrees());
                 continue;
             };
             if loop_path.len() < 3 {
+                tracing::debug!("Rejected: path too short ({} points)", loop_path.len());
                 continue;
             }
 
             let distance_km = approximate_distance_km(&loop_path);
             let distance_error = (distance_km - req.target_distance_km).abs();
             if distance_error > tolerance {
+                tracing::debug!(
+                    "Rejected: distance {:.1}km out of tolerance (target {:.1}km ± {:.1}km, error {:.1}km)",
+                    distance_km, req.target_distance_km, tolerance, distance_error
+                );
                 continue;
             }
 
@@ -75,14 +88,30 @@ pub async fn generate_loops(
                 .map_err(|err| LoopGenerationError::Elevation(err.to_string()))?;
             if let Some(max_ascent) = req.max_total_ascent {
                 if elevation_profile.total_ascent > max_ascent {
+                    tracing::debug!(
+                        "Rejected: ascent {:.0}m exceeds max {:.0}m",
+                        elevation_profile.total_ascent, max_ascent
+                    );
                     continue;
                 }
             }
             if let Some(min_ascent) = req.min_total_ascent {
                 if elevation_profile.total_ascent < min_ascent {
+                    tracing::debug!(
+                        "Rejected: ascent {:.0}m below min {:.0}m",
+                        elevation_profile.total_ascent, min_ascent
+                    );
                     continue;
                 }
             }
+
+            tracing::info!(
+                "✓ Accepted loop #{}: {:.1}km, bearing {:.0}°, ascent {:.0}m",
+                candidates.len() + 1,
+                distance_km,
+                normalize_bearing(bearing.to_degrees()),
+                elevation_profile.total_ascent
+            );
 
             let gpx_base64 = encode_route_as_gpx(&loop_path)?;
             let metadata = Some(crate::build_metadata(&loop_path));
@@ -150,6 +179,17 @@ fn build_loop_path(
         w_pop: req.w_pop,
         w_paved: req.w_paved,
     };
+
+    // First, find the outbound path
+    let outbound = engine.find_path(&to_waypoint)?;
+    if outbound.is_empty() {
+        return None;
+    }
+
+    // Extract edges used in outbound path by mapping coordinates to node indices
+    let excluded_edges = extract_edges_from_path(engine, &outbound);
+
+    // Now find the return path while avoiding outbound edges
     let from_waypoint = RouteRequest {
         start: waypoint,
         end: req.start,
@@ -157,14 +197,35 @@ fn build_loop_path(
         w_paved: req.w_paved,
     };
 
-    let mut outbound = engine.find_path(&to_waypoint)?;
-    let mut inbound = engine.find_path(&from_waypoint)?;
-    if outbound.is_empty() || inbound.is_empty() {
+    let mut inbound = engine.find_path_with_excluded_edges(&from_waypoint, &excluded_edges)?;
+    if inbound.is_empty() {
         return None;
     }
+
+    // Merge paths
+    let mut result = outbound;
     inbound.remove(0); // drop duplicate waypoint before concatenation
-    outbound.extend(inbound);
-    Some(outbound)
+    result.extend(inbound);
+    Some(result)
+}
+
+/// Extract edge pairs (node indices) from a path of coordinates
+fn extract_edges_from_path(
+    engine: &RouteEngine,
+    path: &[Coordinate],
+) -> HashSet<(NodeIndex, NodeIndex)> {
+    let mut edges = HashSet::new();
+
+    for window in path.windows(2) {
+        if let (Some(from_idx), Some(to_idx)) = (
+            engine.closest_node(window[0]),
+            engine.closest_node(window[1]),
+        ) {
+            edges.insert((from_idx, to_idx));
+        }
+    }
+
+    edges
 }
 
 fn destination_point(start: Coordinate, distance_km: f64, bearing_rad: f64) -> Coordinate {

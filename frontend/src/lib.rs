@@ -1,14 +1,29 @@
 use seed::{prelude::*, virtual_dom::AtValue, *};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::to_value;
 use shared::{
     default_distance_tolerance_km, default_loop_candidate_count, Coordinate, LoopCandidate,
-    LoopRouteRequest, LoopRouteResponse, RouteRequest, RouteResponse,
+    LoopRouteRequest, LoopRouteResponse, MultiPointRouteRequest, RouteRequest, RouteResponse,
 };
 use wasm_bindgen::{
     prelude::{wasm_bindgen, JsValue},
     JsCast,
 };
+
+// Structure pour les routes sauvegardées
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedRouteInfo {
+    pub filename: String,
+    pub name: String,
+    pub distance_km: f64,
+    pub saved_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SaveRouteRequest {
+    pub name: String,
+    pub route: RouteResponse,
+}
 
 #[wasm_bindgen(module = "/maplibre_map.js")]
 extern "C" {
@@ -18,6 +33,8 @@ extern "C" {
     fn update_route_js(coords: JsValue);
     #[wasm_bindgen(js_name = updateSelectionMarkers)]
     fn update_selection_markers(start: JsValue, end: JsValue);
+    #[wasm_bindgen(js_name = updateWaypointMarkers)]
+    fn update_waypoint_markers(waypoints: JsValue);
     #[wasm_bindgen(js_name = toggleSatelliteView)]
     fn toggle_satellite_view(enabled: bool);
     #[wasm_bindgen(js_name = updateBbox)]
@@ -49,6 +66,8 @@ fn loop_api_root() -> String {
 pub struct Model {
     form: RouteForm,
     loop_form: LoopForm,
+    waypoints: Vec<Coordinate>,
+    close_loop: bool,
     pending: bool,
     last_response: Option<RouteResponse>,
     loop_candidates: Vec<LoopCandidate>,
@@ -60,6 +79,8 @@ pub struct Model {
     map_view_mode: MapViewMode,
     view_mode: ViewMode,
     animation_state: AnimationState,
+    saved_routes: Vec<SavedRouteInfo>,
+    show_routes_list: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -72,6 +93,7 @@ pub enum ClickMode {
 pub enum RouteMode {
     PointToPoint,
     Loop,
+    MultiPoint,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -228,10 +250,19 @@ pub enum Msg {
     PauseAnimation,
     SaveRoute,
     LoadRoute,
+    RefreshRoutesList,
+    ToggleRoutesList,
+    LoadSpecificRoute(String),
+    ListRoutesFetched(Result<Vec<SavedRouteInfo>, String>),
     MapClicked { lat: f64, lon: f64 },
     RouteFetched(Result<RouteResponse, String>),
     LoopRouteFetched(Result<LoopRouteResponse, String>),
     SelectLoopCandidate(usize),
+    AddWaypoint(Coordinate),
+    RemoveWaypoint(usize),
+    ClearWaypoints,
+    ToggleCloseLoop,
+    ComputeMultiPointRoute,
 }
 
 pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
@@ -266,6 +297,8 @@ pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
             w_paved: "4.0".into(),
         },
         loop_form: LoopForm::default(),
+        waypoints: Vec::new(),
+        close_loop: false,
         pending: false,
         last_response: None,
         loop_candidates: Vec::new(),
@@ -277,6 +310,8 @@ pub fn init(_: Url, orders: &mut impl Orders<Msg>) -> Model {
         map_view_mode: MapViewMode::Standard,
         view_mode: ViewMode::Map2D,
         animation_state: AnimationState::Stopped,
+        saved_routes: Vec::new(),
+        show_routes_list: false,
     };
 
     sync_selection_markers(&model.form);
@@ -367,6 +402,9 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                     }
                     Err(err) => model.error = Some(err),
                 },
+                RouteMode::MultiPoint => {
+                    orders.send_msg(Msg::ComputeMultiPointRoute);
+                }
             }
         }
         Msg::RouteFetched(result) => {
@@ -422,6 +460,13 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
         Msg::ToggleRouteMode(mode) => {
             model.route_mode = mode;
             reset_loop_candidates(model);
+            // Clear waypoints when switching away from MultiPoint mode
+            if mode != RouteMode::MultiPoint && !model.waypoints.is_empty() {
+                model.waypoints.clear();
+                if let Ok(empty_array) = to_value(&Vec::<Coordinate>::new()) {
+                    update_waypoint_markers(empty_array);
+                }
+            }
         }
         Msg::ToggleMapView => {
             model.map_view_mode = match model.map_view_mode {
@@ -448,18 +493,63 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
         }
         Msg::SaveRoute => {
             if let Some(ref route) = model.last_response {
-                save_route_to_disk(route);
+                // Demander un nom à l'utilisateur
+                if let Some(window) = web_sys::window() {
+                    if let Ok(Some(name)) = window.prompt_with_message("Nom de la route :") {
+                        if !name.trim().is_empty() {
+                            save_route_to_disk_with_name(route, &name);
+                            // Rafraîchir la liste après sauvegarde
+                            orders.send_msg(Msg::RefreshRoutesList);
+                        }
+                    }
+                }
             }
         }
         Msg::LoadRoute => {
+            // Afficher la liste des routes sauvegardées
+            orders.send_msg(Msg::RefreshRoutesList);
+            model.show_routes_list = !model.show_routes_list;
+        }
+        Msg::RefreshRoutesList => {
             orders.perform_cmd(async {
-                match load_route_from_disk_async().await {
-                    Ok(route) => Msg::RouteFetched(Ok(route)),
-                    Err(e) => Msg::RouteFetched(Err(e)),
+                match fetch_saved_routes_list().await {
+                    Ok(routes) => Msg::ListRoutesFetched(Ok(routes)),
+                    Err(e) => Msg::ListRoutesFetched(Err(e)),
                 }
             });
         }
+        Msg::ToggleRoutesList => {
+            model.show_routes_list = !model.show_routes_list;
+        }
+        Msg::LoadSpecificRoute(filename) => {
+            orders.perform_cmd(async move {
+                match load_route_from_disk_by_filename(&filename).await {
+                    Ok(route) => {
+                        web_sys::console::log_1(&format!("Route '{}' chargée", filename).into());
+                        Msg::RouteFetched(Ok(route))
+                    }
+                    Err(e) => Msg::RouteFetched(Err(e)),
+                }
+            });
+            model.show_routes_list = false;
+        }
+        Msg::ListRoutesFetched(result) => {
+            match result {
+                Ok(routes) => {
+                    model.saved_routes = routes;
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to load routes list: {}", e).into());
+                }
+            }
+        }
         Msg::MapClicked { lat, lon } => {
+            if model.route_mode == RouteMode::MultiPoint {
+                // In MultiPoint mode, add waypoint directly
+                orders.send_msg(Msg::AddWaypoint(Coordinate { lat, lon }));
+                return;
+            }
+
             let lat_str = format_coord(lat);
             let lon_str = format_coord(lon);
             web_sys::console::debug_1(
@@ -482,6 +572,60 @@ pub fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
             }
             sync_selection_markers(&model.form);
         }
+        Msg::AddWaypoint(coord) => {
+            model.waypoints.push(coord);
+            model.error = None;
+            // Update waypoint markers on map
+            if let Ok(waypoints_js) = to_value(&model.waypoints) {
+                update_waypoint_markers(waypoints_js);
+            }
+            // Don't auto-compute - let user click "Calculer" button when ready
+        }
+        Msg::RemoveWaypoint(idx) => {
+            if idx < model.waypoints.len() {
+                model.waypoints.remove(idx);
+                // Update waypoint markers on map
+                if let Ok(waypoints_js) = to_value(&model.waypoints) {
+                    update_waypoint_markers(waypoints_js);
+                }
+                // Clear route if less than 2 waypoints remain
+                if model.waypoints.len() < 2 {
+                    push_route_to_map(&[]);
+                    model.last_response = None;
+                }
+            }
+        }
+        Msg::ClearWaypoints => {
+            model.waypoints.clear();
+            // Clear waypoint markers from map
+            if let Ok(empty_array) = to_value(&Vec::<Coordinate>::new()) {
+                update_waypoint_markers(empty_array);
+            }
+            push_route_to_map(&[]);
+            model.last_response = None;
+            model.error = None;
+        }
+        Msg::ToggleCloseLoop => {
+            model.close_loop = !model.close_loop;
+            // Don't auto-recalculate - let user click "Calculer" when ready
+        }
+        Msg::ComputeMultiPointRoute => {
+            if model.waypoints.len() < 2 {
+                model.error = Some("Au moins 2 points requis".to_string());
+                return;
+            }
+            if model.pending {
+                return;
+            }
+            model.pending = true;
+            model.error = None;
+            orders.perform_cmd(send_multipoint_route_request(
+                model.waypoints.clone(),
+                model.close_loop,
+                model.form.w_pop.parse().unwrap_or(1.0),
+                model.form.w_paved.parse().unwrap_or(1.0),
+            ));
+        }
     }
 }
 
@@ -494,6 +638,49 @@ async fn send_route_request(payload: RouteRequest) -> Msg {
         .into(),
     );
     let response = match Request::new(api_root()).method(Method::Post).json(&payload) {
+        Err(err) => Err(format!("{err:?}")),
+        Ok(request) => match request.fetch().await {
+            Err(err) => Err(format!("{err:?}")),
+            Ok(raw) => match raw.check_status() {
+                Err(status_err) => Err(format!("{status_err:?}")),
+                Ok(resp) => match resp.json::<RouteResponse>().await {
+                    Ok(route) => Ok(route),
+                    Err(err) => Err(format!("{err:?}")),
+                },
+            },
+        },
+    };
+
+    Msg::RouteFetched(response)
+}
+
+async fn send_multipoint_route_request(
+    waypoints: Vec<Coordinate>,
+    close_loop: bool,
+    w_pop: f64,
+    w_paved: f64,
+) -> Msg {
+    web_sys::console::debug_1(
+        &format!(
+            "[frontend] sending multipoint route request with {} waypoints, close_loop={}",
+            waypoints.len(),
+            close_loop
+        )
+        .into(),
+    );
+
+    // Use optimized backend endpoint that generates single graph for all waypoints
+    let payload = MultiPointRouteRequest {
+        waypoints,
+        close_loop,
+        w_pop,
+        w_paved,
+    };
+
+    let response = match Request::new(format!("{}/multi", api_root()))
+        .method(Method::Post)
+        .json(&payload)
+    {
         Err(err) => Err(format!("{err:?}")),
         Ok(request) => match request.fetch().await {
             Err(err) => Err(format!("{err:?}")),
@@ -594,6 +781,17 @@ fn view_form(model: &Model) -> Node<Msg> {
                     ],
                     span!["Boucle"],
                 ],
+                label![
+                    input![
+                        attrs! {
+                            At::Type => "radio",
+                            At::Name => "route-mode",
+                            At::Checked => bool_attr(model.route_mode == RouteMode::MultiPoint),
+                        },
+                        ev(Ev::Change, |_| Msg::ToggleRouteMode(RouteMode::MultiPoint)),
+                    ],
+                    span!["Multi-points"],
+                ],
             ],
         ],
         fieldset![
@@ -681,35 +879,127 @@ fn view_form(model: &Model) -> Node<Msg> {
         } else {
             empty![]
         },
-        fieldset![
-            legend!["Sélection via la carte"],
-            div![
-                C!["click-mode"],
-                label![
-                    input![
-                        attrs! {
-                            At::Type => "radio",
-                            At::Name => "click-mode",
-                            At::Checked => bool_attr(model.click_mode == ClickMode::Start),
-                        },
-                        ev(Ev::Change, |_| Msg::SetClickMode(ClickMode::Start)),
-                    ],
-                    span!["Départ"],
+        if model.route_mode == RouteMode::MultiPoint {
+            fieldset![
+                legend!["Points du tracé"],
+                div![
+                    C!["waypoints-list"],
+                    if model.waypoints.is_empty() {
+                        p![
+                            style! {St::FontStyle => "italic", St::Color => "#666"},
+                            "Cliquez sur la carte pour ajouter des points"
+                        ]
+                    } else {
+                        div![
+                            model.waypoints.iter().enumerate().map(|(idx, coord)| {
+                                div![
+                                    C!["waypoint-item"],
+                                    style! {
+                                        St::Display => "flex",
+                                        St::JustifyContent => "space-between",
+                                        St::AlignItems => "center",
+                                        St::Padding => "0.5rem",
+                                        St::MarginBottom => "0.25rem",
+                                        St::Background => "#f5f5f5",
+                                        St::BorderRadius => "4px",
+                                    },
+                                    span![
+                                        style! {St::Color => "#333"},
+                                        format!("{}. ({:.4}, {:.4})", idx + 1, coord.lat, coord.lon)
+                                    ],
+                                    button![
+                                        style! {
+                                            St::Padding => "0.25rem 0.5rem",
+                                            St::Background => "#dc3545",
+                                            St::Color => "white",
+                                            St::Border => "none",
+                                            St::BorderRadius => "3px",
+                                            St::Cursor => "pointer",
+                                        },
+                                        "✕",
+                                        ev(Ev::Click, move |_| Msg::RemoveWaypoint(idx)),
+                                    ]
+                                ]
+                            }),
+                        ]
+                    }
                 ],
-                label![
-                    input![
-                        attrs! {
-                            At::Type => "radio",
-                            At::Name => "click-mode",
-                            At::Checked => bool_attr(model.click_mode == ClickMode::End),
-                        },
-                        ev(Ev::Change, |_| Msg::SetClickMode(ClickMode::End)),
+                div![
+                    style! {St::MarginTop => "1rem"},
+                    label![
+                        input![
+                            attrs! {
+                                At::Type => "checkbox",
+                                At::Checked => bool_attr(model.close_loop),
+                            },
+                            ev(Ev::Change, |_| Msg::ToggleCloseLoop),
+                        ],
+                        span![" Boucler (retour au point de départ)"],
                     ],
-                    span!["Arrivée"],
                 ],
-            ],
-            small!["Cliquez sur la carte pour remplir la position sélectionnée."],
-        ],
+                div![
+                    style! {St::MarginTop => "1rem"},
+                    button![
+                        style! {
+                            St::Padding => "0.5rem 1rem",
+                            St::Background => "#6c757d",
+                            St::Color => "white",
+                            St::Border => "none",
+                            St::BorderRadius => "4px",
+                            St::Cursor => "pointer",
+                            St::Width => "100%",
+                        },
+                        attrs! {
+                            At::Disabled => bool_attr(model.waypoints.is_empty()),
+                        },
+                        ev(Ev::Click, |_| Msg::ClearWaypoints),
+                        "Effacer tous les points",
+                    ]
+                ],
+                small![
+                    style! {St::Display => "block", St::MarginTop => "0.5rem"},
+                    format!("{} point(s) • Distance: {:.1} km",
+                        model.waypoints.len(),
+                        model.last_response.as_ref().map(|r| r.distance_km).unwrap_or(0.0)
+                    )
+                ],
+            ]
+        } else {
+            empty![]
+        },
+        if model.route_mode != RouteMode::MultiPoint {
+            fieldset![
+                legend!["Sélection via la carte"],
+                div![
+                    C!["click-mode"],
+                    label![
+                        input![
+                            attrs! {
+                                At::Type => "radio",
+                                At::Name => "click-mode",
+                                At::Checked => bool_attr(model.click_mode == ClickMode::Start),
+                            },
+                            ev(Ev::Change, |_| Msg::SetClickMode(ClickMode::Start)),
+                        ],
+                        span!["Départ"],
+                    ],
+                    label![
+                        input![
+                            attrs! {
+                                At::Type => "radio",
+                                At::Name => "click-mode",
+                                At::Checked => bool_attr(model.click_mode == ClickMode::End),
+                            },
+                            ev(Ev::Change, |_| Msg::SetClickMode(ClickMode::End)),
+                        ],
+                        span!["Arrivée"],
+                    ],
+                ],
+                small!["Cliquez sur la carte pour remplir la position sélectionnée."],
+            ]
+        } else {
+            empty![]
+        },
         fieldset![
             legend!["Vue de la carte"],
             button![
@@ -743,7 +1033,7 @@ fn view_form(model: &Model) -> Node<Msg> {
                     }),
                     C!["load-btn"],
                 ],
-                small!["Le tracé est sauvegardé localement dans votre navigateur."],
+                small!["Les tracés sont sauvegardés sur le serveur."],
             ]
         } else {
             button![
@@ -754,6 +1044,12 @@ fn view_form(model: &Model) -> Node<Msg> {
                 }),
                 C!["load-btn"],
             ]
+        },
+        // Liste des routes sauvegardées
+        if model.show_routes_list {
+            view_saved_routes_list(model)
+        } else {
+            empty![]
         },
         button![
             "Tracer l'itinéraire",
@@ -826,6 +1122,73 @@ fn view_preview(model: &Model) -> Node<Msg> {
             p!["Soumettez des points pour visualiser un itinéraire."]
         ]
     }
+}
+
+fn view_saved_routes_list(model: &Model) -> Node<Msg> {
+    fieldset![
+        C!["saved-routes-list"],
+        legend!["Routes sauvegardées"],
+        if model.saved_routes.is_empty() {
+            p![
+                style! { St::TextAlign => "center", St::Padding => "20px", St::Color => "#666" },
+                "Aucune route sauvegardée"
+            ]
+        } else {
+            div![
+                C!["routes-list"],
+                model.saved_routes.iter().map(|route_info| {
+                    div![
+                        C!["route-item"],
+                        style! {
+                            St::Display => "flex",
+                            St::JustifyContent => "space-between",
+                            St::AlignItems => "center",
+                            St::Padding => "10px",
+                            St::MarginBottom => "5px",
+                            St::Border => "1px solid #ddd",
+                            St::BorderRadius => "4px",
+                            St::BackgroundColor => "#f9f9f9",
+                        },
+                        div![
+                            C!["route-info"],
+                            strong![&route_info.name],
+                            br![],
+                            small![
+                                format!("{:.2} km · ", route_info.distance_km),
+                                route_info.saved_at.split('T').next().unwrap_or(&route_info.saved_at)
+                            ],
+                        ],
+                        button![
+                            "📥 Charger",
+                            C!["load-btn-small"],
+                            style! {
+                                St::Padding => "5px 10px",
+                                St::FontSize => "0.9em",
+                            },
+                            ev(Ev::Click, {
+                                let filename = route_info.filename.clone();
+                                move |event| {
+                                    event.prevent_default();
+                                    Msg::LoadSpecificRoute(filename.clone())
+                                }
+                            }),
+                        ]
+                    ]
+                })
+            ]
+        },
+        button![
+            "✖ Fermer",
+            C!["close-btn"],
+            style! {
+                St::MarginTop => "10px",
+            },
+            ev(Ev::Click, |event| {
+                event.prevent_default();
+                Msg::ToggleRoutesList
+            }),
+        ]
+    ]
 }
 
 fn view_metadata(meta: &shared::RouteMetadata) -> Node<Msg> {
@@ -1048,13 +1411,17 @@ struct MapClickPayload {
     lon: f64,
 }
 
-// Save route to disk via API
-fn save_route_to_disk(route: &RouteResponse) {
-    let route_clone = route.clone();
+// Save route to disk via API with name
+fn save_route_to_disk_with_name(route: &RouteResponse, name: &str) {
+    let save_request = SaveRouteRequest {
+        name: name.to_string(),
+        route: route.clone(),
+    };
+
     spawn_local(async move {
         match Request::new("http://localhost:8080/api/routes/save")
             .method(Method::Post)
-            .json(&route_clone)
+            .json(&save_request)
         {
             Err(err) => {
                 web_sys::console::error_1(&format!("Failed to build request: {:?}", err).into());
@@ -1071,9 +1438,10 @@ fn save_route_to_disk(route: &RouteResponse) {
     });
 }
 
-// Load route from disk via API (async function)
-async fn load_route_from_disk_async() -> Result<RouteResponse, String> {
-    let request = Request::new("http://localhost:8080/api/routes/load").method(Method::Get);
+// Load route from disk by filename via API
+async fn load_route_from_disk_by_filename(filename: &str) -> Result<RouteResponse, String> {
+    let url = format!("http://localhost:8080/api/routes/load?filename={}", filename);
+    let request = Request::new(&url).method(Method::Get);
     match request.fetch().await {
         Err(err) => Err(format!("Failed to fetch: {:?}", err)),
         Ok(raw) => match raw.check_status() {
@@ -1084,6 +1452,21 @@ async fn load_route_from_disk_async() -> Result<RouteResponse, String> {
                     Ok(route)
                 }
                 Err(err) => Err(format!("Failed to parse JSON: {:?}", err)),
+            },
+        },
+    }
+}
+
+// Fetch list of saved routes
+async fn fetch_saved_routes_list() -> Result<Vec<SavedRouteInfo>, String> {
+    let request = Request::new("http://localhost:8080/api/routes/list").method(Method::Get);
+    match request.fetch().await {
+        Err(err) => Err(format!("Failed to fetch routes list: {:?}", err)),
+        Ok(raw) => match raw.check_status() {
+            Err(status_err) => Err(format!("Status error: {:?}", status_err)),
+            Ok(resp) => match resp.json::<Vec<SavedRouteInfo>>().await {
+                Ok(routes) => Ok(routes),
+                Err(err) => Err(format!("Failed to parse routes list: {:?}", err)),
             },
         },
     }

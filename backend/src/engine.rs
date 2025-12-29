@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{self, Read},
     path::Path,
@@ -12,6 +12,7 @@ use crate::{
 use petgraph::{
     algo::astar,
     graph::{NodeIndex, UnGraph},
+    visit::EdgeRef,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -108,6 +109,16 @@ impl RouteEngine {
     }
 
     pub fn find_path(&self, req: &RouteRequest) -> Option<Vec<Coordinate>> {
+        self.find_path_with_excluded_edges(req, &HashSet::new())
+    }
+
+    /// Find path while avoiding specific edges (used for loop generation)
+    /// excluded_edges: set of (NodeIndex, NodeIndex) pairs representing edges to penalize heavily
+    pub fn find_path_with_excluded_edges(
+        &self,
+        req: &RouteRequest,
+        excluded_edges: &HashSet<(NodeIndex, NodeIndex)>,
+    ) -> Option<Vec<Coordinate>> {
         let start = self.closest_node(req.start)?;
         let end = self.closest_node(req.end)?;
 
@@ -131,8 +142,24 @@ impl RouteEngine {
                 straight_line_km(self.nodes[idx.index()].coord, req.end)
             }
         };
-        let edge_cost =
-            |edge: petgraph::graph::EdgeReference<EdgeData>| self.edge_cost(edge.weight(), weights);
+
+        let edge_cost = |edge: petgraph::graph::EdgeReference<EdgeData>| {
+            let base_cost = self.edge_cost(edge.weight(), weights);
+            let from = edge.source();
+            let to = edge.target();
+
+            // Apply penalty if this edge was used in the outbound path
+            // but allow it if we're returning to the start node
+            let is_excluded = excluded_edges.contains(&(from, to)) || excluded_edges.contains(&(to, from));
+            let is_final_return = to == start || from == start;
+
+            if is_excluded && !is_final_return {
+                // Apply moderate penalty (10x) to strongly discourage reuse while still allowing it as last resort
+                base_cost * 10.0
+            } else {
+                base_cost
+            }
+        };
 
         let (_cost, route) = astar(
             &self.graph,
@@ -150,7 +177,7 @@ impl RouteEngine {
         )
     }
 
-    fn closest_node(&self, target: Coordinate) -> Option<NodeIndex> {
+    pub fn closest_node(&self, target: Coordinate) -> Option<NodeIndex> {
         const MAX_DISTANCE_KM: f64 = 20.0; // Max 20km from target to nearest node
 
         self.nodes

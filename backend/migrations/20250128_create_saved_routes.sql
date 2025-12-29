@@ -1,6 +1,5 @@
 -- Migration: Create saved_routes table
 -- Description: Store user-saved routes with metadata
--- Author: Claude Code
 -- Date: 2025-01-28
 
 CREATE TABLE IF NOT EXISTS saved_routes (

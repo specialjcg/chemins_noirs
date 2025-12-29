@@ -17,6 +17,7 @@ let lastBearing = null;
 let lastAnimationMode = null;
 let terrainSampleWarned = false;
 let lastTurnAngle = 0; // Track turn angle for banking effect
+let waypointMarkers = []; // Markers for multi-point route waypoints
 
 // Terrain configuration - Using Terrarium format tiles from AWS
 const TERRAIN_EXAGGERATION = 1.5; // Amplify terrain for better visibility
@@ -249,7 +250,24 @@ function ensureMap() {
       }
     });
 
-    // Add route layer
+    // Add route layer with white outline for better visibility on satellite
+    // Add outline layer first (drawn under the main line)
+    mapInstance.addLayer({
+      id: 'route-line-outline',
+      type: 'line',
+      source: 'route',
+      layout: {
+        'line-join': 'round',
+        'line-cap': 'round'
+      },
+      paint: {
+        'line-color': '#ffffff',
+        'line-width': 6,
+        'line-opacity': 0.8
+      }
+    });
+
+    // Add main route layer on top
     mapInstance.addLayer({
       id: 'route-line',
       type: 'line',
@@ -638,6 +656,17 @@ export function toggleSatelliteView(enabled) {
     } else {
       mapInstance.setLayoutProperty('satellite-tiles', 'visibility', 'visible');
     }
+
+    // IMPORTANT: Ensure route layers are always on top
+    // Move route layers above all other layers for visibility on satellite
+    if (mapInstance.getLayer('route-line-outline')) {
+      mapInstance.moveLayer('route-line-outline');
+    }
+    if (mapInstance.getLayer('route-line')) {
+      mapInstance.moveLayer('route-line');
+    }
+
+    console.debug('[maplibre] Route layers repositioned on top for satellite visibility');
   } else {
     mapInstance.setLayoutProperty('osm-tiles', 'visibility', 'visible');
     if (mapInstance.getLayer('satellite-tiles')) {
@@ -749,6 +778,42 @@ export function stopAnimation() {
   lastBearing = null;
   lastAnimationMode = null;
   terrainSampleWarned = false;
+}
+
+export function updateWaypointMarkers(waypoints) {
+  // Remove all existing waypoint markers
+  waypointMarkers.forEach(marker => marker.remove());
+  waypointMarkers = [];
+
+  if (!Array.isArray(waypoints) || !mapInstance) {
+    return;
+  }
+
+  // Create numbered markers for each waypoint
+  waypoints.forEach((coord, index) => {
+    const el = document.createElement('div');
+    el.style.width = '28px';
+    el.style.height = '28px';
+    el.style.borderRadius = '50%';
+    el.style.backgroundColor = '#2196F3';
+    el.style.border = '2px solid white';
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.fontSize = '12px';
+    el.style.fontWeight = 'bold';
+    el.style.color = 'white';
+    el.style.cursor = 'pointer';
+    el.textContent = (index + 1).toString();
+
+    const marker = new maplibregl.Marker({ element: el })
+      .setLngLat([coord.lon, coord.lat])
+      .addTo(mapInstance);
+
+    waypointMarkers.push(marker);
+  });
+
+  console.debug(`[maplibre] Updated ${waypoints.length} waypoint markers`);
 }
 
 function animateCamera(timestamp) {
