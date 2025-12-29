@@ -1,3 +1,4 @@
+pub mod database;
 pub mod dem;
 pub mod elevation;
 pub mod engine;
@@ -8,18 +9,20 @@ pub mod loops;
 pub mod models;
 pub mod partial_graph;
 pub mod routing;
+pub mod saved_routes_handlers;
 pub mod terrain;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
+use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::engine::RouteEngine;
@@ -36,6 +39,26 @@ pub struct AppState {
     pub engine: Arc<RouteEngine>,
 }
 
+// Structures pour la sauvegarde/chargement de routes
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SaveRouteRequest {
+    pub name: String,
+    pub route: RouteResponse,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SavedRouteInfo {
+    pub filename: String,
+    pub name: String,
+    pub distance_km: f64,
+    pub saved_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoadRouteQuery {
+    pub filename: String,
+}
+
 pub fn create_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -47,6 +70,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/loops", post(loop_route_handler))
         .route("/api/routes/save", post(save_route_handler))
         .route("/api/routes/load", get(load_route_handler))
+        .route("/api/routes/list", get(list_routes_handler))
         .layer(cors)
         .with_state(state)
 }
@@ -66,6 +90,7 @@ pub fn create_router_with_partial(
         .route("/api/loops", post(loop_route_handler))
         .route("/api/routes/save", post(save_route_handler))
         .route("/api/routes/load", get(load_route_handler))
+        .route("/api/routes/list", get(list_routes_handler))
         .with_state(state.clone())
         .route(
             "/api/graph/partial",
@@ -166,10 +191,10 @@ fn loop_error(err: LoopGenerationError) -> (StatusCode, Json<ApiError>) {
     )
 }
 
-// Handler pour sauvegarder une route sur le disque
+// Handler pour sauvegarder une route sur le disque avec nom et timestamp
 async fn save_route_handler(
     State(_state): State<AppState>,
-    Json(route): Json<RouteResponse>,
+    Json(req): Json<SaveRouteRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let save_dir = PathBuf::from("backend/data/saved_routes");
 
@@ -183,11 +208,28 @@ async fn save_route_handler(
         ));
     }
 
-    // Utiliser un nom de fichier fixe pour la dernière route sauvegardée
-    let file_path = save_dir.join("last_route.json");
+    // Générer un nom de fichier unique avec timestamp
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let sanitized_name = req.name.replace(' ', "_").replace('/', "_");
+    let filename = format!("{}_{}.json", timestamp, sanitized_name);
+    let file_path = save_dir.join(&filename);
+
+    // Créer les métadonnées
+    let metadata = SavedRouteInfo {
+        filename: filename.clone(),
+        name: req.name.clone(),
+        distance_km: req.route.distance_km,
+        saved_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    // Créer une structure combinée pour sauvegarder
+    let save_data = serde_json::json!({
+        "metadata": metadata,
+        "route": req.route
+    });
 
     // Sérialiser et sauvegarder
-    let json_str = serde_json::to_string_pretty(&route).map_err(|e| {
+    let json_str = serde_json::to_string_pretty(&save_data).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -207,22 +249,25 @@ async fn save_route_handler(
 
     Ok(Json(serde_json::json!({
         "success": true,
-        "message": "Route sauvegardée avec succès"
+        "message": "Route sauvegardée avec succès",
+        "filename": filename
     })))
 }
 
-// Handler pour charger la dernière route sauvegardée
+// Handler pour charger une route sauvegardée par nom de fichier
 async fn load_route_handler(
     State(_state): State<AppState>,
+    Query(query): Query<LoadRouteQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
-    let file_path = PathBuf::from("backend/data/saved_routes/last_route.json");
+    let save_dir = PathBuf::from("backend/data/saved_routes");
+    let file_path = save_dir.join(&query.filename);
 
     // Vérifier si le fichier existe
     if !file_path.exists() {
         return Err((
             StatusCode::NOT_FOUND,
             Json(ApiError {
-                message: "Aucune route sauvegardée trouvée".to_string(),
+                message: format!("Route '{}' non trouvée", query.filename),
             }),
         ));
     }
@@ -237,7 +282,7 @@ async fn load_route_handler(
         )
     })?;
 
-    let route: RouteResponse = serde_json::from_str(&json_str).map_err(|e| {
+    let save_data: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -246,5 +291,85 @@ async fn load_route_handler(
         )
     })?;
 
+    // Extraire la route du format sauvegardé
+    let route = save_data.get("route")
+        .ok_or_else(|| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                message: "Invalid saved route format".to_string(),
+            }),
+        ))?;
+
+    let route: RouteResponse = serde_json::from_value(route.clone()).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                message: format!("Failed to parse route: {}", e),
+            }),
+        )
+    })?;
+
     Ok(Json(route))
+}
+
+// Handler pour lister toutes les routes sauvegardées
+async fn list_routes_handler(
+    State(_state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let save_dir = PathBuf::from("backend/data/saved_routes");
+
+    // Créer le répertoire s'il n'existe pas
+    if let Err(e) = std::fs::create_dir_all(&save_dir) {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                message: format!("Failed to create save directory: {}", e),
+            }),
+        ));
+    }
+
+    // Lire tous les fichiers JSON dans le répertoire
+    let entries = std::fs::read_dir(&save_dir).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                message: format!("Failed to read save directory: {}", e),
+            }),
+        )
+    })?;
+
+    let mut routes = Vec::new();
+
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    message: format!("Failed to read directory entry: {}", e),
+                }),
+            )
+        })?;
+
+        let path = entry.path();
+
+        // Ne traiter que les fichiers JSON
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            // Lire le fichier
+            if let Ok(json_str) = std::fs::read_to_string(&path) {
+                if let Ok(save_data) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    // Extraire les métadonnées
+                    if let Some(metadata) = save_data.get("metadata") {
+                        if let Ok(info) = serde_json::from_value::<SavedRouteInfo>(metadata.clone()) {
+                            routes.push(info);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Trier par date (plus récent en premier)
+    routes.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
+
+    Ok(Json(routes))
 }

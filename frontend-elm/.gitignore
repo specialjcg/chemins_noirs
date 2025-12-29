@@ -1,0 +1,27 @@
+# Elm
+elm-stuff/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Build
+*.js.map
+*.css.map
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
