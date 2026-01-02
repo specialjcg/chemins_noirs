@@ -25,9 +25,17 @@ async fn route_handler(
     tracing::info!("Route request: {:?} -> {:?}", req.start, req.end);
 
     // Calculate bounding box with margin for the route
-    // Reduced margin for faster graph generation (1km is enough for most routes)
-    let bbox = BoundingBox::from_route(req.start, req.end, 1.0); // 1km margin
-    let graph = prepare_graph_for_bbox(&config, bbox)?;
+    // Optimized: 5km margin as requested by user
+    let bbox = BoundingBox::from_route(req.start, req.end, 5.0); // 5km margin
+
+    // Use spawn_blocking to avoid blocking async runtime during graph generation
+    let config_clone = config.clone();
+    let graph = tokio::task::spawn_blocking(move || {
+        prepare_graph_for_bbox(&config_clone, bbox)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task spawn error: {}", e)))??;
+
     let engine = engine_from_graph(&config, &graph, "temp_route.json")?;
 
     tracing::info!("Engine created from partial graph");
@@ -112,7 +120,15 @@ async fn loop_route_handler(
 
     let radius = (req.target_distance_km / 2.0).max(2.0) * 1.4 + req.distance_tolerance_km.max(1.0);
     let bbox = bbox_from_center(req.start, radius);
-    let graph = prepare_graph_for_bbox(&config, bbox)?;
+
+    // Use spawn_blocking for graph generation
+    let config_clone = config.clone();
+    let graph = tokio::task::spawn_blocking(move || {
+        prepare_graph_for_bbox(&config_clone, bbox)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task spawn error: {}", e)))??;
+
     let engine = engine_from_graph(&config, &graph, "temp_loop.json")?;
 
     match loops::generate_loops(&engine, &req).await {
@@ -167,8 +183,8 @@ async fn multi_route_handler(
         max_lon = max_lon.max(coord.lon);
     }
 
-    // Add 1km margin around all points (reduced for faster graph generation)
-    let margin_deg = 1.0 / 111.0; // ~1km in degrees
+    // Add 5km margin around all points (optimized for user's use case)
+    let margin_deg = 5.0 / 111.0; // ~5km in degrees
     let bbox = BoundingBox {
         min_lat: (min_lat - margin_deg).max(-90.0),
         max_lat: (max_lat + margin_deg).min(90.0),
@@ -178,8 +194,14 @@ async fn multi_route_handler(
 
     tracing::info!("Generating single graph for bbox: {:?}", bbox);
 
-    // Generate ONE graph for all segments
-    let graph = prepare_graph_for_bbox(&config, bbox)?;
+    // Generate ONE graph for all segments using spawn_blocking
+    let config_clone = config.clone();
+    let graph = tokio::task::spawn_blocking(move || {
+        prepare_graph_for_bbox(&config_clone, bbox)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task spawn error: {}", e)))??;
+
     let engine = engine_from_graph(&config, &graph, "temp_multipoint.json")?;
 
     tracing::info!(
@@ -286,10 +308,11 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Get PBF path and cache directory from environment
+    // Get PBF path, cache directory, and tiles directory from environment
     let pbf_path =
         std::env::var("PBF_PATH").unwrap_or_else(|_| "data/rhone-alpes-251111.osm.pbf".to_string());
     let cache_dir = std::env::var("CACHE_DIR").unwrap_or_else(|_| "data/cache".to_string());
+    let tiles_dir = std::env::var("TILES_DIR").ok().map(PathBuf::from);
 
     tracing::info!(
         "Starting backend with on-demand graph generation from PBF: {}",
@@ -297,10 +320,24 @@ async fn main() {
     );
     tracing::info!("Cache directory: {}", cache_dir);
 
+    if let Some(ref tiles_path) = tiles_dir {
+        if tiles_path.exists() {
+            tracing::info!("🚀 Tiles directory found: {} (FAST MODE enabled - <10s per route)", tiles_path.display());
+        } else {
+            tracing::warn!("⚠️  Tiles directory specified but not found: {}", tiles_path.display());
+            tracing::warn!("   Run: cargo run --release --bin generate_tiles");
+        }
+    } else {
+        tracing::info!("ℹ️  No tiles directory - using PBF mode (~2min first request)");
+        tracing::info!("   To enable fast mode: export TILES_DIR=data/tiles");
+        tracing::info!("   Then run: cargo run --release --bin generate_tiles");
+    }
+
     // Create partial graph config
     let config = Arc::new(PartialGraphConfig {
         pbf_path: PathBuf::from(pbf_path),
         cache_dir: PathBuf::from(cache_dir),
+        tiles_dir,
     });
 
     // Initialize PostgreSQL database
@@ -384,29 +421,53 @@ fn prepare_graph_for_bbox(
     let cache_key = bbox.cache_key();
     let cache_path = config.cache_dir.join(format!("{}.json", cache_key));
 
+    // Check cache first
     if cache_path.exists() {
         tracing::info!("Loading cached partial graph: {}", cache_path.display());
-        GraphFile::read_from_path(&cache_path).map_err(|e| {
+        return GraphFile::read_from_path(&cache_path).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to load cache: {}", e),
             )
-        })
-    } else {
-        tracing::info!("Generating partial graph for bbox: {:?}", bbox);
-        let builder_config = GraphBuilderConfig { bbox: Some(bbox) };
-        let builder = GraphBuilder::new(builder_config);
-        let graph = builder.build_from_pbf(&config.pbf_path).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to build graph: {}", e),
-            )
-        })?;
-        std::fs::create_dir_all(&config.cache_dir).ok();
-        graph.write_to_path(&cache_path).ok();
-        tracing::info!("Cached partial graph to: {}", cache_path.display());
-        Ok(graph)
+        });
     }
+
+    // Try to use tiles if available (FAST - <10s)
+    if let Some(tiles_dir) = &config.tiles_dir {
+        if tiles_dir.exists() {
+            tracing::info!("Using tile-based graph generation (fast mode)");
+            let builder_config = GraphBuilderConfig { bbox: Some(bbox) };
+            let builder = GraphBuilder::new(builder_config);
+
+            match builder.build_from_tiles(tiles_dir, bbox) {
+                Ok(graph) => {
+                    // Cache the result
+                    std::fs::create_dir_all(&config.cache_dir).ok();
+                    graph.write_to_path(&cache_path).ok();
+                    tracing::info!("Cached tile-based graph to: {}", cache_path.display());
+                    return Ok(graph);
+                }
+                Err(e) => {
+                    tracing::warn!("Tile-based generation failed ({}), falling back to PBF", e);
+                }
+            }
+        }
+    }
+
+    // Fallback to PBF-based generation (SLOW - ~2min)
+    tracing::info!("Generating partial graph from PBF for bbox: {:?}", bbox);
+    let builder_config = GraphBuilderConfig { bbox: Some(bbox) };
+    let builder = GraphBuilder::new(builder_config);
+    let graph = builder.build_from_pbf(&config.pbf_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to build graph: {}", e),
+        )
+    })?;
+    std::fs::create_dir_all(&config.cache_dir).ok();
+    graph.write_to_path(&cache_path).ok();
+    tracing::info!("Cached partial graph to: {}", cache_path.display());
+    Ok(graph)
 }
 
 fn engine_from_graph(

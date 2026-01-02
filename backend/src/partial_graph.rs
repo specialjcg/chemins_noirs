@@ -43,6 +43,7 @@ pub struct GraphStats {
 pub struct PartialGraphConfig {
     pub pbf_path: std::path::PathBuf,
     pub cache_dir: std::path::PathBuf,
+    pub tiles_dir: Option<std::path::PathBuf>,
 }
 
 /// Handler for POST /api/graph/partial

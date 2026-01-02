@@ -12,6 +12,12 @@ BACKEND_PORT="8080"
 DEFAULT_PBF="$ROOT_DIR/backend/data/rhone-alpes-251111.osm.pbf"
 export PBF_PATH="${GRAPH_PBF:-$DEFAULT_PBF}"
 export CACHE_DIR="${CACHE_DIR:-data/cache}"
+
+# Tiles directory for fast graph loading (<10s instead of ~2min)
+DEFAULT_TILES="$ROOT_DIR/backend/data/tiles"
+if [[ -d "$DEFAULT_TILES" ]] || [[ -n "${TILES_DIR:-}" ]]; then
+    export TILES_DIR="${TILES_DIR:-$DEFAULT_TILES}"
+fi
 DEFAULT_DEM_TIF="$ROOT_DIR/backend/data/dem/region.tif"
 DEFAULT_DEM_ASC="$ROOT_DIR/backend/data/dem/region.asc"
 

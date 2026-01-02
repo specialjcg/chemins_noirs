@@ -23,8 +23,19 @@ tower-http = { version = "0.6", features = ["cors"] }
 proj = "0.27"
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "json", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
+# Performance optimizations
+kdtree = "0.7"
+lru = "0.12"
+once_cell = "1.19"
+zstd = "0.13"
+bincode = "1.3"
 
 [dev-dependencies]
 tower = { version = "0.5.2", features = ["util"] }
 hyper = "1"
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "graph_generation"
+harness = false

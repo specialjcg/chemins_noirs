@@ -9,6 +9,8 @@ use crate::{
     graph::GraphFile,
     models::{Coordinate, RouteRequest, SurfaceType},
 };
+use kdtree::KdTree;
+use kdtree::distance::squared_euclidean;
 use petgraph::{
     algo::astar,
     graph::{NodeIndex, UnGraph},
@@ -31,6 +33,8 @@ pub enum EngineError {
 pub struct RouteEngine {
     graph: UnGraph<NodeData, EdgeData>,
     nodes: Vec<NodeData>,
+    /// Spatial index for O(log N) nearest node lookup
+    spatial_index: KdTree<f64, usize, [f64; 2]>,
 }
 
 #[derive(Clone, Debug)]
@@ -63,7 +67,7 @@ impl RouteEngine {
         Self::from_graph_file(graph_file)
     }
 
-    fn from_graph_file(graph_file: GraphFile) -> Result<Self, EngineError> {
+    pub fn from_graph_file(graph_file: GraphFile) -> Result<Self, EngineError> {
         if graph_file.nodes.is_empty() {
             return Err(EngineError::EmptyGraph);
         }
@@ -105,7 +109,21 @@ impl RouteEngine {
             graph.update_edge(from, to, data);
         }
 
-        Ok(Self { graph, nodes })
+        // Build spatial index for O(log N) nearest neighbor queries
+        let spatial_index = Self::build_spatial_index(&nodes);
+
+        Ok(Self { graph, nodes, spatial_index })
+    }
+
+    /// Build KD-Tree spatial index for fast nearest neighbor queries
+    /// Complexity: O(N log N) to build, O(log N) to query
+    fn build_spatial_index(nodes: &[NodeData]) -> KdTree<f64, usize, [f64; 2]> {
+        let mut tree = KdTree::new(2);
+        for (idx, node) in nodes.iter().enumerate() {
+            // Store as [lon, lat] for geographic coordinates
+            let _ = tree.add([node.coord.lon, node.coord.lat], idx);
+        }
+        tree
     }
 
     pub fn find_path(&self, req: &RouteRequest) -> Option<Vec<Coordinate>> {
@@ -177,25 +195,27 @@ impl RouteEngine {
         )
     }
 
+    /// Find closest node using KD-Tree spatial index
+    /// Complexity: O(log N) instead of O(N) linear search
     pub fn closest_node(&self, target: Coordinate) -> Option<NodeIndex> {
         const MAX_DISTANCE_KM: f64 = 20.0; // Max 20km from target to nearest node
 
-        self.nodes
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                let da = squared_distance(a.coord, target);
-                let db = squared_distance(b.coord, target);
-                da.partial_cmp(&db).unwrap()
-            })
-            .and_then(|(idx, node)| {
-                let distance_km = straight_line_km(node.coord, target);
-                if distance_km <= MAX_DISTANCE_KM {
-                    Some(NodeIndex::new(idx))
-                } else {
-                    None
-                }
-            })
+        // Use spatial index for O(log N) lookup
+        let nearest = self.spatial_index
+            .nearest(&[target.lon, target.lat], 1, &squared_euclidean)
+            .ok()?;
+
+        if let Some((dist_sq, &idx)) = nearest.first() {
+            // Convert squared Euclidean distance (in degrees²) to km
+            // Approximation: 1 degree ≈ 111 km
+            let distance_km = dist_sq.sqrt() * 111.0;
+
+            if distance_km <= MAX_DISTANCE_KM {
+                return Some(NodeIndex::new(idx));
+            }
+        }
+
+        None
     }
 
     fn edge_cost(&self, edge: &EdgeData, weights: WeightConfig) -> f64 {
@@ -212,11 +232,7 @@ impl RouteEngine {
     }
 }
 
-fn squared_distance(a: Coordinate, b: Coordinate) -> f64 {
-    let dx = a.lon - b.lon;
-    let dy = a.lat - b.lat;
-    dx * dx + dy * dy
-}
+// Removed: squared_distance (replaced by KD-Tree spatial index)
 
 fn straight_line_km(a: Coordinate, b: Coordinate) -> f64 {
     crate::routing::haversine_km(a, b)

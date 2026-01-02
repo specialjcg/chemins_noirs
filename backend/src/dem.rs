@@ -1,9 +1,10 @@
 use std::{
     fs::File,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
 };
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -31,7 +32,7 @@ pub enum DemLoadError {
     UnexpectedCellCount { expected: usize, actual: usize },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ArcAsciiDem {
     ncols: usize,
     nrows: usize,
@@ -47,6 +48,47 @@ pub struct ArcAsciiDem {
 impl ArcAsciiDem {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, DemLoadError> {
         let path = path.as_ref();
+
+        // Check for binary cache
+        let cache_path = path.with_extension("asc.bin");
+        if cache_path.exists() {
+            // Check if cache is newer than source
+            let source_modified = std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .ok();
+            let cache_modified = std::fs::metadata(&cache_path)
+                .and_then(|m| m.modified())
+                .ok();
+
+            let cache_valid = match (source_modified, cache_modified) {
+                (Some(src), Some(cache)) => cache >= src,
+                (None, Some(_)) => true, // Can't check source, trust cache
+                _ => false,
+            };
+
+            if cache_valid {
+                tracing::info!("Loading DEM from binary cache: {}", cache_path.display());
+                return Self::from_binary_cache(&cache_path);
+            } else {
+                tracing::info!("Binary cache outdated, will regenerate");
+            }
+        }
+
+        // Load from ASCII and create binary cache
+        tracing::info!("Loading DEM from ASCII (this will take ~6 min): {}", path.display());
+        let dem = Self::from_ascii(path)?;
+
+        // Save binary cache for next time
+        if let Err(e) = dem.save_binary_cache(&cache_path) {
+            tracing::warn!("Failed to save DEM binary cache: {}", e);
+        } else {
+            tracing::info!("Saved DEM binary cache: {}", cache_path.display());
+        }
+
+        Ok(dem)
+    }
+
+    fn from_ascii(path: &Path) -> Result<Self, DemLoadError> {
         let file = File::open(path).map_err(|source| DemLoadError::Io {
             source,
             path: path.into(),
@@ -261,6 +303,39 @@ impl ArcAsciiDem {
         } else {
             Some(value)
         }
+    }
+
+    /// Load DEM from binary cache (fast - <5 seconds for 285M cells)
+    fn from_binary_cache(path: &Path) -> Result<Self, DemLoadError> {
+        let file = File::open(path).map_err(|source| DemLoadError::Io {
+            source,
+            path: path.into(),
+        })?;
+        let reader = BufReader::new(file);
+
+        bincode::deserialize_from(reader).map_err(|e| DemLoadError::Io {
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+            path: path.into(),
+        })
+    }
+
+    /// Save DEM to binary cache for fast loading
+    fn save_binary_cache(&self, path: &Path) -> Result<(), DemLoadError> {
+        let file = File::create(path).map_err(|source| DemLoadError::Io {
+            source,
+            path: path.into(),
+        })?;
+        let mut writer = BufWriter::new(file);
+
+        bincode::serialize_into(&mut writer, self).map_err(|e| DemLoadError::Io {
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+            path: path.into(),
+        })?;
+
+        writer.flush().map_err(|source| DemLoadError::Io {
+            source,
+            path: path.into(),
+        })
     }
 }
 
