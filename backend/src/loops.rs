@@ -31,6 +31,47 @@ pub enum LoopGenerationError {
     Elevation(String),
 }
 
+/// Generate loop routes using geometric waypoint placement algorithm
+///
+/// # Algorithm: Multi-Ring Radial Sampling
+///
+/// This algorithm generates closed-loop routes by:
+///
+/// ## 1. Waypoint Generation Strategy
+/// - Place intermediate waypoints on concentric circles (rings) around start
+/// - Ring distances: [0.75×, 1.0×, 1.25×] of half_target_distance
+/// - Points evenly distributed by bearing angle (2π / attempts_per_ring)
+///
+/// ## 2. Route Construction
+/// For each candidate waypoint:
+/// ```text
+/// Loop = A* (start → waypoint) + A* (waypoint → start)
+///
+/// with constraint: return path excludes outbound edges
+/// ```
+///
+/// ## 3. Candidate Filtering
+/// Accept only if:
+/// - Total distance within tolerance: |distance - target| ≤ tolerance_km
+/// - Total ascent within bounds: min_ascent ≤ ascent ≤ max_ascent
+/// - Path has ≥ 3 points (prevents degenerate loops)
+///
+/// ## 4. Optimization Parameters
+/// - `TARGET_RING_FACTORS = [0.75, 1.0, 1.25]`: Explore 3 distance scales
+/// - `MAX_LOOP_CANDIDATES = 12`: Limit results to prevent overload
+/// - Early termination when `candidate_goal` candidates found
+///
+/// # Example
+/// For a 20km loop:
+/// - Half distance = 10km
+/// - Ring 1: waypoints at ~7.5km  (0.75 × 10km)
+/// - Ring 2: waypoints at ~10km   (1.0 × 10km)
+/// - Ring 3: waypoints at ~12.5km (1.25 × 10km)
+/// - Each ring: 8-12 bearing angles tested
+///
+/// # Returns
+/// - `Ok(LoopRouteResponse)`: List of valid loop candidates sorted by quality
+/// - `Err(LoopGenerationError)`: If no valid loops found or invalid parameters
 pub async fn generate_loops(
     engine: &RouteEngine,
     req: &LoopRouteRequest,
@@ -43,7 +84,7 @@ pub async fn generate_loops(
         .distance_tolerance_km
         .max(MIN_DISTANCE_TOLERANCE_KM)
         .min(req.target_distance_km);
-    let candidate_goal = req.candidate_count.max(1).min(MAX_LOOP_CANDIDATES);
+    let candidate_goal = req.candidate_count.clamp(1, MAX_LOOP_CANDIDATES);
     let attempts_per_ring = candidate_goal.max(4);
     let half_distance = (req.target_distance_km / 2.0).max(0.5);
 
@@ -168,6 +209,23 @@ pub async fn generate_loops(
     })
 }
 
+/// Build a complete loop path: start → waypoint → start
+///
+/// # Algorithm
+/// 1. **Outbound**: A* from start to waypoint (unrestricted)
+/// 2. **Track edges**: Record all edges used in outbound path
+/// 3. **Return**: A* from waypoint to start, **excluding** outbound edges
+///
+/// This ensures the return path differs from outbound, creating a true loop.
+///
+/// # Edge Exclusion Strategy
+/// - Excluded edges get 10× cost penalty (not fully blocked)
+/// - Allows reuse as last resort if no alternative exists
+/// - Final edge to start is always allowed (to close the loop)
+///
+/// # Returns
+/// - `Some(Vec<Coordinate>)`: Complete loop if both paths found
+/// - `None`: If either outbound or return path fails
 fn build_loop_path(
     engine: &RouteEngine,
     req: &LoopRouteRequest,
@@ -266,4 +324,232 @@ fn normalize_bearing(bearing_deg: f64) -> f64 {
         value += 360.0;
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_longitude() {
+        assert_eq!(normalize_longitude(0.0), 0.0);
+        assert_eq!(normalize_longitude(180.0), 180.0);
+        assert_eq!(normalize_longitude(-180.0), -180.0);
+        assert_eq!(normalize_longitude(190.0), -170.0);
+        assert_eq!(normalize_longitude(-190.0), 170.0);
+        assert_eq!(normalize_longitude(370.0), 10.0);
+        assert_eq!(normalize_longitude(-370.0), -10.0);
+    }
+
+    #[test]
+    fn test_normalize_bearing() {
+        assert_eq!(normalize_bearing(0.0), 0.0);
+        assert_eq!(normalize_bearing(90.0), 90.0);
+        assert_eq!(normalize_bearing(180.0), 180.0);
+        assert_eq!(normalize_bearing(270.0), 270.0);
+        assert_eq!(normalize_bearing(360.0), 0.0);
+        assert_eq!(normalize_bearing(-90.0), 270.0);
+        assert_eq!(normalize_bearing(-180.0), 180.0);
+        assert_eq!(normalize_bearing(450.0), 90.0);
+    }
+
+    #[test]
+    fn test_destination_point_north() {
+        // Starting point
+        let start = Coordinate {
+            lat: 45.0,
+            lon: 5.0,
+        };
+        // Move 10km north (bearing = 0)
+        let dest = destination_point(start, 10.0, 0.0);
+
+        // At 45° latitude, 1° lat ≈ 111km
+        // So 10km north ≈ 0.09° latitude increase
+        assert!((dest.lat - 45.09).abs() < 0.01);
+        assert!((dest.lon - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_destination_point_east() {
+        let start = Coordinate {
+            lat: 45.0,
+            lon: 5.0,
+        };
+        // Move 10km east (bearing = 90°)
+        let dest = destination_point(start, 10.0, std::f64::consts::PI / 2.0);
+
+        // Should increase longitude, latitude stays roughly same
+        assert!((dest.lat - 45.0).abs() < 0.01);
+        assert!(dest.lon > 5.0);
+        assert!(dest.lon < 5.2); // ~10km at 45° latitude
+    }
+
+    #[test]
+    fn test_destination_point_south() {
+        let start = Coordinate {
+            lat: 45.0,
+            lon: 5.0,
+        };
+        // Move 10km south (bearing = 180°)
+        let dest = destination_point(start, 10.0, std::f64::consts::PI);
+
+        // Should decrease latitude
+        assert!(dest.lat < 45.0);
+        assert!((dest.lat - 44.91).abs() < 0.01);
+        assert!((dest.lon - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_destination_point_west() {
+        let start = Coordinate {
+            lat: 45.0,
+            lon: 5.0,
+        };
+        // Move 10km west (bearing = 270°)
+        let dest = destination_point(start, 10.0, 3.0 * std::f64::consts::PI / 2.0);
+
+        // Should decrease longitude
+        assert!((dest.lat - 45.0).abs() < 0.01);
+        assert!(dest.lon < 5.0);
+    }
+
+    #[test]
+    fn test_destination_point_zero_distance() {
+        let start = Coordinate {
+            lat: 45.0,
+            lon: 5.0,
+        };
+        let dest = destination_point(start, 0.0, 0.0);
+
+        // No movement (allow for floating point precision)
+        assert!((dest.lat - start.lat).abs() < 1e-10);
+        assert!((dest.lon - start.lon).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_destination_point_crosses_antimeridian() {
+        let start = Coordinate {
+            lat: 0.0,
+            lon: 179.0,
+        };
+        // Move east across antimeridian
+        let dest = destination_point(start, 200.0, std::f64::consts::PI / 2.0);
+
+        // Should wrap around to negative longitude
+        assert!(dest.lon < -170.0);
+        assert!(dest.lon > -180.0);
+    }
+
+    #[test]
+    fn test_destination_point_near_pole() {
+        let start = Coordinate {
+            lat: 89.0,
+            lon: 0.0,
+        };
+        // Move north near pole
+        let dest = destination_point(start, 100.0, 0.0);
+
+        // Should approach but not exceed 90°
+        assert!(dest.lat > 89.0);
+        assert!(dest.lat <= 90.0);
+    }
+
+    // Property-based tests using proptest
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        // Strategy for valid latitudes [-90, 90]
+        fn valid_lat() -> impl Strategy<Value = f64> {
+            -90.0..=90.0
+        }
+
+        // Strategy for valid longitudes [-180, 180]
+        fn valid_lon() -> impl Strategy<Value = f64> {
+            -180.0..=180.0
+        }
+
+        // Strategy for reasonable distances in km [0, 1000]
+        fn valid_distance() -> impl Strategy<Value = f64> {
+            0.0..=1000.0
+        }
+
+        // Strategy for bearings in radians [0, 2π]
+        fn valid_bearing() -> impl Strategy<Value = f64> {
+            0.0..=(2.0 * std::f64::consts::PI)
+        }
+
+        proptest! {
+            #[test]
+            fn prop_normalize_longitude_stays_in_range(lon in any::<f64>().prop_filter("finite", |x| x.is_finite())) {
+                let normalized = normalize_longitude(lon);
+                prop_assert!(normalized >= -180.0);
+                prop_assert!(normalized <= 180.0);
+            }
+
+            #[test]
+            fn prop_normalize_bearing_stays_in_range(bearing in any::<f64>().prop_filter("finite", |x| x.is_finite())) {
+                let normalized = normalize_bearing(bearing);
+                prop_assert!(normalized >= 0.0);
+                prop_assert!(normalized < 360.0);
+            }
+
+            #[test]
+            fn prop_destination_point_returns_valid_coords(
+                lat in valid_lat(),
+                lon in valid_lon(),
+                distance in valid_distance(),
+                bearing in valid_bearing()
+            ) {
+                let start = Coordinate { lat, lon };
+                let dest = destination_point(start, distance, bearing);
+
+                // Latitude should stay in valid range
+                prop_assert!(dest.lat >= -90.0);
+                prop_assert!(dest.lat <= 90.0);
+
+                // Longitude should stay in valid range
+                prop_assert!(dest.lon >= -180.0);
+                prop_assert!(dest.lon <= 180.0);
+            }
+
+            #[test]
+            fn prop_destination_point_zero_distance_returns_start(
+                lat in valid_lat(),
+                lon in valid_lon(),
+                bearing in valid_bearing()
+            ) {
+                let start = Coordinate { lat, lon };
+                let dest = destination_point(start, 0.0, bearing);
+
+                // Should return approximately the same point
+                prop_assert!((dest.lat - start.lat).abs() < 1e-9);
+                prop_assert!((dest.lon - start.lon).abs() < 1e-9);
+            }
+
+            #[test]
+            fn prop_normalize_longitude_idempotent(lon in valid_lon()) {
+                let normalized_once = normalize_longitude(lon);
+                let normalized_twice = normalize_longitude(normalized_once);
+                prop_assert_eq!(normalized_once, normalized_twice);
+            }
+
+            #[test]
+            fn prop_normalize_bearing_idempotent(bearing in 0.0..360.0) {
+                let normalized_once = normalize_bearing(bearing);
+                let normalized_twice = normalize_bearing(normalized_once);
+                prop_assert_eq!(normalized_once, normalized_twice);
+            }
+
+            #[test]
+            fn prop_normalize_bearing_addition_mod_360(
+                bearing in 0.0..360.0,
+                offset in 0.0..360.0
+            ) {
+                let sum: f64 = normalize_bearing(bearing + offset);
+                let expected: f64 = (bearing + offset) % 360.0;
+                prop_assert!((sum - expected).abs() < 1e-10);
+            }
+        }
+    }
 }

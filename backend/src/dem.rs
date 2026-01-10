@@ -277,11 +277,9 @@ impl ArcAsciiDem {
             _ => {
                 let mut sum = 0.0;
                 let mut count = 0;
-                for val in [q11, q21, q12, q22] {
-                    if let Some(v) = val {
-                        sum += v;
-                        count += 1;
-                    }
+                for v in [q11, q21, q12, q22].into_iter().flatten() {
+                    sum += v;
+                    count += 1;
                 }
                 if count > 0 {
                     Some(sum / count as f64)
@@ -311,9 +309,14 @@ impl ArcAsciiDem {
             source,
             path: path.into(),
         })?;
-        let reader = BufReader::new(file);
+        let mut reader = BufReader::new(file);
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut bytes).map_err(|source| DemLoadError::Io {
+            source,
+            path: path.into(),
+        })?;
 
-        bincode::deserialize_from(reader).map_err(|e| DemLoadError::Io {
+        postcard::from_bytes(&bytes).map_err(|e| DemLoadError::Io {
             source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
             path: path.into(),
         })
@@ -325,10 +328,14 @@ impl ArcAsciiDem {
             source,
             path: path.into(),
         })?;
-        let mut writer = BufWriter::new(file);
-
-        bincode::serialize_into(&mut writer, self).map_err(|e| DemLoadError::Io {
+        let bytes = postcard::to_allocvec(self).map_err(|e| DemLoadError::Io {
             source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+            path: path.into(),
+        })?;
+
+        let mut writer = BufWriter::new(file);
+        std::io::Write::write_all(&mut writer, &bytes).map_err(|source| DemLoadError::Io {
+            source,
             path: path.into(),
         })?;
 
@@ -343,7 +350,7 @@ impl ArcAsciiDem {
 fn wgs84_to_lambert93(lat: f64, lon: f64) -> Option<(f64, f64)> {
     use std::cell::RefCell;
     thread_local! {
-        static PROJ: RefCell<Option<proj::Proj>> = RefCell::new(None);
+        static PROJ: RefCell<Option<proj::Proj>> = const { RefCell::new(None) };
     }
 
     PROJ.with(|proj_cell| {

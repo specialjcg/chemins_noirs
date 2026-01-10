@@ -53,7 +53,7 @@ fn persist_cache(bounds: &RouteBounds, mesh: &TerrainMesh) -> io::Result<()> {
 pub async fn build_terrain_mesh(
     path: &[Coordinate],
 ) -> Result<TerrainMesh, Box<dyn std::error::Error>> {
-    build_terrain_mesh_with_fetch(path, |coords| get_elevations(coords)).await
+    build_terrain_mesh_with_fetch(path, get_elevations).await
 }
 
 async fn build_terrain_mesh_with_fetch<F, Fut>(

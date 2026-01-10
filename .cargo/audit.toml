@@ -1,0 +1,25 @@
+# cargo-audit configuration
+# Documentation: https://docs.rs/cargo-audit/latest/cargo_audit/
+
+[advisories]
+# Ignored advisories with justification
+
+# RUSTSEC-2023-0071: RSA timing attack (Marvin Attack)
+# - Severity: Medium (5.9/10)
+# - Dependency chain: rsa 0.9.10 <- sqlx-mysql <- sqlx-macros-core <- sqlx-macros <- sqlx
+# - Justification: This is a transitive dependency from sqlx-macros. We only use PostgreSQL
+#   in production, not MySQL. The rsa crate is never executed in our code path.
+# - Mitigation: PostgreSQL driver (sqlx-postgres) does not use MySQL-specific encryption.
+# - Status: No upstream fix available. Will re-evaluate when sqlx 0.9+ is released.
+ignore = [
+    "RUSTSEC-2023-0071",
+]
+
+# RUSTSEC-2023-0089: atomic-polyfill unmaintained
+# - Dependency chain: atomic-polyfill <- heapless <- postcard
+# - Justification: Low-risk unmaintained crate (not a security vulnerability).
+#   Used only for binary serialization of DEM cache data (offline processing).
+# - Mitigation: postcard is actively maintained and will likely migrate away from heapless.
+# - Status: Monitoring. Will migrate to alternative serialization if needed.
+# NOTE: Commented out to keep visibility in audit reports
+# "RUSTSEC-2023-0089",

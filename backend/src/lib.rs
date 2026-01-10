@@ -198,8 +198,8 @@ async fn save_route_handler(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let save_dir = PathBuf::from("backend/data/saved_routes");
 
-    // Créer le répertoire s'il n'existe pas
-    if let Err(e) = std::fs::create_dir_all(&save_dir) {
+    // Créer le répertoire s'il n'existe pas (async I/O)
+    if let Err(e) = tokio::fs::create_dir_all(&save_dir).await {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -210,7 +210,7 @@ async fn save_route_handler(
 
     // Générer un nom de fichier unique avec timestamp
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let sanitized_name = req.name.replace(' ', "_").replace('/', "_");
+    let sanitized_name = req.name.replace([' ', '/'], "_");
     let filename = format!("{}_{}.json", timestamp, sanitized_name);
     let file_path = save_dir.join(&filename);
 
@@ -238,7 +238,7 @@ async fn save_route_handler(
         )
     })?;
 
-    std::fs::write(&file_path, json_str).map_err(|e| {
+    tokio::fs::write(&file_path, json_str).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -259,8 +259,32 @@ async fn load_route_handler(
     State(_state): State<AppState>,
     Query(query): Query<LoadRouteQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    // Validate filename to prevent path traversal attacks
+    if query.filename.contains("..") || query.filename.contains('/') || query.filename.contains('\\') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                message: "Invalid filename: path traversal characters not allowed".to_string(),
+            }),
+        ));
+    }
+
     let save_dir = PathBuf::from("backend/data/saved_routes");
     let file_path = save_dir.join(&query.filename);
+
+    // Additional security: verify the resolved path is still within save_dir
+    if let Ok(canonical_path) = file_path.canonicalize() {
+        if let Ok(canonical_dir) = save_dir.canonicalize() {
+            if !canonical_path.starts_with(canonical_dir) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError {
+                        message: "Invalid filename: path escapes save directory".to_string(),
+                    }),
+                ));
+            }
+        }
+    }
 
     // Vérifier si le fichier existe
     if !file_path.exists() {
@@ -272,8 +296,8 @@ async fn load_route_handler(
         ));
     }
 
-    // Lire et désérialiser
-    let json_str = std::fs::read_to_string(&file_path).map_err(|e| {
+    // Lire et désérialiser (async I/O)
+    let json_str = tokio::fs::read_to_string(&file_path).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -318,8 +342,8 @@ async fn list_routes_handler(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let save_dir = PathBuf::from("backend/data/saved_routes");
 
-    // Créer le répertoire s'il n'existe pas
-    if let Err(e) = std::fs::create_dir_all(&save_dir) {
+    // Créer le répertoire s'il n'existe pas (async I/O)
+    if let Err(e) = tokio::fs::create_dir_all(&save_dir).await {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -328,8 +352,8 @@ async fn list_routes_handler(
         ));
     }
 
-    // Lire tous les fichiers JSON dans le répertoire
-    let entries = std::fs::read_dir(&save_dir).map_err(|e| {
+    // Lire tous les fichiers JSON dans le répertoire (async I/O)
+    let mut entries = tokio::fs::read_dir(&save_dir).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -340,22 +364,20 @@ async fn list_routes_handler(
 
     let mut routes = Vec::new();
 
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError {
-                    message: format!("Failed to read directory entry: {}", e),
-                }),
-            )
-        })?;
-
+    while let Some(entry) = entries.next_entry().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                message: format!("Failed to read directory entry: {}", e),
+            }),
+        )
+    })? {
         let path = entry.path();
 
         // Ne traiter que les fichiers JSON
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            // Lire le fichier
-            if let Ok(json_str) = std::fs::read_to_string(&path) {
+            // Lire le fichier (async I/O)
+            if let Ok(json_str) = tokio::fs::read_to_string(&path).await {
                 if let Ok(save_data) = serde_json::from_str::<serde_json::Value>(&json_str) {
                     // Extraire les métadonnées
                     if let Some(metadata) = save_data.get("metadata") {

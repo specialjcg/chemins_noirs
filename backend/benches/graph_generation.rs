@@ -76,20 +76,17 @@ fn benchmark_cache_performance(c: &mut Criterion) {
 
 fn benchmark_closest_node(c: &mut Criterion) {
     use backend::engine::RouteEngine;
-    use std::fs::File;
+    
 
     let graph_path = PathBuf::from("data/cache");
 
     // Try to find any cached graph file
     let graph_files: Vec<PathBuf> = std::fs::read_dir(&graph_path)
-        .ok()
-        .and_then(|entries| {
-            Some(entries
+        .ok().map(|entries| entries
                 .filter_map(|e| e.ok())
                 .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
                 .map(|e| e.path())
                 .collect())
-        })
         .unwrap_or_default();
 
     if graph_files.is_empty() {
@@ -99,11 +96,9 @@ fn benchmark_closest_node(c: &mut Criterion) {
 
     let engine = RouteEngine::from_file(&graph_files[0]).expect("Failed to load graph");
 
-    let test_coords = vec![
-        Coordinate { lat: 45.9306, lon: 4.5779 },
+    let test_coords = [Coordinate { lat: 45.9306, lon: 4.5779 },
         Coordinate { lat: 45.9334, lon: 4.5783 },
-        Coordinate { lat: 45.9350, lon: 4.5790 },
-    ];
+        Coordinate { lat: 45.9350, lon: 4.5790 }];
 
     let mut group = c.benchmark_group("closest_node_kdtree");
 

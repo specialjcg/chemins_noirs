@@ -133,7 +133,7 @@ fn smooth_elevation_profile(path: &[Coordinate], raw: &[Option<f64>]) -> Vec<Opt
             } else {
                 0.0
             };
-            let max_delta = (dist_m * 0.2).max(8.0).min(30.0); // meters
+            let max_delta = (dist_m * 0.2).clamp(8.0, 30.0); // meters
             candidate = Some(current.clamp(prev - max_delta, prev + max_delta));
         }
 
@@ -238,5 +238,185 @@ mod tests {
         assert_eq!(smoothed.len(), raw.len());
         // Middle spike should be clamped close to neighbours (<= prev + MAX_DELTA)
         assert!(smoothed[2].unwrap() < 340.0);
+    }
+
+    #[test]
+    fn test_median_empty() {
+        let mut values = vec![];
+        assert_eq!(median(&mut values), None);
+    }
+
+    #[test]
+    fn test_median_single() {
+        let mut values = vec![42.0];
+        assert_eq!(median(&mut values), Some(42.0));
+    }
+
+    #[test]
+    fn test_median_odd_count() {
+        let mut values = vec![3.0, 1.0, 5.0, 2.0, 4.0];
+        assert_eq!(median(&mut values), Some(3.0));
+    }
+
+    #[test]
+    fn test_median_even_count() {
+        let mut values = vec![1.0, 4.0, 3.0, 2.0];
+        // For even count, we return the element at len/2 after sorting
+        // Sorted: [1.0, 2.0, 3.0, 4.0], len/2 = 2, so values[2] = 3.0
+        assert_eq!(median(&mut values), Some(3.0));
+    }
+
+    #[test]
+    fn test_median_with_duplicates() {
+        let mut values = vec![5.0, 5.0, 5.0, 5.0];
+        assert_eq!(median(&mut values), Some(5.0));
+    }
+
+    #[test]
+    fn test_haversine_zero_distance() {
+        let dist = haversine_m(45.0, 5.0, 45.0, 5.0);
+        assert!(dist.abs() < 0.01);
+    }
+
+    #[test]
+    fn test_haversine_1km_north() {
+        // 1km north ≈ 0.009° at any latitude
+        let dist = haversine_m(45.0, 5.0, 45.009, 5.0);
+        assert!((dist - 1000.0).abs() < 10.0); // Within 10m
+    }
+
+    #[test]
+    fn test_haversine_1km_east() {
+        // 1km east at 45° latitude
+        let dist = haversine_m(45.0, 5.0, 45.0, 5.0127);
+        assert!((dist - 1000.0).abs() < 50.0); // Within 50m (projection approximation)
+    }
+
+    #[test]
+    fn test_haversine_symmetry() {
+        let dist1 = haversine_m(45.0, 5.0, 46.0, 6.0);
+        let dist2 = haversine_m(46.0, 6.0, 45.0, 5.0);
+        assert!((dist1 - dist2).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_haversine_known_distance() {
+        // Paris (48.8566, 2.3522) to London (51.5074, -0.1278)
+        // Known distance: ~343 km
+        let dist = haversine_m(48.8566, 2.3522, 51.5074, -0.1278);
+        assert!((dist - 343_000.0).abs() < 5_000.0); // Within 5km
+    }
+
+    #[test]
+    fn test_smooth_elevation_empty() {
+        let path = vec![];
+        let raw = vec![];
+        let smoothed = smooth_elevation_profile(&path, &raw);
+        assert_eq!(smoothed.len(), 0);
+    }
+
+    #[test]
+    fn test_smooth_elevation_single_point() {
+        let path = vec![Coordinate { lat: 0.0, lon: 0.0 }];
+        let raw = vec![Some(100.0)];
+        let smoothed = smooth_elevation_profile(&path, &raw);
+        assert_eq!(smoothed.len(), 1);
+        assert_eq!(smoothed[0], Some(100.0));
+    }
+
+    #[test]
+    fn test_smooth_elevation_no_outliers() {
+        let path = vec![
+            Coordinate { lat: 0.0, lon: 0.0 },
+            Coordinate {
+                lat: 0.0,
+                lon: 0.0001,
+            },
+            Coordinate {
+                lat: 0.0,
+                lon: 0.0002,
+            },
+        ];
+        let raw = vec![Some(100.0), Some(105.0), Some(110.0)];
+        let smoothed = smooth_elevation_profile(&path, &raw);
+
+        // Should smooth values (median + clamping), length preserved
+        assert_eq!(smoothed.len(), 3);
+        // First value starts with median of first 2 values
+        assert!(smoothed[0].is_some());
+        // All values should be in reasonable range
+        for val in &smoothed {
+            let v = val.unwrap();
+            assert!(v >= 95.0 && v <= 115.0);
+        }
+    }
+
+    #[test]
+    fn test_smooth_elevation_handles_none() {
+        let path = vec![
+            Coordinate { lat: 0.0, lon: 0.0 },
+            Coordinate {
+                lat: 0.0,
+                lon: 0.0001,
+            },
+            Coordinate {
+                lat: 0.0,
+                lon: 0.0002,
+            },
+        ];
+        let raw = vec![Some(100.0), None, Some(110.0)];
+        let smoothed = smooth_elevation_profile(&path, &raw);
+
+        // Should handle None gracefully by using median of neighbors
+        assert_eq!(smoothed.len(), 3);
+        assert_eq!(smoothed[0], Some(100.0));
+        assert!(smoothed[1].is_some());
+        assert_eq!(smoothed[2], Some(110.0));
+    }
+
+    #[test]
+    fn test_smooth_elevation_gradual_ascent() {
+        let path = vec![
+            Coordinate { lat: 0.0, lon: 0.0 },
+            Coordinate {
+                lat: 0.0,
+                lon: 0.0001,
+            },
+            Coordinate {
+                lat: 0.0,
+                lon: 0.0002,
+            },
+            Coordinate {
+                lat: 0.0,
+                lon: 0.0003,
+            },
+        ];
+        let raw = vec![Some(100.0), Some(110.0), Some(120.0), Some(130.0)];
+        let smoothed = smooth_elevation_profile(&path, &raw);
+
+        // Smoothing applies clamping, so verify length and reasonable range
+        assert_eq!(smoothed.len(), 4);
+        // All values should be defined and in the original range
+        for val in &smoothed {
+            assert!(val.is_some());
+            let v = val.unwrap();
+            assert!(v >= 95.0 && v <= 135.0);
+        }
+        // First and last values should show overall ascent trend
+        assert!(smoothed.last().unwrap().unwrap() > smoothed.first().unwrap().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_create_elevation_profile_empty_path() {
+        let path = vec![];
+        let result = create_elevation_profile(&path).await;
+
+        assert!(result.is_ok());
+        let profile = result.unwrap();
+        assert_eq!(profile.elevations.len(), 0);
+        assert_eq!(profile.min_elevation, None);
+        assert_eq!(profile.max_elevation, None);
+        assert_eq!(profile.total_ascent, 0.0);
+        assert_eq!(profile.total_descent, 0.0);
     }
 }

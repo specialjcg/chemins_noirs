@@ -1,13 +1,13 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use backend::{
     database::Database,
     elevation::create_elevation_profile,
     engine::RouteEngine,
     graph::{BoundingBox, GraphBuilder, GraphBuilderConfig, GraphFile},
     loops::{self, LoopGenerationError},
-    models::{Coordinate, LoopRouteRequest, LoopRouteResponse, RouteRequest},
+    models::{ApiError, Coordinate, LoopRouteRequest, LoopRouteResponse, RouteRequest},
     partial_graph::PartialGraphConfig,
     routing::haversine_km,
     saved_routes_handlers,
@@ -191,6 +191,14 @@ async fn multi_route_handler(
         min_lon: (min_lon - margin_deg).clamp(-180.0, 180.0),
         max_lon: (max_lon + margin_deg).clamp(-180.0, 180.0),
     };
+
+    // Validate bbox size to prevent DoS attacks
+    if let Err(err_msg) = bbox.validate() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Invalid request: {}", err_msg),
+        ));
+    }
 
     tracing::info!("Generating single graph for bbox: {:?}", bbox);
 
@@ -471,19 +479,14 @@ fn prepare_graph_for_bbox(
 }
 
 fn engine_from_graph(
-    config: &PartialGraphConfig,
+    _config: &PartialGraphConfig,
     graph: &GraphFile,
-    temp_name: &str,
+    _temp_name: &str,
 ) -> Result<RouteEngine, (StatusCode, String)> {
-    let temp_path = config.cache_dir.join(temp_name);
-    graph.write_to_path(&temp_path).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to write temp: {}", e),
-        )
-    })?;
-
-    RouteEngine::from_file(&temp_path).map_err(|e| {
+    // PERFORMANCE FIX: Create engine directly from GraphFile in memory
+    // instead of writing to disk (slow for large graphs with millions of waypoints)
+    // and reading it back. This eliminates multi-GB JSON serialization bottleneck.
+    RouteEngine::from_graph_file(graph.clone()).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to create engine: {}", e),
@@ -496,10 +499,13 @@ fn bbox_from_center(center: Coordinate, radius_km: f64) -> BoundingBox {
     let cos_lat = center.lat.to_radians().cos().abs().max(0.1);
     let lon_margin = radius_km / (111.0 * cos_lat);
 
-    BoundingBox {
+    let bbox = BoundingBox {
         min_lat: (center.lat - lat_margin).max(-90.0),
         max_lat: (center.lat + lat_margin).min(90.0),
         min_lon: (center.lon - lon_margin).clamp(-180.0, 180.0),
         max_lon: (center.lon + lon_margin).clamp(-180.0, 180.0),
-    }
+    };
+
+    // Note: validation should be done by the caller if needed
+    bbox
 }

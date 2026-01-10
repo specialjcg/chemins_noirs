@@ -4,7 +4,7 @@ use std::{
     io::{self, BufReader, BufWriter, Write},
     num::NonZeroUsize,
     path::Path,
-    sync::Mutex,
+    sync::RwLock,
 };
 
 use lru::LruCache;
@@ -14,9 +14,81 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::{Coordinate, SurfaceType};
 
+/// Type aliases for complex OSM data structures
+type OsmTags = Vec<(String, String)>;
+type NodeIds = Vec<i64>;
+type OsmWay = (i64, NodeIds, OsmTags);
+type NodeCoordMap = HashMap<i64, (f64, f64, Option<f64>)>;
+
+/// Trait for graph caching abstraction (Dependency Inversion Principle)
+///
+/// This allows different caching strategies to be implemented and tested:
+/// - `LruGraphCache`: In-memory LRU with RwLock (default)
+/// - `RedisGraphCache`: Distributed cache for multi-instance deployments
+/// - `NoOpCache`: Testing/benchmarking without caching overhead
+///
+/// # Example
+/// ```ignore
+/// struct CustomCache;
+/// impl GraphCache for CustomCache {
+///     fn get(&self, key: &str) -> Option<GraphFile> { /* ... */ }
+///     fn put(&self, key: String, graph: GraphFile) { /* ... */ }
+/// }
+/// ```
+pub trait GraphCache: Send + Sync {
+    /// Retrieve cached graph by key (non-blocking read)
+    fn get(&self, key: &str) -> Option<GraphFile>;
+
+    /// Store graph in cache (write operation)
+    fn put(&self, key: String, graph: GraphFile);
+}
+
 /// Global LRU cache for partial graphs (max 20 graphs, ~280MB with 14MB each)
-static GRAPH_CACHE: Lazy<Mutex<LruCache<String, GraphFile>>> =
-    Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(20).unwrap())));
+///
+/// Performance optimization: Uses RwLock instead of Mutex for concurrent reads
+/// - Read path: RwLock::read() + peek() allows parallel cache lookups
+/// - Write path: RwLock::write() + put() for exclusive cache updates
+/// - Benefit: Multiple route requests can check cache simultaneously
+static GRAPH_CACHE: Lazy<RwLock<LruCache<String, GraphFile>>> =
+    Lazy::new(|| RwLock::new(LruCache::new(NonZeroUsize::new(20).unwrap())));
+
+/// Default LRU-based implementation of GraphCache
+pub struct LruGraphCache;
+
+impl GraphCache for LruGraphCache {
+    fn get(&self, key: &str) -> Option<GraphFile> {
+        GRAPH_CACHE
+            .read()
+            .ok()
+            .and_then(|cache| cache.peek(key).cloned())
+    }
+
+    fn put(&self, key: String, graph: GraphFile) {
+        if let Ok(mut cache) = GRAPH_CACHE.write() {
+            cache.put(key, graph);
+        }
+    }
+}
+
+/// No-op cache implementation for testing/benchmarking
+///
+/// Always returns cache miss, never stores anything.
+/// Useful for:
+/// - Performance benchmarks (measure pure algorithm performance)
+/// - Integration tests (ensure correct behavior without caching)
+#[cfg(test)]
+pub struct NoOpCache;
+
+#[cfg(test)]
+impl GraphCache for NoOpCache {
+    fn get(&self, _key: &str) -> Option<GraphFile> {
+        None // Always miss
+    }
+
+    fn put(&self, _key: String, _graph: GraphFile) {
+        // Discard silently
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GraphFile {
@@ -41,6 +113,10 @@ pub struct EdgeRecord {
     pub to: u64,
     pub surface: SurfaceType,
     pub length_m: f64,
+    /// Intermediate waypoints between from and to nodes (excluding from/to themselves)
+    /// This preserves the actual geometry of the road
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waypoints: Vec<Coordinate>,
 }
 
 impl GraphFile {
@@ -99,11 +175,35 @@ pub struct BoundingBox {
 }
 
 impl BoundingBox {
+    /// Maximum allowed bounding box area in km² to prevent DoS attacks
+    /// ~100km × 100km = reasonable maximum for a single route request
+    const MAX_BBOX_AREA_KM2: f64 = 10_000.0;
+
     pub fn contains(&self, coord: Coordinate) -> bool {
         coord.lat >= self.min_lat
             && coord.lat <= self.max_lat
             && coord.lon >= self.min_lon
             && coord.lon <= self.max_lon
+    }
+
+    /// Validate that the bounding box is not excessively large (DoS protection)
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let lat_diff = self.max_lat - self.min_lat;
+        let lon_diff = self.max_lon - self.min_lon;
+
+        // Approximate area calculation (1 degree lat ≈ 111km, lon varies with latitude)
+        let avg_lat = (self.min_lat + self.max_lat) / 2.0;
+        let area_km2 = lat_diff * 111.0 * lon_diff * (111.0 * avg_lat.to_radians().cos());
+
+        if area_km2 > Self::MAX_BBOX_AREA_KM2 {
+            return Err("Bounding box too large (max 10,000 km²)");
+        }
+
+        if lat_diff <= 0.0 || lon_diff <= 0.0 {
+            return Err("Invalid bounding box: min must be less than max");
+        }
+
+        Ok(())
     }
 
     /// Create a bounding box from two points with a margin in kilometers
@@ -275,9 +375,9 @@ impl NodeCollectionState {
 /// Pre-filtered PBF data stored in memory for fast processing
 struct FilteredPbfData {
     /// All nodes in or near the bbox: osm_id -> (lat, lon, elevation)
-    nodes: HashMap<i64, (f64, f64, Option<f64>)>,
+    nodes: NodeCoordMap,
     /// All highway ways touching the bbox: (way_id, node_refs, tags)
-    ways: Vec<(i64, Vec<i64>, Vec<(String, String)>)>,
+    ways: Vec<OsmWay>,
 }
 
 impl GraphBuilder {
@@ -289,10 +389,13 @@ impl GraphBuilder {
     pub fn build_from_pbf(&self, path: impl AsRef<Path>) -> Result<GraphFile, GraphBuildError> {
         let path = path.as_ref();
 
-        // IMPORTANT: Use simple 4-pass approach for reliability
-        // The optimized version has bugs with node ID mapping
-        // For tile generation, we need correctness over speed
+        // Use optimized version with OSM waypoints
+        // If bbox is set, use optimized single-pass filtering
+        if let Some(bbox) = self.config.bbox {
+            return self.build_from_pbf_optimized(path, bbox);
+        }
 
+        // Fallback to simple 4-pass approach (for full PBF without bbox)
         // First pass: collect nodes
         let node_state = self.collect_nodes(path)?;
 
@@ -440,9 +543,10 @@ impl GraphBuilder {
         let cache_key = bbox.cache_key();
 
         // Check in-memory LRU cache first (fastest)
-        if let Ok(mut cache) = GRAPH_CACHE.lock() {
-            if let Some(graph) = cache.get(&cache_key) {
-                tracing::debug!("LRU cache hit for bbox {:?}", bbox);
+        // Use peek() for lock-free concurrent reads (doesn't update LRU order)
+        if let Ok(cache) = GRAPH_CACHE.read() {
+            if let Some(graph) = cache.peek(&cache_key) {
+                tracing::debug!("LRU cache hit (peek) for bbox {:?}", bbox);
                 return Ok(graph.clone());
             }
         }
@@ -460,7 +564,7 @@ impl GraphBuilder {
             let graph = GraphFile::read_compressed(&cache_path_compressed).map_err(GraphBuildError::Io)?;
 
             // Populate LRU cache
-            if let Ok(mut cache) = GRAPH_CACHE.lock() {
+            if let Ok(mut cache) = GRAPH_CACHE.write() {
                 cache.put(cache_key.clone(), graph.clone());
             }
 
@@ -470,7 +574,7 @@ impl GraphBuilder {
             let graph = GraphFile::read_from_path(&cache_path_uncompressed).map_err(GraphBuildError::Io)?;
 
             // Populate LRU cache
-            if let Ok(mut cache) = GRAPH_CACHE.lock() {
+            if let Ok(mut cache) = GRAPH_CACHE.write() {
                 cache.put(cache_key.clone(), graph.clone());
             }
 
@@ -496,7 +600,7 @@ impl GraphBuilder {
         );
 
         // Populate LRU cache
-        if let Ok(mut cache) = GRAPH_CACHE.lock() {
+        if let Ok(mut cache) = GRAPH_CACHE.write() {
             cache.put(cache_key, graph.clone());
         }
 
@@ -515,7 +619,7 @@ impl GraphBuilder {
 
         // Collect everything in a single pass
         let (nodes_in_bbox, ways_data) = reader.par_map_reduce(
-            |element| -> (HashMap<i64, (f64, f64, Option<f64>)>, Vec<(i64, Vec<i64>, Vec<(String, String)>)>) {
+            |element| -> (NodeCoordMap, Vec<OsmWay>) {
                 match element {
                     Element::Node(node) => {
                         let lat = node.lat();
@@ -670,44 +774,77 @@ impl GraphBuilder {
             node_state.nodes.len()
         );
 
-        // Build edges from ways
+        // Build edges from ways WITH intermediate waypoints
         let mut edges = Vec::new();
 
-        for (_, node_refs, tags) in data.ways {
-            let surface = infer_surface(&tags);
+        // First, identify all intersection nodes across all ways
+        let intersections = identify_intersection_nodes(&data.ways);
 
-            for window in node_refs.windows(2) {
-                let from_osm = window[0];
-                let to_osm = window[1];
+        tracing::debug!(
+            "Identified {} intersection nodes from {} ways",
+            intersections.len(),
+            data.ways.len()
+        );
 
-                if let (Some(&from_id), Some(&to_id)) = (
-                    node_state.osm_to_graph_id.get(&from_osm),
-                    node_state.osm_to_graph_id.get(&to_osm),
-                ) {
-                    // Bounds check to prevent panic
-                    if (from_id as usize) >= node_state.coords.len() || (to_id as usize) >= node_state.coords.len() {
-                        tracing::warn!(
-                            "Invalid node ID: from_id={}, to_id={}, coords.len()={}",
-                            from_id,
-                            to_id,
-                            node_state.coords.len()
-                        );
-                        continue;
+        // For each way, split it into segments between intersections
+        let ways_count = data.ways.len();
+
+        for (_, node_refs, tags) in &data.ways {
+            if node_refs.len() < 2 {
+                continue;
+            }
+
+            let surface = infer_surface(tags);
+
+            // Find intersection indices in this way
+            let mut segment_start = 0;
+
+            for (i, &node_osm_id) in node_refs.iter().enumerate() {
+                // If this node is an intersection (and not the first node)
+                if i > segment_start && intersections.contains(&node_osm_id) {
+                    // Create edge from segment_start to i (inclusive)
+                    let segment = &node_refs[segment_start..=i];
+
+                    if let Some(edge) = build_edge_with_waypoints(
+                        segment,
+                        surface,
+                        &node_state.osm_to_graph_id,
+                        &node_state.coords,
+                    ) {
+                        edges.push(edge);
                     }
 
-                    let from_coord = node_state.coords[from_id as usize];
-                    let to_coord = node_state.coords[to_id as usize];
-                    let length_m = crate::routing::haversine_km(from_coord, to_coord) * 1000.0;
+                    // Start new segment from this intersection
+                    segment_start = i;
+                }
+            }
 
-                    edges.push(EdgeRecord {
-                        from: from_id,
-                        to: to_id,
-                        surface,
-                        length_m,
-                    });
+            // Handle last segment if it wasn't closed
+            if segment_start < node_refs.len() - 1 {
+                let segment = &node_refs[segment_start..];
+
+                if let Some(edge) = build_edge_with_waypoints(
+                    segment,
+                    surface,
+                    &node_state.osm_to_graph_id,
+                    &node_state.coords,
+                ) {
+                    edges.push(edge);
                 }
             }
         }
+
+        let edges_with_waypoints = edges.iter().filter(|e| !e.waypoints.is_empty()).count();
+        let total_waypoints: usize = edges.iter().map(|e| e.waypoints.len()).sum();
+
+        tracing::info!(
+            "Built {} edges from {} ways: {} edges have waypoints ({:.1}%), {} total waypoints",
+            edges.len(),
+            ways_count,
+            edges_with_waypoints,
+            (edges_with_waypoints as f64 / edges.len() as f64) * 100.0,
+            total_waypoints
+        );
 
         Ok(GraphFile {
             nodes: node_state.nodes,
@@ -998,6 +1135,7 @@ fn create_edge_record(
         to: *to,
         surface,
         length_m: length_km * 1000.0,
+        waypoints: Vec::new(), // No intermediate waypoints for now
     })
 }
 
@@ -1059,4 +1197,283 @@ fn extract_elevation(tags: &[(&str, &str)]) -> Option<f64> {
     tags.iter()
         .find(|(k, _)| *k == "ele")
         .and_then(|(_, v)| v.parse::<f64>().ok())
+}
+
+/// Identify intersection nodes in OSM ways
+/// A node is an intersection if:
+/// - It appears in more than one way (crossroad)
+/// - OR it's an endpoint (start/end) of a way
+///
+/// This is used to determine where to create graph edges with intermediate waypoints.
+fn identify_intersection_nodes(ways: &[OsmWay]) -> std::collections::HashSet<i64> {
+    use std::collections::{HashMap, HashSet};
+
+    // Count how many times each node appears
+    let mut node_count: HashMap<i64, usize> = HashMap::new();
+    let mut endpoints: HashSet<i64> = HashSet::new();
+
+    for (_, node_refs, _) in ways {
+        if node_refs.is_empty() {
+            continue;
+        }
+
+        // Mark endpoints
+        if let Some(&first) = node_refs.first() {
+            endpoints.insert(first);
+        }
+        if let Some(&last) = node_refs.last() {
+            endpoints.insert(last);
+        }
+
+        // Count all nodes
+        for &node_id in node_refs {
+            *node_count.entry(node_id).or_insert(0) += 1;
+        }
+    }
+
+    // A node is an intersection if it appears in multiple ways OR is an endpoint
+    let mut intersections = HashSet::new();
+    for (&node_id, &count) in &node_count {
+        if count > 1 || endpoints.contains(&node_id) {
+            intersections.insert(node_id);
+        }
+    }
+
+    intersections
+}
+
+/// Build an edge with intermediate waypoints from a segment of OSM nodes
+/// Returns None if the segment is invalid (< 2 nodes, nodes not found, etc.)
+fn build_edge_with_waypoints(
+    node_refs: &[i64],
+    surface: SurfaceType,
+    osm_to_graph: &HashMap<i64, u64>,
+    coords: &[Coordinate],
+) -> Option<EdgeRecord> {
+    if node_refs.len() < 2 {
+        return None;
+    }
+
+    let first_osm = node_refs[0];
+    let last_osm = node_refs[node_refs.len() - 1];
+
+    // Get graph IDs for start and end
+    let from_id = *osm_to_graph.get(&first_osm)?;
+    let to_id = *osm_to_graph.get(&last_osm)?;
+
+    // Bounds check
+    if (from_id as usize) >= coords.len() || (to_id as usize) >= coords.len() {
+        return None;
+    }
+
+    let from_coord = coords[from_id as usize];
+    let to_coord = coords[to_id as usize];
+
+    // Collect intermediate waypoints (excluding first and last)
+    let waypoints: Vec<Coordinate> = node_refs[1..node_refs.len() - 1]
+        .iter()
+        .filter_map(|&osm_id| {
+            let graph_id = *osm_to_graph.get(&osm_id)?;
+            if (graph_id as usize) < coords.len() {
+                Some(coords[graph_id as usize])
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Calculate total length along the waypoints
+    let mut length_m = 0.0;
+    let mut prev_coord = from_coord;
+
+    for &waypoint in &waypoints {
+        length_m += crate::routing::haversine_km(prev_coord, waypoint) * 1000.0;
+        prev_coord = waypoint;
+    }
+    length_m += crate::routing::haversine_km(prev_coord, to_coord) * 1000.0;
+
+    Some(EdgeRecord {
+        from: from_id,
+        to: to_id,
+        surface,
+        length_m,
+        waypoints,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_identify_intersections_simple_way() {
+        // Simple way with 5 nodes: only endpoints should be intersections
+        let ways = vec![
+            (1, vec![10, 20, 30, 40, 50], vec![]),
+        ];
+
+        let intersections = identify_intersection_nodes(&ways);
+
+        // Should have 2 intersections: start (10) and end (50)
+        assert_eq!(intersections.len(), 2);
+        assert!(intersections.contains(&10));
+        assert!(intersections.contains(&50));
+        assert!(!intersections.contains(&20));
+        assert!(!intersections.contains(&30));
+        assert!(!intersections.contains(&40));
+    }
+
+    #[test]
+    fn test_identify_intersections_t_junction() {
+        // T-junction: way1 crosses way2 at node 30
+        let ways = vec![
+            (1, vec![10, 20, 30, 40, 50], vec![]),
+            (2, vec![60, 70, 30, 80], vec![]),
+        ];
+
+        let intersections = identify_intersection_nodes(&ways);
+
+        // Should have 7 intersections:
+        // - All endpoints: 10, 50, 60, 80
+        // - Node 30 (appears in both ways)
+        assert!(intersections.contains(&10)); // endpoint way1
+        assert!(intersections.contains(&50)); // endpoint way1
+        assert!(intersections.contains(&60)); // endpoint way2
+        assert!(intersections.contains(&80)); // endpoint way2
+        assert!(intersections.contains(&30)); // crossroad
+
+        // Non-intersection nodes
+        assert!(!intersections.contains(&20));
+        assert!(!intersections.contains(&40));
+        assert!(!intersections.contains(&70));
+    }
+
+    #[test]
+    fn test_identify_intersections_empty_ways() {
+        let ways: Vec<OsmWay> = vec![];
+        let intersections = identify_intersection_nodes(&ways);
+        assert_eq!(intersections.len(), 0);
+    }
+
+    #[test]
+    fn test_identify_intersections_single_node_way() {
+        // Way with only one node (edge case)
+        let ways = vec![
+            (1, vec![10], vec![]),
+        ];
+
+        let intersections = identify_intersection_nodes(&ways);
+
+        // Single node is both start and end, so it's an intersection
+        assert_eq!(intersections.len(), 1);
+        assert!(intersections.contains(&10));
+    }
+
+    #[test]
+    fn test_build_edge_with_waypoints_two_nodes() {
+        // Segment with 2 nodes (no intermediate waypoints)
+        let node_refs = vec![10, 20];
+
+        let mut osm_to_graph = HashMap::new();
+        osm_to_graph.insert(10, 0);
+        osm_to_graph.insert(20, 1);
+
+        let coords = vec![
+            Coordinate { lat: 45.0, lon: 4.0 },
+            Coordinate { lat: 45.01, lon: 4.01 },
+        ];
+
+        let edge = build_edge_with_waypoints(
+            &node_refs,
+            SurfaceType::Paved,
+            &osm_to_graph,
+            &coords,
+        ).expect("Should create edge");
+
+        assert_eq!(edge.from, 0);
+        assert_eq!(edge.to, 1);
+        assert_eq!(edge.waypoints.len(), 0); // No intermediate waypoints
+        assert!(edge.length_m > 0.0);
+    }
+
+    #[test]
+    fn test_build_edge_with_waypoints_five_nodes() {
+        // Segment with 5 nodes (3 intermediate waypoints)
+        let node_refs = vec![10, 20, 30, 40, 50];
+
+        let mut osm_to_graph = HashMap::new();
+        osm_to_graph.insert(10, 0);
+        osm_to_graph.insert(20, 1);
+        osm_to_graph.insert(30, 2);
+        osm_to_graph.insert(40, 3);
+        osm_to_graph.insert(50, 4);
+
+        let coords = vec![
+            Coordinate { lat: 45.0, lon: 4.0 },
+            Coordinate { lat: 45.01, lon: 4.01 },
+            Coordinate { lat: 45.02, lon: 4.02 },
+            Coordinate { lat: 45.03, lon: 4.03 },
+            Coordinate { lat: 45.04, lon: 4.04 },
+        ];
+
+        let edge = build_edge_with_waypoints(
+            &node_refs,
+            SurfaceType::Trail,
+            &osm_to_graph,
+            &coords,
+        ).expect("Should create edge");
+
+        assert_eq!(edge.from, 0);
+        assert_eq!(edge.to, 4);
+        assert_eq!(edge.waypoints.len(), 3); // 3 intermediate waypoints
+
+        // Check waypoints are correct
+        assert_eq!(edge.waypoints[0].lat, 45.01);
+        assert_eq!(edge.waypoints[1].lat, 45.02);
+        assert_eq!(edge.waypoints[2].lat, 45.03);
+
+        // Length should be sum of segments
+        assert!(edge.length_m > 0.0);
+    }
+
+    #[test]
+    fn test_build_edge_with_waypoints_invalid() {
+        // Test with less than 2 nodes
+        let node_refs = vec![10];
+        let osm_to_graph = HashMap::new();
+        let coords = vec![Coordinate { lat: 45.0, lon: 4.0 }];
+
+        let edge = build_edge_with_waypoints(
+            &node_refs,
+            SurfaceType::Paved,
+            &osm_to_graph,
+            &coords,
+        );
+
+        assert!(edge.is_none());
+    }
+
+    #[test]
+    fn test_build_edge_with_waypoints_missing_node() {
+        // Test with node not in osm_to_graph mapping
+        let node_refs = vec![10, 20];
+
+        let mut osm_to_graph = HashMap::new();
+        osm_to_graph.insert(10, 0);
+        // 20 is missing
+
+        let coords = vec![
+            Coordinate { lat: 45.0, lon: 4.0 },
+            Coordinate { lat: 45.01, lon: 4.01 },
+        ];
+
+        let edge = build_edge_with_waypoints(
+            &node_refs,
+            SurfaceType::Paved,
+            &osm_to_graph,
+            &coords,
+        );
+
+        assert!(edge.is_none());
+    }
 }
