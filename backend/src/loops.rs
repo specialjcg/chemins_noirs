@@ -323,6 +323,10 @@ fn normalize_bearing(bearing_deg: f64) -> f64 {
     if value < 0.0 {
         value += 360.0;
     }
+    // Handle floating-point edge case where result equals 360.0
+    if value >= 360.0 {
+        value = 0.0;
+    }
     value
 }
 
