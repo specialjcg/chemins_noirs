@@ -171,15 +171,12 @@ fi
 # Wait a bit for backend to start
 sleep 2
 
-# Build and serve Elm frontend in production mode (without debugger)
-echo "Building Elm frontend for production..."
-(cd "$FRONTEND_DIR" && npm run build)
-
-echo "Starting Elm frontend production server on http://localhost:$FRONTEND_PORT ..."
-(cd "$FRONTEND_DIR" && npm run preview -- --port $FRONTEND_PORT --host) &
+# Start Elm frontend in development mode (with proxy)
+echo "Starting Elm frontend development server on http://localhost:$FRONTEND_PORT ..."
+(cd "$FRONTEND_DIR" && npm run dev) &
 FRONTEND_PID=$!
 
-printf 'Elm frontend server started with PID %s on http://localhost:%s\n' "$FRONTEND_PID" "$FRONTEND_PORT"
+printf 'Elm frontend dev server started with PID %s on http://localhost:%s\n' "$FRONTEND_PID" "$FRONTEND_PORT"
 echo ""
 echo "✅ Application ready!"
 echo "   Frontend (Elm): http://localhost:$FRONTEND_PORT"
@@ -187,12 +184,12 @@ echo "   Backend (Rust): http://localhost:$BACKEND_PORT"
 echo ""
 echo "Features:"
 echo "  - 🎨 Elm MVU architecture (pure functional)"
-echo "  - 🚀 Production mode (optimized, no debugger)"
+echo "  - 🔧 Development mode (hot reload, Elm debugger)"
 echo "  - 🗺️  2D/3D map view with MapLibre GL JS"
 echo "  - 🏔️  Free terrain tiles (no API keys needed)"
 echo "  - 📊 On-demand graph generation from PBF data"
 echo "  - 🗄️  PostgreSQL database for route persistence"
-echo "  - ⚡ Optimized bundle (~30 KB gzipped)"
+echo "  - 🔄 API proxy configured (port 3000 → 8080)"
 echo "  - ⚡ Fast routing with 1km margin optimization"
 echo ""
 echo "📖 Documentation:"
