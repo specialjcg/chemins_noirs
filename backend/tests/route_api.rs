@@ -92,3 +92,72 @@ async fn route_respects_weights() {
 
     assert!(body_scenic.distance_km >= body_direct.distance_km);
 }
+
+#[test]
+fn regression_three_waypoint_itinerary() {
+    let engine = RouteEngine::from_reader(SAMPLE_GRAPH.as_bytes()).expect("graph");
+
+    // 3 waypoints: A (near node 1), B (near node 3), C (near node 6)
+    let waypoint_a = Coordinate { lat: 45.0005, lon: 5.0005 };
+    let waypoint_b = Coordinate { lat: 45.019, lon: 5.014 };
+    let waypoint_c = Coordinate { lat: 45.024, lon: 5.034 };
+
+    let w_pop = 1.0;
+    let w_paved = 1.0;
+
+    // Segment A → B
+    let seg_ab = engine
+        .find_path(&RouteRequest {
+            start: waypoint_a,
+            end: waypoint_b,
+            w_pop,
+            w_paved,
+        })
+        .expect("path A→B should exist");
+
+    // Segment B → C
+    let seg_bc = engine
+        .find_path(&RouteRequest {
+            start: waypoint_b,
+            end: waypoint_c,
+            w_pop,
+            w_paved,
+        })
+        .expect("path B→C should exist");
+
+    // Merge segments (skip first point of seg_bc to avoid duplicate)
+    let mut full_path = seg_ab.clone();
+    full_path.extend_from_slice(&seg_bc[1..]);
+
+    let distance_km = backend::geo_utils::approximate_distance_km(&full_path);
+
+    // --- Regression assertions (snapshot captured from current implementation) ---
+
+    // Path structure
+    assert_eq!(seg_ab.len(), 3, "segment A→B point count");
+    assert_eq!(seg_bc.len(), 2, "segment B→C point count");
+    assert_eq!(full_path.len(), 4, "merged path point count");
+
+    // Total distance
+    assert!(
+        (distance_km - 4.2084657499).abs() < 0.0001,
+        "distance_km regression: got {distance_km}"
+    );
+
+    // Exact path coordinates (nodes 1 → 2 → 3 → 6)
+    let expected: [(f64, f64); 4] = [
+        (45.000, 5.000),  // node 1
+        (45.010, 5.005),  // node 2
+        (45.020, 5.015),  // node 3
+        (45.025, 5.035),  // node 6
+    ];
+
+    for (i, (coord, (elat, elon))) in full_path.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (coord.lat - elat).abs() < 1e-9 && (coord.lon - elon).abs() < 1e-9,
+            "point[{i}] regression: got ({}, {}), expected ({elat}, {elon})",
+            coord.lat,
+            coord.lon
+        );
+    }
+}
