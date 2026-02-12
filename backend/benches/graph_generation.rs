@@ -111,10 +111,95 @@ fn benchmark_closest_node(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_routing(c: &mut Criterion) {
+    use backend::engine::RouteEngine;
+    use backend::graph::{EdgeRecord, GraphFile, NodeRecord};
+    use backend::models::{RouteRequest, SurfaceType};
+
+    // --- Benchmark 1: find_path on the sample graph (6 nodes) ---
+    const SAMPLE: &str = include_str!("../data/sample_graph.json");
+    let sample_engine = RouteEngine::from_reader(SAMPLE.as_bytes()).expect("sample graph");
+
+    let sample_req = RouteRequest {
+        start: Coordinate { lat: 44.99, lon: 4.99 },
+        end: Coordinate { lat: 45.02, lon: 5.02 },
+        w_pop: 1.0,
+        w_paved: 1.0,
+    };
+
+    let mut group = c.benchmark_group("routing");
+
+    group.bench_function("find_path_sample_6nodes", |b| {
+        b.iter(|| sample_engine.find_path(black_box(&sample_req)));
+    });
+
+    // --- Benchmark 2: find_path on a synthetic grid (~500 nodes) ---
+    let grid_size = 22; // 22x22 = 484 nodes
+    let mut nodes = Vec::with_capacity(grid_size * grid_size);
+    let mut edges = Vec::new();
+
+    for row in 0..grid_size {
+        for col in 0..grid_size {
+            let id = (row * grid_size + col) as u64 + 1;
+            nodes.push(NodeRecord {
+                id,
+                lat: 45.0 + row as f64 * 0.002,
+                lon: 5.0 + col as f64 * 0.002,
+                elevation: None,
+                population_density: 0.1,
+            });
+
+            // Horizontal edge
+            if col + 1 < grid_size {
+                let neighbor_id = (row * grid_size + col + 1) as u64 + 1;
+                edges.push(EdgeRecord {
+                    from: id,
+                    to: neighbor_id,
+                    surface: SurfaceType::Trail,
+                    length_m: 200.0,
+                    waypoints: vec![],
+                });
+            }
+            // Vertical edge
+            if row + 1 < grid_size {
+                let neighbor_id = ((row + 1) * grid_size + col) as u64 + 1;
+                edges.push(EdgeRecord {
+                    from: id,
+                    to: neighbor_id,
+                    surface: SurfaceType::Dirt,
+                    length_m: 200.0,
+                    waypoints: vec![],
+                });
+            }
+        }
+    }
+
+    let graph_file = GraphFile { nodes, edges };
+    let grid_engine = RouteEngine::from_graph_file(graph_file).expect("grid graph");
+
+    // Route from corner (0,0) to corner (21,21)
+    let grid_req = RouteRequest {
+        start: Coordinate { lat: 45.0, lon: 5.0 },
+        end: Coordinate {
+            lat: 45.0 + (grid_size - 1) as f64 * 0.002,
+            lon: 5.0 + (grid_size - 1) as f64 * 0.002,
+        },
+        w_pop: 1.0,
+        w_paved: 1.0,
+    };
+
+    group.bench_function("find_path_grid_484nodes", |b| {
+        b.iter(|| grid_engine.find_path(black_box(&grid_req)));
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_partial_graph_generation,
     benchmark_cache_performance,
-    benchmark_closest_node
+    benchmark_closest_node,
+    benchmark_routing
 );
 criterion_main!(benches);

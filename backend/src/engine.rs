@@ -6,6 +6,7 @@ use std::{
 };
 
 use crate::{
+    geo_utils::fast_distance_km,
     graph::GraphFile,
     models::{Coordinate, RouteRequest, SurfaceType},
 };
@@ -36,25 +37,27 @@ use petgraph::{
 /// - Handle edge exclusions for loop generation
 pub trait PathFinder: Send + Sync {
     /// Find optimal route between two coordinates
-    ///
-    /// # Parameters
-    /// - `req`: Route request with start/end coordinates and weights
-    ///
-    /// # Returns
-    /// - `Some(Vec<Coordinate>)`: Complete path with waypoints
-    /// - `None`: No path found
     fn find_path(&self, req: &RouteRequest) -> Option<Vec<Coordinate>>;
 
     /// Find route while excluding certain edges (for loop generation)
-    ///
-    /// # Parameters
-    /// - `req`: Route request
-    /// - `excluded_edges`: Edges to heavily penalize (start, end) node pairs
     fn find_path_with_excluded_edges(
         &self,
         req: &RouteRequest,
         excluded_edges: &HashSet<(NodeIndex, NodeIndex)>,
     ) -> Option<Vec<Coordinate>>;
+
+    /// Find path and return both coordinates and node indices from A*
+    fn find_path_returning_indices(
+        &self,
+        req: &RouteRequest,
+    ) -> Option<(Vec<Coordinate>, Vec<NodeIndex>)>;
+
+    /// Find path with excluded edges and return both coordinates and node indices
+    fn find_path_with_excluded_edges_returning_indices(
+        &self,
+        req: &RouteRequest,
+        excluded_edges: &HashSet<(NodeIndex, NodeIndex)>,
+    ) -> Option<(Vec<Coordinate>, Vec<NodeIndex>)>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -75,6 +78,8 @@ pub struct RouteEngine {
     nodes: Vec<NodeData>,
     /// Spatial index for O(log N) nearest node lookup
     spatial_index: KdTree<f64, usize, [f64; 2]>,
+    /// Pre-built edge index for O(1) edge lookup by (source, target) node indices
+    edge_map: HashMap<(usize, usize), petgraph::graph::EdgeIndex>,
 }
 
 impl PathFinder for RouteEngine {
@@ -88,6 +93,21 @@ impl PathFinder for RouteEngine {
         excluded_edges: &HashSet<(NodeIndex, NodeIndex)>,
     ) -> Option<Vec<Coordinate>> {
         RouteEngine::find_path_with_excluded_edges(self, req, excluded_edges)
+    }
+
+    fn find_path_returning_indices(
+        &self,
+        req: &RouteRequest,
+    ) -> Option<(Vec<Coordinate>, Vec<NodeIndex>)> {
+        RouteEngine::find_path_returning_indices(self, req)
+    }
+
+    fn find_path_with_excluded_edges_returning_indices(
+        &self,
+        req: &RouteRequest,
+        excluded_edges: &HashSet<(NodeIndex, NodeIndex)>,
+    ) -> Option<(Vec<Coordinate>, Vec<NodeIndex>)> {
+        RouteEngine::find_path_with_excluded_edges_returning_indices(self, req, excluded_edges)
     }
 }
 
@@ -169,7 +189,10 @@ impl RouteEngine {
         // Build spatial index for O(log N) nearest neighbor queries
         let spatial_index = Self::build_spatial_index(&nodes);
 
-        Ok(Self { graph, nodes, spatial_index })
+        // Build edge lookup map for O(1) edge access
+        let edge_map = Self::build_edge_map(&graph);
+
+        Ok(Self { graph, nodes, spatial_index, edge_map })
     }
 
     /// Build KD-Tree spatial index for fast nearest neighbor queries
@@ -178,9 +201,23 @@ impl RouteEngine {
         let mut tree = KdTree::new(2);
         for (idx, node) in nodes.iter().enumerate() {
             // Store as [lon, lat] for geographic coordinates
-            let _ = tree.add([node.coord.lon, node.coord.lat], idx);
+            if let Err(e) = tree.add([node.coord.lon, node.coord.lat], idx) {
+                tracing::warn!("Failed to add node {} to spatial index: {:?}", idx, e);
+            }
         }
         tree
+    }
+
+    /// Build HashMap for O(1) edge lookup by (source_index, target_index)
+    fn build_edge_map(graph: &UnGraph<NodeData, EdgeData>) -> HashMap<(usize, usize), petgraph::graph::EdgeIndex> {
+        let mut map = HashMap::with_capacity(graph.edge_count() * 2);
+        for edge_idx in graph.edge_indices() {
+            if let Some((a, b)) = graph.edge_endpoints(edge_idx) {
+                map.insert((a.index(), b.index()), edge_idx);
+                map.insert((b.index(), a.index()), edge_idx);
+            }
+        }
+        map
     }
 
     /// Find optimal path between start and end coordinates using A* algorithm
@@ -215,20 +252,36 @@ impl RouteEngine {
         self.find_path_with_excluded_edges(req, &HashSet::new())
     }
 
-    /// Find path while avoiding specific edges (used for loop generation)
-    ///
-    /// # Parameters
-    /// - `excluded_edges`: Set of (NodeIndex, NodeIndex) pairs to heavily penalize
-    ///   (multiplies edge cost by 10000.0 to strongly discourage reuse)
-    ///
-    /// # Use Case
-    /// Loop generation uses this to force different outbound/return paths by
-    /// excluding the outbound edges from the return path search.
     pub fn find_path_with_excluded_edges(
         &self,
         req: &RouteRequest,
         excluded_edges: &HashSet<(NodeIndex, NodeIndex)>,
     ) -> Option<Vec<Coordinate>> {
+        let (coords, _indices) = self.find_path_core(req, excluded_edges)?;
+        Some(coords)
+    }
+
+    pub fn find_path_returning_indices(
+        &self,
+        req: &RouteRequest,
+    ) -> Option<(Vec<Coordinate>, Vec<NodeIndex>)> {
+        self.find_path_core(req, &HashSet::new())
+    }
+
+    pub fn find_path_with_excluded_edges_returning_indices(
+        &self,
+        req: &RouteRequest,
+        excluded_edges: &HashSet<(NodeIndex, NodeIndex)>,
+    ) -> Option<(Vec<Coordinate>, Vec<NodeIndex>)> {
+        self.find_path_core(req, excluded_edges)
+    }
+
+    /// Core A* pathfinding returning both expanded coordinates and raw node indices.
+    fn find_path_core(
+        &self,
+        req: &RouteRequest,
+        excluded_edges: &HashSet<(NodeIndex, NodeIndex)>,
+    ) -> Option<(Vec<Coordinate>, Vec<NodeIndex>)> {
         let start = self.closest_node(req.start)?;
         let end = self.closest_node(req.end)?;
 
@@ -258,13 +311,10 @@ impl RouteEngine {
             let from = edge.source();
             let to = edge.target();
 
-            // Apply penalty if this edge was used in the outbound path
-            // but allow it if we're returning to the start node
             let is_excluded = excluded_edges.contains(&(from, to)) || excluded_edges.contains(&(to, from));
             let is_final_return = to == start || from == start;
 
             if is_excluded && !is_final_return {
-                // Apply moderate penalty (10x) to strongly discourage reuse while still allowing it as last resort
                 base_cost * 10.0
             } else {
                 base_cost
@@ -279,8 +329,8 @@ impl RouteEngine {
             heuristic,
         )?;
 
-        // Expand path with real OSM waypoints from edges
-        Some(expand_path_with_waypoints(&route, &self.graph, &self.nodes))
+        let coords = expand_path_with_waypoints(&route, &self.graph, &self.nodes, &self.edge_map);
+        Some((coords, route))
     }
 
     /// Find closest node using KD-Tree spatial index
@@ -323,15 +373,16 @@ impl RouteEngine {
 // Removed: squared_distance (replaced by KD-Tree spatial index)
 
 fn straight_line_km(a: Coordinate, b: Coordinate) -> f64 {
-    crate::routing::haversine_km(a, b)
+    fast_distance_km(a, b)
 }
 
-/// Expand path with OSM waypoints from edges
-/// Uses real OSM geometry instead of linear interpolation
+/// Expand path with OSM waypoints from edges.
+/// Uses pre-built edge_map for O(1) edge lookup instead of graph.find_edge (O(degree)).
 fn expand_path_with_waypoints(
     route: &[NodeIndex],
     graph: &UnGraph<NodeData, EdgeData>,
     nodes: &[NodeData],
+    edge_map: &HashMap<(usize, usize), petgraph::graph::EdgeIndex>,
 ) -> Vec<Coordinate> {
     if route.is_empty() {
         return Vec::new();
@@ -341,31 +392,37 @@ fn expand_path_with_waypoints(
         return vec![nodes[route[0].index()].coord];
     }
 
-    let mut result = Vec::with_capacity(route.len() * 3); // Estimate
+    let mut result = Vec::with_capacity(route.len() * 3);
     result.push(nodes[route[0].index()].coord);
 
     let mut total_waypoints_added = 0;
     let mut edges_without_waypoints = 0;
 
-    // For each consecutive pair of nodes in the route
     for window in route.windows(2) {
         let from_idx = window[0];
         let to_idx = window[1];
 
-        // Find the edge between these two nodes
-        if let Some(edge_ref) = graph.find_edge(from_idx, to_idx) {
-            let edge_data = &graph[edge_ref];
+        // O(1) lookup via pre-built HashMap
+        if let Some(&edge_idx) = edge_map.get(&(from_idx.index(), to_idx.index())) {
+            let edge_data = &graph[edge_idx];
 
-            // Add all intermediate waypoints from the edge
             let waypoints_count = edge_data.waypoints.len();
             if waypoints_count == 0 {
                 edges_without_waypoints += 1;
             }
             total_waypoints_added += waypoints_count;
-            result.extend_from_slice(&edge_data.waypoints);
+
+            if let Some((edge_source, _)) = graph.edge_endpoints(edge_idx) {
+                if edge_source == from_idx {
+                    result.extend_from_slice(&edge_data.waypoints);
+                } else {
+                    result.extend(edge_data.waypoints.iter().rev().copied());
+                }
+            } else {
+                result.extend_from_slice(&edge_data.waypoints);
+            }
         }
 
-        // Add the destination node
         result.push(nodes[to_idx.index()].coord);
     }
 
@@ -376,42 +433,6 @@ fn expand_path_with_waypoints(
         edges_without_waypoints,
         result.len()
     );
-
-    result
-}
-
-/// DEPRECATED: Old interpolation function - kept for reference
-/// Use expand_path_with_waypoints() instead which uses real OSM geometry
-#[allow(dead_code)]
-fn _interpolate_route_deprecated(coords: &[Coordinate]) -> Vec<Coordinate> {
-    const MIN_SEGMENT_LENGTH_M: f64 = 50.0;
-    const INTERPOLATION_STEP_M: f64 = 20.0;
-
-    if coords.len() < 2 {
-        return coords.to_vec();
-    }
-
-    let mut result = Vec::with_capacity(coords.len() * 2);
-    result.push(coords[0]);
-
-    for window in coords.windows(2) {
-        let start = window[0];
-        let end = window[1];
-
-        let distance_km = straight_line_km(start, end);
-        let distance_m = distance_km * 1000.0;
-
-        if distance_m > MIN_SEGMENT_LENGTH_M {
-            let num_interpolated = (distance_m / INTERPOLATION_STEP_M).floor() as usize;
-
-            for i in 1..=num_interpolated {
-                let t = i as f64 / (num_interpolated + 1) as f64;
-                result.push(start.interpolate(end, t));
-            }
-        }
-
-        result.push(end);
-    }
 
     result
 }
