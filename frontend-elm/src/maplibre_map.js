@@ -570,39 +570,6 @@ export function updateRoute(coords) {
   lastAnimationMode = null;
   terrainSampleWarned = false;
 
-  // Convert coords to [lon, lat] array for camera positioning
-  const coordinates = coords.map(c => [c.lon, c.lat]);
-
-  // Position camera at human eye level at start of route, looking along the path
-  const startCoord = coordinates[0];
-  const secondCoord = coordinates.length > 1 ? coordinates[1] : coordinates[0];
-
-  // Calculate bearing (direction) from start to second point
-  const bearing = calculateBearing(startCoord, secondCoord);
-
-  // Get appropriate zoom level based on route length
-  const bounds = coordinates.reduce((bounds, coord) => {
-    return bounds.extend(coord);
-  }, new maplibregl.LngLatBounds(coordinates[0], coordinates[0]));
-
-  const ne = bounds.getNorthEast();
-  const sw = bounds.getSouthWest();
-  const routeDistance = Math.sqrt(
-    Math.pow(ne.lng - sw.lng, 2) + Math.pow(ne.lat - sw.lat, 2)
-  );
-
-  // Zoom level: closer for shorter routes, farther for longer routes
-  const baseZoom = Math.max(10, Math.min(16, 18 - Math.log2(routeDistance * 100)));
-
-  // Position camera at current mode's height looking along the route
-  const mode = currentCameraMode;
-  mapInstance.easeTo({
-    center: startCoord,
-    zoom: mode.zoom,
-    pitch: mode.pitch,
-    bearing: bearing,
-    duration: 2000
-  });
 }
 
 export function updateSelectionMarkers(start, end) {
