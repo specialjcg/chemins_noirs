@@ -17,6 +17,7 @@ let lastBearing = null;
 let lastAnimationMode = null;
 let terrainSampleWarned = false;
 let lastTurnAngle = 0; // Track turn angle for banking effect
+let lastTerrainZoomAdjust = 0; // Smoothed zoom offset for terrain avoidance
 let waypointMarkers = []; // Markers for multi-point route waypoints
 
 // Terrain configuration - Using Terrarium format tiles from AWS
@@ -783,6 +784,7 @@ export function startAnimation() {
 
   console.debug('[maplibre] Starting camera animation');
   animationStartTimestamp = null;
+  lastTerrainZoomAdjust = 0;
   if (animationFrameId !== null) {
     cancelAnimationFrame(animationFrameId);
   }
@@ -914,11 +916,24 @@ function animateCamera(timestamp) {
     lastAnimationMode = 'jumpTo';
   }
 
+  // Adjust zoom when terrain is enabled to prevent camera going underground.
+  // Higher terrain → lower zoom (camera further away) to stay above surface.
+  let adjustedZoom = mode.zoom;
+  if (terrainEnabled) {
+    const groundElevation = queryElevation(actualCameraPoint);
+    // Compute needed zoom reduction: each meter of exaggerated elevation
+    // needs proportional zoom-out. Factor tuned for pitch 55-75° views.
+    const targetAdjust = Math.max(0, groundElevation * TERRAIN_EXAGGERATION * 0.002);
+    // Smooth the adjustment to avoid jerky zoom on terrain transitions
+    lastTerrainZoomAdjust = lastTerrainZoomAdjust * 0.92 + targetAdjust * 0.08;
+    adjustedZoom -= lastTerrainZoomAdjust;
+  }
+
   const cameraOptions = {
     center: [actualCameraPoint.lon, actualCameraPoint.lat],
     bearing: smoothedBearing,
     pitch: mode.pitch,
-    zoom: mode.zoom
+    zoom: adjustedZoom
   };
 
   // Add roll if banking is enabled (MapLibre GL v5+ supports this)
