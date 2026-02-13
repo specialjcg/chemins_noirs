@@ -8,15 +8,41 @@ BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_PORT="3000"  # Vite dev server port
 BACKEND_PORT="8080"
 
+# Parse arguments
+USE_TILES=false  # Default: auto-detect tiles, use PBF as fallback
+for arg in "$@"; do
+    case $arg in
+        --tiles)
+            USE_TILES=true
+            shift
+            ;;
+    esac
+done
+
 # PBF data for routing graph
 DEFAULT_PBF="$ROOT_DIR/backend/data/rhone-alpes-251111.osm.pbf"
 export PBF_PATH="${GRAPH_PBF:-$DEFAULT_PBF}"
 export CACHE_DIR="${CACHE_DIR:-data/cache}"
 
 # Tiles directory for fast graph loading (<10s instead of ~2min)
+# Auto-detect: if data/tiles/ exists with tile files, use it by default
 DEFAULT_TILES="$ROOT_DIR/backend/data/tiles"
-if [[ -d "$DEFAULT_TILES" ]] || [[ -n "${TILES_DIR:-}" ]]; then
+if [[ "$USE_TILES" == "true" ]] || [[ -n "${TILES_DIR:-}" ]]; then
+    # Explicit tiles mode requested
     export TILES_DIR="${TILES_DIR:-$DEFAULT_TILES}"
+    if [[ -d "$TILES_DIR" ]]; then
+        echo "Mode tuiles actif (--tiles)"
+    else
+        echo "Mode tuiles demande mais dossier tiles non trouve, utilisation du PBF"
+        unset TILES_DIR
+    fi
+elif [[ -d "$DEFAULT_TILES" ]] && ls "$DEFAULT_TILES"/tile_*.json.zst >/dev/null 2>&1; then
+    # Auto-detect: tiles exist, use them for fast startup
+    export TILES_DIR="$DEFAULT_TILES"
+    echo "Mode tuiles auto-detecte (${DEFAULT_TILES})"
+else
+    unset TILES_DIR
+    echo "Mode PBF complet (routage precis depuis rhone-alpes.osm.pbf)"
 fi
 DEFAULT_DEM_TIF="$ROOT_DIR/backend/data/dem/region.tif"
 DEFAULT_DEM_ASC="$ROOT_DIR/backend/data/dem/region.asc"
@@ -154,6 +180,7 @@ env \
   CARGO_TARGET_DIR="$TARGET_DIR" \
   PBF_PATH="$PBF_PATH" \
   CACHE_DIR="$CACHE_DIR" \
+  TILES_DIR="${TILES_DIR:-}" \
   LOCAL_DEM_PATH="${LOCAL_DEM_PATH:-}" \
   DATABASE_URL="${DATABASE_URL:-}" \
   cargo run -p backend --bin backend_partial "$@" &
@@ -190,7 +217,14 @@ echo "  - 🏔️  Free terrain tiles (no API keys needed)"
 echo "  - 📊 On-demand graph generation from PBF data"
 echo "  - 🗄️  PostgreSQL database for route persistence"
 echo "  - 🔄 API proxy configured (port 3000 → 8080)"
-echo "  - ⚡ Fast routing with 1km margin optimization"
+if [[ "$USE_TILES" == "true" ]] && [[ -n "${TILES_DIR:-}" ]]; then
+    echo "  - ⚡ Mode TUILES actif (rapide, ~10s par route)"
+else
+    echo "  - 🗺️  Mode PBF complet (plus lent, ~2min premiere requete, mais routage plus precis)"
+fi
+echo ""
+echo "Options:"
+echo "  --tiles  Activer le mode tuiles (rapide mais moins precis)"
 echo ""
 echo "📖 Documentation:"
 echo "   - Quick Start:     $ROOT_DIR/QUICK_START.md"
