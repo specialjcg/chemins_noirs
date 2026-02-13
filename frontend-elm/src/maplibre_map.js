@@ -812,31 +812,78 @@ export function updateWaypointMarkers(waypoints) {
     return;
   }
 
-  // Create numbered markers for each waypoint
+  // Create numbered, draggable markers with delete button
   waypoints.forEach((coord, index) => {
     const el = document.createElement('div');
+    el.style.position = 'relative';
     el.style.width = '28px';
     el.style.height = '28px';
-    el.style.borderRadius = '50%';
-    el.style.backgroundColor = '#2196F3';
-    el.style.border = '2px solid white';
-    el.style.display = 'flex';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    el.style.fontSize = '12px';
-    el.style.fontWeight = 'bold';
-    el.style.color = 'white';
-    el.style.cursor = 'pointer';
-    el.textContent = (index + 1).toString();
 
-    const marker = new maplibregl.Marker({ element: el })
+    // Blue circle with number
+    const circle = document.createElement('div');
+    circle.style.width = '28px';
+    circle.style.height = '28px';
+    circle.style.borderRadius = '50%';
+    circle.style.backgroundColor = '#2196F3';
+    circle.style.border = '2px solid white';
+    circle.style.display = 'flex';
+    circle.style.alignItems = 'center';
+    circle.style.justifyContent = 'center';
+    circle.style.fontSize = '12px';
+    circle.style.fontWeight = 'bold';
+    circle.style.color = 'white';
+    circle.style.cursor = 'grab';
+    circle.style.boxShadow = '0 2px 6px rgba(0,0,0,0.3)';
+    circle.textContent = (index + 1).toString();
+    el.appendChild(circle);
+
+    // Delete button (× top-right, visible on hover)
+    const delBtn = document.createElement('div');
+    delBtn.style.position = 'absolute';
+    delBtn.style.top = '-8px';
+    delBtn.style.right = '-8px';
+    delBtn.style.width = '18px';
+    delBtn.style.height = '18px';
+    delBtn.style.borderRadius = '50%';
+    delBtn.style.backgroundColor = '#F44336';
+    delBtn.style.border = '1.5px solid white';
+    delBtn.style.display = 'none';
+    delBtn.style.alignItems = 'center';
+    delBtn.style.justifyContent = 'center';
+    delBtn.style.fontSize = '11px';
+    delBtn.style.fontWeight = 'bold';
+    delBtn.style.color = 'white';
+    delBtn.style.cursor = 'pointer';
+    delBtn.style.lineHeight = '1';
+    delBtn.textContent = '×';
+    el.appendChild(delBtn);
+
+    // Show/hide delete button on hover
+    el.addEventListener('mouseenter', () => { delBtn.style.display = 'flex'; });
+    el.addEventListener('mouseleave', () => { delBtn.style.display = 'none'; });
+
+    // Delete button click → dispatch event to Elm
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.dispatchEvent(new CustomEvent('waypoint-deleted', { detail: { index } }));
+    });
+
+    const marker = new maplibregl.Marker({ element: el, draggable: true })
       .setLngLat([coord.lon, coord.lat])
       .addTo(mapInstance);
+
+    // Drag end → dispatch event to Elm with new position
+    marker.on('dragend', () => {
+      const lngLat = marker.getLngLat();
+      window.dispatchEvent(new CustomEvent('waypoint-dragged', {
+        detail: { index, lat: lngLat.lat, lon: lngLat.lng }
+      }));
+    });
 
     waypointMarkers.push(marker);
   });
 
-  console.debug(`[maplibre] Updated ${waypoints.length} waypoint markers`);
+  console.debug(`[maplibre] Updated ${waypoints.length} draggable waypoint markers`);
 }
 
 function animateCamera(timestamp) {

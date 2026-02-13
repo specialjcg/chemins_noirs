@@ -62,4 +62,10 @@ port loadRouteFromLocalStorage : () -> Cmd msg
 port mapClickReceived : ({ lat : Float, lon : Float } -> msg) -> Sub msg
 
 
+port waypointDragged : ({ index : Int, lat : Float, lon : Float } -> msg) -> Sub msg
+
+
+port waypointDeleted : ({ index : Int } -> msg) -> Sub msg
+
+
 port routeLoadedFromLocalStorage : (Encode.Value -> msg) -> Sub msg

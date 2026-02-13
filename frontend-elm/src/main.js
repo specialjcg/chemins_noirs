@@ -125,4 +125,22 @@ window.addEventListener('map-click', (event) => {
   });
 });
 
+// Écouter le déplacement d'un waypoint (drag & drop)
+window.addEventListener('waypoint-dragged', (event) => {
+  console.log('[JS→Elm] waypoint-dragged', event.detail);
+  app.ports.waypointDragged.send({
+    index: event.detail.index,
+    lat: event.detail.lat,
+    lon: event.detail.lon
+  });
+});
+
+// Écouter la suppression d'un waypoint (bouton ×)
+window.addEventListener('waypoint-deleted', (event) => {
+  console.log('[JS→Elm] waypoint-deleted', event.detail);
+  app.ports.waypointDeleted.send({
+    index: event.detail.index
+  });
+});
+
 console.log('✅ Elm application initialized with MapLibre ports');

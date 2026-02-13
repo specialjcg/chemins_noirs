@@ -144,6 +144,7 @@ type Msg
     | SelectLoopCandidate Int
     | AddWaypoint Coordinate
     | RemoveWaypoint Int
+    | MoveWaypoint Int Float Float
     | ClearWaypoints
     | ToggleCloseLoop
     | ComputeMultiPointRoute

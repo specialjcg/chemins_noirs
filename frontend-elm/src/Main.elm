@@ -399,29 +399,84 @@ update msg model =
             let
                 newWaypoints =
                     model.waypoints ++ [ coord ]
+
+                newModel =
+                    { model | waypoints = newWaypoints, error = Nothing }
             in
-            ( { model | waypoints = newWaypoints, error = Nothing }
-            , Ports.updateWaypointMarkers newWaypoints
-            )
+            if List.length newWaypoints >= 2 then
+                -- Auto-calculate route immediately
+                let
+                    ( routedModel, routeCmd ) =
+                        update ComputeMultiPointRoute newModel
+                in
+                ( routedModel
+                , Cmd.batch
+                    [ Ports.updateWaypointMarkers newWaypoints
+                    , routeCmd
+                    ]
+                )
+
+            else
+                ( newModel
+                , Ports.updateWaypointMarkers newWaypoints
+                )
 
         RemoveWaypoint idx ->
             let
                 newWaypoints =
                     List.take idx model.waypoints
                         ++ List.drop (idx + 1) model.waypoints
-            in
-            ( { model | waypoints = newWaypoints }
-            , Cmd.batch
-                [ Ports.updateWaypointMarkers newWaypoints
-                , if List.length newWaypoints < 2 then
-                    Cmd.batch
-                        [ Ports.updateRoute []
-                        ]
 
-                  else
-                    Cmd.none
-                ]
-            )
+                newModel =
+                    { model | waypoints = newWaypoints }
+            in
+            if List.length newWaypoints >= 2 then
+                -- Auto-recalculate route
+                let
+                    ( routedModel, routeCmd ) =
+                        update ComputeMultiPointRoute newModel
+                in
+                ( routedModel
+                , Cmd.batch
+                    [ Ports.updateWaypointMarkers newWaypoints
+                    , routeCmd
+                    ]
+                )
+
+            else
+                ( newModel
+                , Cmd.batch
+                    [ Ports.updateWaypointMarkers newWaypoints
+                    , Ports.updateRoute []
+                    ]
+                )
+
+        MoveWaypoint idx lat lon ->
+            let
+                newWaypoints =
+                    List.indexedMap
+                        (\i wp ->
+                            if i == idx then
+                                { lat = lat, lon = lon }
+
+                            else
+                                wp
+                        )
+                        model.waypoints
+
+                newModel =
+                    { model | waypoints = newWaypoints, error = Nothing }
+            in
+            if List.length newWaypoints >= 2 then
+                -- Auto-recalculate route after drag
+                let
+                    ( routedModel, routeCmd ) =
+                        update ComputeMultiPointRoute newModel
+                in
+                ( routedModel, routeCmd )
+
+            else
+                ( newModel, Cmd.none )
 
         ClearWaypoints ->
             ( { model
@@ -777,6 +832,8 @@ subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch
         [ Ports.mapClickReceived (\{ lat, lon } -> MapClicked lat lon)
+        , Ports.waypointDragged (\{ index, lat, lon } -> MoveWaypoint index lat lon)
+        , Ports.waypointDeleted (\{ index } -> RemoveWaypoint index)
         , Ports.routeLoadedFromLocalStorage
             (\value ->
                 RouteLoadedFromStorage
