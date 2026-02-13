@@ -761,7 +761,13 @@ impl GraphBuilder {
                     Element::Way(way) => {
                         let tags: Vec<_> = way.tags().collect();
 
-                        if tags.iter().any(|(k, _)| *k == "highway") {
+                        // Only collect supported highway types (path, track, residential, etc.)
+                        // This filters out motorways, cycleways, etc. early — ~10s saving
+                        let dominated_by_supported = tags
+                            .iter()
+                            .any(|(k, v)| *k == "highway" && is_supported_highway(v));
+
+                        if dominated_by_supported {
                             let node_refs: Vec<i64> = way.refs().collect();
                             let tag_pairs: Vec<(String, String)> =
                                 tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
