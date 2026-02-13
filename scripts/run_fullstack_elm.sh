@@ -174,8 +174,8 @@ if ! command -v elm &> /dev/null; then
     npm install -g elm elm-format elm-test
 fi
 
-# Start backend with on-demand graph generation
-echo "Starting backend with on-demand graph generation..."
+# Start backend with on-demand graph generation (release mode for performance)
+echo "Starting backend with on-demand graph generation (release mode)..."
 env \
   CARGO_TARGET_DIR="$TARGET_DIR" \
   PBF_PATH="$PBF_PATH" \
@@ -183,7 +183,7 @@ env \
   TILES_DIR="${TILES_DIR:-}" \
   LOCAL_DEM_PATH="${LOCAL_DEM_PATH:-}" \
   DATABASE_URL="${DATABASE_URL:-}" \
-  cargo run -p backend --bin backend_partial "$@" &
+  cargo run --release -p backend --bin backend_partial "$@" &
 BACKEND_PID=$!
 
 printf 'Backend started with PID %s (listening on %s).\n' "$BACKEND_PID" "$BACKEND_PORT"

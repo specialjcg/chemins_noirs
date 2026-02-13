@@ -148,7 +148,7 @@ impl GraphFile {
     }
 
     /// Write graph as postcard binary (fast, compact)
-    fn write_binary(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
+    pub(crate) fn write_binary(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
         let bytes = postcard::to_allocvec(self)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let file = File::create(path)?;
@@ -158,7 +158,7 @@ impl GraphFile {
     }
 
     /// Read graph from postcard binary
-    fn read_binary(path: impl AsRef<Path>) -> Result<Self, io::Error> {
+    pub(crate) fn read_binary(path: impl AsRef<Path>) -> Result<Self, io::Error> {
         let bytes = std::fs::read(path)?;
         postcard::from_bytes(&bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
@@ -382,6 +382,16 @@ impl NodeCollectionState {
     }
 }
 
+/// Internal edge data for tile merging (preserves tile origin for ID remapping)
+struct TileEdge {
+    tile_idx: usize,
+    local_from: u64,
+    local_to: u64,
+    surface: SurfaceType,
+    length_m: f64,
+    waypoints: Vec<Coordinate>,
+}
+
 /// Pre-filtered PBF data stored in memory for fast processing
 struct FilteredPbfData {
     /// All nodes in or near the bbox: osm_id -> (lat, lon, elevation)
@@ -471,48 +481,55 @@ impl GraphBuilder {
             return Err(GraphBuildError::EmptyGraph);
         }
 
-        // Use coordinate-based key to deduplicate nodes across tiles
-        // Key: (lat_microdegrees, lon_microdegrees) - ~0.1m precision
-        type CoordKey = (i64, i64);
-        fn coord_key(lat: f64, lon: f64) -> CoordKey {
-            ((lat * 1_000_000.0).round() as i64, (lon * 1_000_000.0).round() as i64)
-        }
-
-        // Map from coordinate key to new global node ID
-        let mut coord_to_global_id: HashMap<CoordKey, u64> = HashMap::new();
+        // Map from coordinate key (lat_microdegrees, lon_microdegrees) to global node ID
+        let mut coord_to_global_id: HashMap<(i64, i64), u64> = HashMap::new();
         let mut global_nodes: Vec<NodeRecord> = Vec::new();
 
-        // Collect all edges with original (tile_index, local_from, local_to) info
-        // We'll remap them after all nodes are processed
-        struct TileEdge {
-            tile_idx: usize,
-            local_from: u64,
-            local_to: u64,
-            surface: SurfaceType,
-            length_m: f64,
-            waypoints: Vec<Coordinate>,
-        }
         let mut all_tile_edges: Vec<TileEdge> = Vec::new();
 
         // Map from (tile_idx, local_node_id) to global_node_id
         let mut local_to_global: HashMap<(usize, u64), u64> = HashMap::new();
 
         for (tile_idx, tile_id) in tile_ids.iter().enumerate() {
-            // Pass the base path (no extension) to read_from_path, which
-            // already probes .bin, .json.zst, and plain .json in order.
             let base_path = tiles_dir.join(tile_id.filename());
+            let bin_path = base_path.with_extension("bin");
 
-            // Check if any format exists before attempting to read
-            let has_file = [".bin", ".json.zst", ".json"]
+            // Fast path: binary tile exists
+            if bin_path.exists() {
+                let tile_graph = GraphFile::read_binary(&bin_path)?;
+                tracing::debug!(
+                    "Loaded tile {:?} (bin): {} nodes, {} edges",
+                    tile_id,
+                    tile_graph.nodes.len(),
+                    tile_graph.edges.len()
+                );
+                // (process below)
+                Self::merge_tile_into(
+                    tile_idx, &tile_graph,
+                    &mut coord_to_global_id, &mut global_nodes,
+                    &mut local_to_global, &mut all_tile_edges,
+                );
+                continue;
+            }
+
+            // Slow path: read legacy format and convert to .bin for next time
+            let has_legacy = [".json.zst", ".json"]
                 .iter()
                 .any(|ext| base_path.with_extension(&ext[1..]).exists());
 
-            if !has_file {
+            if !has_legacy {
                 tracing::warn!("Tile not found: {}, skipping", base_path.display());
                 continue;
             }
 
             let tile_graph = GraphFile::read_from_path(&base_path)?;
+
+            // Auto-convert to binary for future fast loading
+            if let Err(e) = tile_graph.write_binary(&bin_path) {
+                tracing::warn!("Failed to write binary tile cache {}: {}", bin_path.display(), e);
+            } else {
+                tracing::info!("Converted tile {:?} to binary: {}", tile_id, bin_path.display());
+            }
 
             tracing::debug!(
                 "Loaded tile {:?}: {} nodes, {} edges",
@@ -521,34 +538,11 @@ impl GraphBuilder {
                 tile_graph.edges.len()
             );
 
-            // Process nodes: deduplicate by coordinates
-            for node in tile_graph.nodes {
-                let key = coord_key(node.lat, node.lon);
-                let global_id = *coord_to_global_id.entry(key).or_insert_with(|| {
-                    let new_id = (global_nodes.len() + 1) as u64;
-                    global_nodes.push(NodeRecord {
-                        id: new_id,
-                        lat: node.lat,
-                        lon: node.lon,
-                        elevation: node.elevation,
-                        population_density: node.population_density,
-                    });
-                    new_id
-                });
-                local_to_global.insert((tile_idx, node.id), global_id);
-            }
-
-            // Collect edges for later remapping
-            for edge in tile_graph.edges {
-                all_tile_edges.push(TileEdge {
-                    tile_idx,
-                    local_from: edge.from,
-                    local_to: edge.to,
-                    surface: edge.surface,
-                    length_m: edge.length_m,
-                    waypoints: edge.waypoints,
-                });
-            }
+            Self::merge_tile_into(
+                tile_idx, &tile_graph,
+                &mut coord_to_global_id, &mut global_nodes,
+                &mut local_to_global, &mut all_tile_edges,
+            );
         }
 
         // Remap edges using the local-to-global mapping
@@ -611,6 +605,47 @@ impl GraphBuilder {
             nodes: filtered_nodes,
             edges: filtered_edges,
         })
+    }
+
+    /// Merge a tile's nodes and edges into the global collections, deduplicating by coordinates.
+    fn merge_tile_into(
+        tile_idx: usize,
+        tile_graph: &GraphFile,
+        coord_to_global_id: &mut HashMap<(i64, i64), u64>,
+        global_nodes: &mut Vec<NodeRecord>,
+        local_to_global: &mut HashMap<(usize, u64), u64>,
+        all_tile_edges: &mut Vec<TileEdge>,
+    ) {
+        fn coord_key(lat: f64, lon: f64) -> (i64, i64) {
+            ((lat * 1_000_000.0).round() as i64, (lon * 1_000_000.0).round() as i64)
+        }
+
+        for node in &tile_graph.nodes {
+            let key = coord_key(node.lat, node.lon);
+            let global_id = *coord_to_global_id.entry(key).or_insert_with(|| {
+                let new_id = (global_nodes.len() + 1) as u64;
+                global_nodes.push(NodeRecord {
+                    id: new_id,
+                    lat: node.lat,
+                    lon: node.lon,
+                    elevation: node.elevation,
+                    population_density: node.population_density,
+                });
+                new_id
+            });
+            local_to_global.insert((tile_idx, node.id), global_id);
+        }
+
+        for edge in &tile_graph.edges {
+            all_tile_edges.push(TileEdge {
+                tile_idx,
+                local_from: edge.from,
+                local_to: edge.to,
+                surface: edge.surface,
+                length_m: edge.length_m,
+                waypoints: edge.waypoints.clone(),
+            });
+        }
     }
 
     /// Build a partial graph from PBF for a specific route with caching
