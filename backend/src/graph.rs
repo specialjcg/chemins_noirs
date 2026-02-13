@@ -785,9 +785,29 @@ impl GraphBuilder {
         // Build HashMap once from collected entries
         let nodes_in_bbox: NodeCoordMap = node_entries.into_iter().collect();
 
-        // Second pass: collect nodes referenced by ways but not in bbox
+        // Filter ways: keep only those with at least 1 node inside the bbox.
+        // A way that enters the bbox must have at least one node in it.
+        // This dramatically reduces the set of missing nodes for Pass 2.
         let bbox_node_ids: HashSet<i64> = nodes_in_bbox.keys().copied().collect();
 
+        let all_ways_count = ways_data.len();
+        let ways_data: Vec<OsmWay> = ways_data
+            .into_iter()
+            .filter(|(_, refs, _)| refs.iter().any(|id| bbox_node_ids.contains(id)))
+            .collect();
+
+        tracing::info!(
+            "Filtered ways by bbox: {} -> {} ways ({:.0}% reduction)",
+            all_ways_count,
+            ways_data.len(),
+            if all_ways_count > 0 {
+                (1.0 - ways_data.len() as f64 / all_ways_count as f64) * 100.0
+            } else {
+                0.0
+            }
+        );
+
+        // Compute missing nodes only from bbox-relevant ways
         let way_node_refs: HashSet<i64> = ways_data
             .iter()
             .flat_map(|(_, refs, _)| refs.iter())
@@ -805,6 +825,12 @@ impl GraphBuilder {
                 ways: ways_data,
             });
         }
+
+        tracing::info!(
+            "Pass 2: collecting {} missing nodes (from {} way node refs)",
+            missing_node_ids.len(),
+            way_node_refs.len()
+        );
 
         // Collect missing nodes — same Option optimization
         let reader2 = ElementReader::from_path(path)?;
