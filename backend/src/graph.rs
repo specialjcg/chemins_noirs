@@ -710,6 +710,9 @@ impl GraphBuilder {
     }
 
     /// PASS 1: Single-pass filtering - collect all relevant nodes and ways in memory
+    ///
+    /// Optimized: uses Option instead of HashMap/Vec per element to avoid
+    /// millions of empty collection allocations during par_map_reduce.
     fn filter_pbf_to_memory(
         &self,
         path: &Path,
@@ -717,28 +720,27 @@ impl GraphBuilder {
     ) -> Result<FilteredPbfData, GraphBuildError> {
         use std::collections::HashSet;
 
+        type NodeEntry = (i64, (f64, f64, Option<f64>));
+
         let reader = ElementReader::from_path(path)?;
 
-        // Collect everything in a single pass
-        let (nodes_in_bbox, ways_data) = reader.par_map_reduce(
-            |element| -> (NodeCoordMap, Vec<OsmWay>) {
+        // Collect as Vec of Options — avoids 13M empty HashMap/Vec allocations
+        let (node_entries, ways_data): (Vec<NodeEntry>, Vec<OsmWay>) = reader.par_map_reduce(
+            |element| -> (Vec<NodeEntry>, Vec<OsmWay>) {
                 match element {
                     Element::Node(node) => {
                         let lat = node.lat();
                         let lon = node.lon();
 
-                        // Check if node is in bbox
                         if lat >= bbox.min_lat
                             && lat <= bbox.max_lat
                             && lon >= bbox.min_lon
                             && lon <= bbox.max_lon
                         {
                             let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
-                            let mut map = HashMap::new();
-                            map.insert(node.id(), (lat, lon, elevation));
-                            (map, Vec::new())
+                            (vec![(node.id(), (lat, lon, elevation))], Vec::new())
                         } else {
-                            (HashMap::new(), Vec::new())
+                            (Vec::new(), Vec::new())
                         }
                     }
                     Element::DenseNode(node) => {
@@ -751,31 +753,28 @@ impl GraphBuilder {
                             && lon <= bbox.max_lon
                         {
                             let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
-                            let mut map = HashMap::new();
-                            map.insert(node.id(), (lat, lon, elevation));
-                            (map, Vec::new())
+                            (vec![(node.id(), (lat, lon, elevation))], Vec::new())
                         } else {
-                            (HashMap::new(), Vec::new())
+                            (Vec::new(), Vec::new())
                         }
                     }
                     Element::Way(way) => {
                         let tags: Vec<_> = way.tags().collect();
 
-                        // Check if this is a highway
                         if tags.iter().any(|(k, _)| *k == "highway") {
                             let node_refs: Vec<i64> = way.refs().collect();
                             let tag_pairs: Vec<(String, String)> =
                                 tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
 
-                            (HashMap::new(), vec![(way.id(), node_refs, tag_pairs)])
+                            (Vec::new(), vec![(way.id(), node_refs, tag_pairs)])
                         } else {
-                            (HashMap::new(), Vec::new())
+                            (Vec::new(), Vec::new())
                         }
                     }
-                    _ => (HashMap::new(), Vec::new()),
+                    _ => (Vec::new(), Vec::new()),
                 }
             },
-            || (HashMap::new(), Vec::new()),
+            || (Vec::new(), Vec::new()),
             |(mut nodes1, mut ways1), (nodes2, ways2)| {
                 nodes1.extend(nodes2);
                 ways1.extend(ways2);
@@ -783,7 +782,12 @@ impl GraphBuilder {
             },
         )?;
 
+        // Build HashMap once from collected entries
+        let nodes_in_bbox: NodeCoordMap = node_entries.into_iter().collect();
+
         // Second pass: collect nodes referenced by ways but not in bbox
+        let bbox_node_ids: HashSet<i64> = nodes_in_bbox.keys().copied().collect();
+
         let way_node_refs: HashSet<i64> = ways_data
             .iter()
             .flat_map(|(_, refs, _)| refs.iter())
@@ -791,7 +795,7 @@ impl GraphBuilder {
             .collect();
 
         let missing_node_ids: HashSet<i64> = way_node_refs
-            .difference(&nodes_in_bbox.keys().copied().collect())
+            .difference(&bbox_node_ids)
             .copied()
             .collect();
 
@@ -802,44 +806,40 @@ impl GraphBuilder {
             });
         }
 
-        // Collect missing nodes
+        // Collect missing nodes — same Option optimization
         let reader2 = ElementReader::from_path(path)?;
-        let missing_nodes = reader2.par_map_reduce(
-            |element| -> HashMap<i64, (f64, f64, Option<f64>)> {
+        let missing_entries: Vec<NodeEntry> = reader2.par_map_reduce(
+            |element| -> Vec<NodeEntry> {
                 match element {
                     Element::Node(node) => {
                         if missing_node_ids.contains(&node.id()) {
                             let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
-                            let mut map = HashMap::new();
-                            map.insert(node.id(), (node.lat(), node.lon(), elevation));
-                            map
+                            vec![(node.id(), (node.lat(), node.lon(), elevation))]
                         } else {
-                            HashMap::new()
+                            Vec::new()
                         }
                     }
                     Element::DenseNode(node) => {
                         if missing_node_ids.contains(&node.id()) {
                             let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
-                            let mut map = HashMap::new();
-                            map.insert(node.id(), (node.lat(), node.lon(), elevation));
-                            map
+                            vec![(node.id(), (node.lat(), node.lon(), elevation))]
                         } else {
-                            HashMap::new()
+                            Vec::new()
                         }
                     }
-                    _ => HashMap::new(),
+                    _ => Vec::new(),
                 }
             },
-            HashMap::new,
+            Vec::new,
             |mut acc, nodes| {
                 acc.extend(nodes);
                 acc
             },
         )?;
 
-        // Merge all nodes
+        // Build final node map
         let mut all_nodes = nodes_in_bbox;
-        all_nodes.extend(missing_nodes);
+        all_nodes.extend(missing_entries);
 
         Ok(FilteredPbfData {
             nodes: all_nodes,
