@@ -101,7 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tracing::warn!("  ⚠️  Empty tile (no roads in this area), skipping");
                     skipped += 1;
                 } else {
-                    graph.write_compressed(&output_path)?;
+                    graph.write_to_path(&output_path)?;
                     generated += 1;
                     tracing::info!(
                         "  ✅ Saved: {} nodes, {} edges → {}",

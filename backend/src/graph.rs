@@ -12,6 +12,7 @@ use once_cell::sync::Lazy;
 use osmpbf::{Element, ElementReader};
 use serde::{Deserialize, Serialize};
 
+use crate::geo_utils::haversine_km;
 use crate::models::{Coordinate, SurfaceType};
 
 /// Type aliases for complex OSM data structures
@@ -50,7 +51,7 @@ pub trait GraphCache: Send + Sync {
 /// - Write path: RwLock::write() + put() for exclusive cache updates
 /// - Benefit: Multiple route requests can check cache simultaneously
 static GRAPH_CACHE: Lazy<RwLock<LruCache<String, GraphFile>>> =
-    Lazy::new(|| RwLock::new(LruCache::new(NonZeroUsize::new(20).unwrap())));
+    Lazy::new(|| RwLock::new(LruCache::new(NonZeroUsize::new(20).expect("20 is non-zero"))));
 
 /// Default LRU-based implementation of GraphCache
 pub struct LruGraphCache;
@@ -123,46 +124,53 @@ impl GraphFile {
     pub fn read_from_path(path: impl AsRef<Path>) -> Result<Self, io::Error> {
         let path = path.as_ref();
 
-        // Try compressed format first (.zst extension)
-        let compressed_path = path.with_extension("json.zst");
-        if compressed_path.exists() {
-            return Self::read_compressed(&compressed_path);
+        // Try binary postcard format first
+        let bin_path = path.with_extension("bin");
+        if bin_path.exists() {
+            return Self::read_binary(&bin_path);
         }
 
-        // Fallback to uncompressed JSON
+        // Legacy: try compressed JSON (.zst)
+        let compressed_path = path.with_extension("json.zst");
+        if compressed_path.exists() {
+            return Self::read_compressed_json(&compressed_path);
+        }
+
+        // Legacy: uncompressed JSON
         let file = File::open(path)?;
-        serde_json::from_reader(file).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+        serde_json::from_reader(file)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 
     pub fn write_to_path(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
-        let path = path.as_ref();
+        let bin_path = path.as_ref().with_extension("bin");
+        self.write_binary(&bin_path)
+    }
 
-        // Write compressed format (.zst) for better performance
-        let compressed_path = path.with_extension("json.zst");
-        self.write_compressed(&compressed_path)?;
-
-        // Also write uncompressed for backward compatibility (can be removed later)
+    /// Write graph as postcard binary (fast, compact)
+    fn write_binary(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
+        let bytes = postcard::to_allocvec(self)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let file = File::create(path)?;
-        let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, file);
-        serde_json::to_writer(&mut writer, self)?;
+        let mut writer = BufWriter::new(file);
+        writer.write_all(&bytes)?;
         writer.flush()
     }
 
-    /// Write graph with Zstandard compression (60-70% space savings)
-    pub fn write_compressed(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
-        let file = File::create(path)?;
-        let mut encoder = zstd::stream::write::Encoder::new(file, 3)?; // Level 3 = good balance
-        serde_json::to_writer(&mut encoder, self)?;
-        encoder.finish()?;
-        Ok(())
+    /// Read graph from postcard binary
+    fn read_binary(path: impl AsRef<Path>) -> Result<Self, io::Error> {
+        let bytes = std::fs::read(path)?;
+        postcard::from_bytes(&bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    /// Read graph with Zstandard decompression
-    pub fn read_compressed(path: impl AsRef<Path>) -> Result<Self, io::Error> {
+    /// Legacy: read compressed JSON (.zst)
+    fn read_compressed_json(path: impl AsRef<Path>) -> Result<Self, io::Error> {
         let file = File::open(path)?;
         let decoder = zstd::stream::read::Decoder::new(file)?;
         let reader = BufReader::new(decoder);
-        serde_json::from_reader(reader).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+        serde_json::from_reader(reader)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 }
 
@@ -303,7 +311,7 @@ impl TileId {
 
     /// Get filename for this tile
     pub fn filename(&self) -> String {
-        format!("tile_{}_{}.json.zst", self.x, self.y)
+        format!("tile_{}_{}.bin", self.x, self.y)
     }
 }
 
@@ -438,6 +446,9 @@ impl GraphBuilder {
     ///
     /// Load only the tiles overlapping the bbox, merge them into a single graph.
     /// Requires tiles to be pre-generated using `generate_tiles_from_pbf`.
+    ///
+    /// IMPORTANT: Each tile has local node IDs (1, 2, 3...) that conflict between tiles.
+    /// We use coordinate-based deduplication to merge nodes correctly and remap edge IDs.
     pub fn build_from_tiles(
         &self,
         tiles_dir: impl AsRef<Path>,
@@ -458,11 +469,33 @@ impl GraphBuilder {
             return Err(GraphBuildError::EmptyGraph);
         }
 
-        // Load all tiles
-        let mut all_nodes: HashMap<u64, NodeRecord> = HashMap::new();
-        let mut all_edges = Vec::new();
+        // Use coordinate-based key to deduplicate nodes across tiles
+        // Key: (lat_microdegrees, lon_microdegrees) - ~0.1m precision
+        type CoordKey = (i64, i64);
+        fn coord_key(lat: f64, lon: f64) -> CoordKey {
+            ((lat * 1_000_000.0).round() as i64, (lon * 1_000_000.0).round() as i64)
+        }
 
-        for tile_id in &tile_ids {
+        // Map from coordinate key to new global node ID
+        let mut coord_to_global_id: HashMap<CoordKey, u64> = HashMap::new();
+        let mut global_nodes: Vec<NodeRecord> = Vec::new();
+
+        // Collect all edges with original (tile_index, local_from, local_to) info
+        // We'll remap them after all nodes are processed
+        struct TileEdge {
+            tile_idx: usize,
+            local_from: u64,
+            local_to: u64,
+            surface: SurfaceType,
+            length_m: f64,
+            waypoints: Vec<Coordinate>,
+        }
+        let mut all_tile_edges: Vec<TileEdge> = Vec::new();
+
+        // Map from (tile_idx, local_node_id) to global_node_id
+        let mut local_to_global: HashMap<(usize, u64), u64> = HashMap::new();
+
+        for (tile_idx, tile_id) in tile_ids.iter().enumerate() {
             let tile_path = tiles_dir.join(tile_id.filename());
 
             if !tile_path.exists() {
@@ -470,7 +503,7 @@ impl GraphBuilder {
                 continue;
             }
 
-            let tile_graph = GraphFile::read_compressed(&tile_path)?;
+            let tile_graph = GraphFile::read_from_path(&tile_path)?;
 
             tracing::debug!(
                 "Loaded tile {:?}: {} nodes, {} edges",
@@ -479,18 +512,71 @@ impl GraphBuilder {
                 tile_graph.edges.len()
             );
 
-            // Merge nodes (avoid duplicates)
+            // Process nodes: deduplicate by coordinates
             for node in tile_graph.nodes {
-                all_nodes.entry(node.id).or_insert(node);
+                let key = coord_key(node.lat, node.lon);
+                let global_id = *coord_to_global_id.entry(key).or_insert_with(|| {
+                    let new_id = (global_nodes.len() + 1) as u64;
+                    global_nodes.push(NodeRecord {
+                        id: new_id,
+                        lat: node.lat,
+                        lon: node.lon,
+                        elevation: node.elevation,
+                        population_density: node.population_density,
+                    });
+                    new_id
+                });
+                local_to_global.insert((tile_idx, node.id), global_id);
             }
 
-            // Merge edges
-            all_edges.extend(tile_graph.edges);
+            // Collect edges for later remapping
+            for edge in tile_graph.edges {
+                all_tile_edges.push(TileEdge {
+                    tile_idx,
+                    local_from: edge.from,
+                    local_to: edge.to,
+                    surface: edge.surface,
+                    length_m: edge.length_m,
+                    waypoints: edge.waypoints,
+                });
+            }
         }
 
-        // Filter nodes and edges to bbox (tiles might have overlap)
-        let filtered_nodes: Vec<NodeRecord> = all_nodes
-            .into_values()
+        // Remap edges using the local-to-global mapping
+        let mut global_edges: Vec<EdgeRecord> = Vec::new();
+        let mut skipped_edges = 0;
+
+        for edge in all_tile_edges {
+            let global_from = local_to_global.get(&(edge.tile_idx, edge.local_from));
+            let global_to = local_to_global.get(&(edge.tile_idx, edge.local_to));
+
+            match (global_from, global_to) {
+                (Some(&from_id), Some(&to_id)) => {
+                    // Skip self-loops
+                    if from_id == to_id {
+                        continue;
+                    }
+                    global_edges.push(EdgeRecord {
+                        from: from_id,
+                        to: to_id,
+                        surface: edge.surface,
+                        length_m: edge.length_m,
+                        waypoints: edge.waypoints,
+                    });
+                }
+                _ => {
+                    skipped_edges += 1;
+                }
+            }
+        }
+
+        if skipped_edges > 0 {
+            tracing::warn!("Skipped {} edges with missing nodes", skipped_edges);
+        }
+
+        // Filter nodes and edges to bbox
+        let filtered_nodes: Vec<NodeRecord> = global_nodes
+            .into_iter()
             .filter(|node| {
                 bbox.contains(Coordinate {
                     lat: node.lat,
@@ -500,13 +586,14 @@ impl GraphBuilder {
             .collect();
 
         let node_ids: std::collections::HashSet<u64> = filtered_nodes.iter().map(|n| n.id).collect();
-        let filtered_edges: Vec<EdgeRecord> = all_edges
+        let filtered_edges: Vec<EdgeRecord> = global_edges
             .into_iter()
             .filter(|edge| node_ids.contains(&edge.from) && node_ids.contains(&edge.to))
             .collect();
 
         tracing::info!(
-            "Merged tiles: {} nodes, {} edges",
+            "Merged {} tiles: {} unique nodes, {} edges (deduped by coordinates)",
+            tile_ids.len(),
             filtered_nodes.len(),
             filtered_edges.len()
         );
@@ -551,27 +638,32 @@ impl GraphBuilder {
             }
         }
 
-        // Check disk cache (compressed format preferred)
+        // Check disk cache (binary postcard format)
+        let cache_path_bin = cache_dir
+            .as_ref()
+            .join(format!("partial_{}.bin", cache_key));
+
+        // Also check legacy formats for backward compatibility
         let cache_path_compressed = cache_dir
             .as_ref()
             .join(format!("partial_{}.json.zst", cache_key));
-        let cache_path_uncompressed = cache_dir
+        let cache_path_json = cache_dir
             .as_ref()
             .join(format!("partial_{}.json", cache_key));
 
-        if cache_path_compressed.exists() {
-            tracing::debug!("Disk cache hit (compressed) for bbox {:?}", bbox);
-            let graph = GraphFile::read_compressed(&cache_path_compressed).map_err(GraphBuildError::Io)?;
+        let disk_cache_path = if cache_path_bin.exists() {
+            Some(&cache_path_bin)
+        } else if cache_path_compressed.exists() {
+            Some(&cache_path_compressed)
+        } else if cache_path_json.exists() {
+            Some(&cache_path_json)
+        } else {
+            None
+        };
 
-            // Populate LRU cache
-            if let Ok(mut cache) = GRAPH_CACHE.write() {
-                cache.put(cache_key.clone(), graph.clone());
-            }
-
-            return Ok(graph);
-        } else if cache_path_uncompressed.exists() {
-            tracing::debug!("Disk cache hit (uncompressed) for bbox {:?}", bbox);
-            let graph = GraphFile::read_from_path(&cache_path_uncompressed).map_err(GraphBuildError::Io)?;
+        if let Some(path) = disk_cache_path {
+            tracing::debug!("Disk cache hit for bbox {:?}: {}", bbox, path.display());
+            let graph = GraphFile::read_from_path(path).map_err(GraphBuildError::Io)?;
 
             // Populate LRU cache
             if let Ok(mut cache) = GRAPH_CACHE.write() {
@@ -588,15 +680,15 @@ impl GraphBuilder {
         let builder = GraphBuilder::new(config);
         let graph = builder.build_from_pbf(pbf_path)?;
 
-        // Cache to disk (both formats for transition period)
+        // Cache to disk (binary postcard format)
         std::fs::create_dir_all(cache_dir.as_ref())?;
-        graph.write_to_path(&cache_path_uncompressed)?;
+        graph.write_to_path(&cache_path_bin)?;
 
         tracing::info!(
             "Partial graph cached: {} nodes, {} edges at {:?}",
             graph.nodes.len(),
             graph.edges.len(),
-            cache_path_compressed
+            cache_path_bin
         );
 
         // Populate LRU cache
@@ -774,19 +866,20 @@ impl GraphBuilder {
             node_state.nodes.len()
         );
 
-        // Build edges from ways WITH intermediate waypoints
+        // Build edges from ways WITH intermediate waypoints for precise trail following
         let mut edges = Vec::new();
 
-        // First, identify all intersection nodes across all ways
+        // Identify all intersection nodes (where ways meet or endpoints)
         let intersections = identify_intersection_nodes(&data.ways);
 
-        tracing::debug!(
+        tracing::info!(
             "Identified {} intersection nodes from {} ways",
             intersections.len(),
             data.ways.len()
         );
 
         // For each way, split it into segments between intersections
+        // Each edge stores the intermediate waypoints for precise geometry
         let ways_count = data.ways.len();
 
         for (_, node_refs, tags) in &data.ways {
@@ -842,13 +935,63 @@ impl GraphBuilder {
             edges.len(),
             ways_count,
             edges_with_waypoints,
-            (edges_with_waypoints as f64 / edges.len() as f64) * 100.0,
+            if edges.is_empty() { 0.0 } else { (edges_with_waypoints as f64 / edges.len() as f64) * 100.0 },
             total_waypoints
         );
 
+        // Filter out unused nodes (nodes not referenced by any edge)
+        // This keeps only intersection nodes that have edges connecting them
+        let used_node_ids: std::collections::HashSet<u64> = edges
+            .iter()
+            .flat_map(|e| [e.from, e.to])
+            .collect();
+
+        let original_node_count = node_state.nodes.len();
+
+        // Create mapping from old graph_id to new graph_id
+        let mut old_to_new_id: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+        let mut filtered_nodes = Vec::with_capacity(used_node_ids.len());
+
+        for node in node_state.nodes {
+            if used_node_ids.contains(&node.id) {
+                let new_id = (filtered_nodes.len() + 1) as u64;
+                old_to_new_id.insert(node.id, new_id);
+                filtered_nodes.push(NodeRecord {
+                    id: new_id,
+                    lat: node.lat,
+                    lon: node.lon,
+                    elevation: node.elevation,
+                    population_density: node.population_density,
+                });
+            }
+        }
+
+        // Remap edge node IDs
+        let remapped_edges: Vec<EdgeRecord> = edges
+            .into_iter()
+            .filter_map(|e| {
+                let new_from = old_to_new_id.get(&e.from)?;
+                let new_to = old_to_new_id.get(&e.to)?;
+                Some(EdgeRecord {
+                    from: *new_from,
+                    to: *new_to,
+                    length_m: e.length_m,
+                    surface: e.surface,
+                    waypoints: e.waypoints,
+                })
+            })
+            .collect();
+
+        tracing::info!(
+            "Filtered unused nodes: {} -> {} nodes ({:.1}% reduction)",
+            original_node_count,
+            filtered_nodes.len(),
+            (1.0 - filtered_nodes.len() as f64 / original_node_count as f64) * 100.0
+        );
+
         Ok(GraphFile {
-            nodes: node_state.nodes,
-            edges,
+            nodes: filtered_nodes,
+            edges: remapped_edges,
         })
     }
 
@@ -1058,32 +1201,6 @@ impl GraphBuilder {
     }
 }
 
-// Pure function to process a node element (not used anymore, kept for reference)
-#[allow(dead_code)]
-fn process_node_element(
-    lat: f64,
-    lon: f64,
-    osm_id: i64,
-    elevation: Option<f64>,
-    bbox: Option<BoundingBox>,
-) -> Vec<OsmNode> {
-    let coord = Coordinate { lat, lon };
-
-    // Apply bounding box filter
-    let in_bbox = bbox.map(|b| b.contains(coord)).unwrap_or(true);
-
-    if in_bbox {
-        vec![OsmNode {
-            osm_id,
-            lat,
-            lon,
-            elevation,
-        }]
-    } else {
-        Vec::new()
-    }
-}
-
 // Pure function to process a way element and extract edges
 fn process_way_element(
     way: osmpbf::elements::Way,
@@ -1128,7 +1245,7 @@ fn create_edge_record(
     let coord_a = coords.get((from - 1) as usize)?;
     let coord_b = coords.get((to - 1) as usize)?;
 
-    let length_km = crate::routing::haversine_km(*coord_a, *coord_b);
+    let length_km = haversine_km(*coord_a, *coord_b);
 
     Some(EdgeRecord {
         from: *from,
@@ -1257,25 +1374,30 @@ fn build_edge_with_waypoints(
     let first_osm = node_refs[0];
     let last_osm = node_refs[node_refs.len() - 1];
 
-    // Get graph IDs for start and end
+    // Get graph IDs for start and end (1-based)
     let from_id = *osm_to_graph.get(&first_osm)?;
     let to_id = *osm_to_graph.get(&last_osm)?;
 
+    // Convert to 0-based index for coords array
+    let from_idx = (from_id - 1) as usize;
+    let to_idx = (to_id - 1) as usize;
+
     // Bounds check
-    if (from_id as usize) >= coords.len() || (to_id as usize) >= coords.len() {
+    if from_idx >= coords.len() || to_idx >= coords.len() {
         return None;
     }
 
-    let from_coord = coords[from_id as usize];
-    let to_coord = coords[to_id as usize];
+    let from_coord = coords[from_idx];
+    let to_coord = coords[to_idx];
 
     // Collect intermediate waypoints (excluding first and last)
     let waypoints: Vec<Coordinate> = node_refs[1..node_refs.len() - 1]
         .iter()
         .filter_map(|&osm_id| {
             let graph_id = *osm_to_graph.get(&osm_id)?;
-            if (graph_id as usize) < coords.len() {
-                Some(coords[graph_id as usize])
+            let idx = (graph_id - 1) as usize; // Convert to 0-based index
+            if idx < coords.len() {
+                Some(coords[idx])
             } else {
                 None
             }
@@ -1287,10 +1409,10 @@ fn build_edge_with_waypoints(
     let mut prev_coord = from_coord;
 
     for &waypoint in &waypoints {
-        length_m += crate::routing::haversine_km(prev_coord, waypoint) * 1000.0;
+        length_m += haversine_km(prev_coord, waypoint) * 1000.0;
         prev_coord = waypoint;
     }
-    length_m += crate::routing::haversine_km(prev_coord, to_coord) * 1000.0;
+    length_m += haversine_km(prev_coord, to_coord) * 1000.0;
 
     Some(EdgeRecord {
         from: from_id,
@@ -1372,11 +1494,12 @@ mod tests {
     #[test]
     fn test_build_edge_with_waypoints_two_nodes() {
         // Segment with 2 nodes (no intermediate waypoints)
+        // Graph IDs are 1-based (matching production code)
         let node_refs = vec![10, 20];
 
         let mut osm_to_graph = HashMap::new();
-        osm_to_graph.insert(10, 0);
-        osm_to_graph.insert(20, 1);
+        osm_to_graph.insert(10, 1);
+        osm_to_graph.insert(20, 2);
 
         let coords = vec![
             Coordinate { lat: 45.0, lon: 4.0 },
@@ -1390,8 +1513,8 @@ mod tests {
             &coords,
         ).expect("Should create edge");
 
-        assert_eq!(edge.from, 0);
-        assert_eq!(edge.to, 1);
+        assert_eq!(edge.from, 1);
+        assert_eq!(edge.to, 2);
         assert_eq!(edge.waypoints.len(), 0); // No intermediate waypoints
         assert!(edge.length_m > 0.0);
     }
@@ -1399,14 +1522,15 @@ mod tests {
     #[test]
     fn test_build_edge_with_waypoints_five_nodes() {
         // Segment with 5 nodes (3 intermediate waypoints)
+        // Graph IDs are 1-based (matching production code)
         let node_refs = vec![10, 20, 30, 40, 50];
 
         let mut osm_to_graph = HashMap::new();
-        osm_to_graph.insert(10, 0);
-        osm_to_graph.insert(20, 1);
-        osm_to_graph.insert(30, 2);
-        osm_to_graph.insert(40, 3);
-        osm_to_graph.insert(50, 4);
+        osm_to_graph.insert(10, 1);
+        osm_to_graph.insert(20, 2);
+        osm_to_graph.insert(30, 3);
+        osm_to_graph.insert(40, 4);
+        osm_to_graph.insert(50, 5);
 
         let coords = vec![
             Coordinate { lat: 45.0, lon: 4.0 },
@@ -1423,8 +1547,8 @@ mod tests {
             &coords,
         ).expect("Should create edge");
 
-        assert_eq!(edge.from, 0);
-        assert_eq!(edge.to, 4);
+        assert_eq!(edge.from, 1);
+        assert_eq!(edge.to, 5);
         assert_eq!(edge.waypoints.len(), 3); // 3 intermediate waypoints
 
         // Check waypoints are correct

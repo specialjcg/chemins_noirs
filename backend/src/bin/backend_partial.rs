@@ -427,7 +427,7 @@ fn prepare_graph_for_bbox(
     bbox: BoundingBox,
 ) -> Result<GraphFile, (StatusCode, String)> {
     let cache_key = bbox.cache_key();
-    let cache_path = config.cache_dir.join(format!("{}.json", cache_key));
+    let cache_path = config.cache_dir.join(format!("{}.bin", cache_key));
 
     // Check cache first
     if cache_path.exists() {
