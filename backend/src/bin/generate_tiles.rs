@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let total = tiles.len();
 
     for (idx, tile_id) in tiles.iter().enumerate() {
-        let output_path = output_dir.join(tile_id.filename());
+        let output_path = output_dir.join(format!("{}.bin", tile_id.filename()));
 
         // Skip if tile already exists
         if output_path.exists() {

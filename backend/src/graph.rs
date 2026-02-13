@@ -309,9 +309,11 @@ impl TileId {
         }
     }
 
-    /// Get filename for this tile
+    /// Get base filename for this tile (without extension)
+    ///
+    /// Callers should append the appropriate extension (.bin, .json.zst, etc.)
     pub fn filename(&self) -> String {
-        format!("tile_{}_{}.bin", self.x, self.y)
+        format!("tile_{}_{}", self.x, self.y)
     }
 }
 
@@ -496,12 +498,20 @@ impl GraphBuilder {
         let mut local_to_global: HashMap<(usize, u64), u64> = HashMap::new();
 
         for (tile_idx, tile_id) in tile_ids.iter().enumerate() {
-            let tile_path = tiles_dir.join(tile_id.filename());
+            let base_name = tile_id.filename();
+            // Try multiple extensions: binary (fast), compressed JSON, plain JSON
+            let tile_path = [".bin", ".json.zst", ".json"]
+                .iter()
+                .map(|ext| tiles_dir.join(format!("{}{}", base_name, ext)))
+                .find(|p| p.exists());
 
-            if !tile_path.exists() {
-                tracing::warn!("Tile not found: {}, skipping", tile_path.display());
-                continue;
-            }
+            let tile_path = match tile_path {
+                Some(p) => p,
+                None => {
+                    tracing::warn!("Tile not found: {}, skipping", base_name);
+                    continue;
+                }
+            };
 
             let tile_graph = GraphFile::read_from_path(&tile_path)?;
 
