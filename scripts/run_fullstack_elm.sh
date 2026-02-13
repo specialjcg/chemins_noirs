@@ -25,24 +25,22 @@ export PBF_PATH="${GRAPH_PBF:-$DEFAULT_PBF}"
 export CACHE_DIR="${CACHE_DIR:-data/cache}"
 
 # Tiles directory for fast graph loading (<10s instead of ~2min)
-# Auto-detect: if data/tiles/ exists with tile files, use it by default
+# NOTE: tiles mode is opt-in only (--tiles flag) because tile merging
+# can produce routing quality regressions vs PBF. The PBF path has been
+# optimized (Tracks 2a-2c) and is the safe default.
 DEFAULT_TILES="$ROOT_DIR/backend/data/tiles"
 if [[ "$USE_TILES" == "true" ]] || [[ -n "${TILES_DIR:-}" ]]; then
     # Explicit tiles mode requested
     export TILES_DIR="${TILES_DIR:-$DEFAULT_TILES}"
     if [[ -d "$TILES_DIR" ]]; then
-        echo "Mode tuiles actif (--tiles)"
+        echo "Mode tuiles actif (--tiles) ⚠️  qualite de routage non garantie"
     else
         echo "Mode tuiles demande mais dossier tiles non trouve, utilisation du PBF"
         unset TILES_DIR
     fi
-elif [[ -d "$DEFAULT_TILES" ]] && ls "$DEFAULT_TILES"/tile_*.json.zst >/dev/null 2>&1; then
-    # Auto-detect: tiles exist, use them for fast startup
-    export TILES_DIR="$DEFAULT_TILES"
-    echo "Mode tuiles auto-detecte (${DEFAULT_TILES})"
 else
     unset TILES_DIR
-    echo "Mode PBF complet (routage precis depuis rhone-alpes.osm.pbf)"
+    echo "Mode PBF optimise (routage precis depuis rhone-alpes.osm.pbf)"
 fi
 DEFAULT_DEM_TIF="$ROOT_DIR/backend/data/dem/region.tif"
 DEFAULT_DEM_ASC="$ROOT_DIR/backend/data/dem/region.asc"
