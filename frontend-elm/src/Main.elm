@@ -262,13 +262,21 @@ update msg model =
                     ( applyRoute model route
                     , Cmd.batch
                         [ Ports.updateRoute route.path
-                        , case route.metadata of
-                            Just meta ->
-                                Ports.updateBbox meta.bounds
+                        , if model.routeMode == MultiPoint then
+                            -- In multi-point mode, don't re-center the map
+                            -- (user is actively placing points, don't interrupt)
+                            Cmd.none
 
-                            Nothing ->
-                                Cmd.none
-                        , centerOnRouteCmd route
+                          else
+                            Cmd.batch
+                                [ case route.metadata of
+                                    Just meta ->
+                                        Ports.updateBbox meta.bounds
+
+                                    Nothing ->
+                                        Cmd.none
+                                , centerOnRouteCmd route
+                                ]
                         ]
                     )
 

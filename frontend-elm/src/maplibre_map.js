@@ -868,7 +868,7 @@ export function updateWaypointMarkers(waypoints) {
       window.dispatchEvent(new CustomEvent('waypoint-deleted', { detail: { index } }));
     });
 
-    const marker = new maplibregl.Marker({ element: el, draggable: true })
+    const marker = new maplibregl.Marker({ element: el, draggable: true, anchor: 'center' })
       .setLngLat([coord.lon, coord.lat])
       .addTo(mapInstance);
 
