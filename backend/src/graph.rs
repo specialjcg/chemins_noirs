@@ -498,22 +498,21 @@ impl GraphBuilder {
         let mut local_to_global: HashMap<(usize, u64), u64> = HashMap::new();
 
         for (tile_idx, tile_id) in tile_ids.iter().enumerate() {
-            let base_name = tile_id.filename();
-            // Try multiple extensions: binary (fast), compressed JSON, plain JSON
-            let tile_path = [".bin", ".json.zst", ".json"]
+            // Pass the base path (no extension) to read_from_path, which
+            // already probes .bin, .json.zst, and plain .json in order.
+            let base_path = tiles_dir.join(tile_id.filename());
+
+            // Check if any format exists before attempting to read
+            let has_file = [".bin", ".json.zst", ".json"]
                 .iter()
-                .map(|ext| tiles_dir.join(format!("{}{}", base_name, ext)))
-                .find(|p| p.exists());
+                .any(|ext| base_path.with_extension(&ext[1..]).exists());
 
-            let tile_path = match tile_path {
-                Some(p) => p,
-                None => {
-                    tracing::warn!("Tile not found: {}, skipping", base_name);
-                    continue;
-                }
-            };
+            if !has_file {
+                tracing::warn!("Tile not found: {}, skipping", base_path.display());
+                continue;
+            }
 
-            let tile_graph = GraphFile::read_from_path(&tile_path)?;
+            let tile_graph = GraphFile::read_from_path(&base_path)?;
 
             tracing::debug!(
                 "Loaded tile {:?}: {} nodes, {} edges",
