@@ -577,33 +577,78 @@ impl GraphBuilder {
             tracing::warn!("Skipped {} edges with missing nodes", skipped_edges);
         }
 
-        // Filter nodes and edges to bbox
-        let filtered_nodes: Vec<NodeRecord> = global_nodes
-            .into_iter()
+        // Filter edges to bbox (both endpoints must be in bbox)
+        let bbox_node_ids: std::collections::HashSet<u64> = global_nodes
+            .iter()
             .filter(|node| {
                 bbox.contains(Coordinate {
                     lat: node.lat,
                     lon: node.lon,
                 })
             })
+            .map(|n| n.id)
             .collect();
 
-        let node_ids: std::collections::HashSet<u64> = filtered_nodes.iter().map(|n| n.id).collect();
         let filtered_edges: Vec<EdgeRecord> = global_edges
             .into_iter()
-            .filter(|edge| node_ids.contains(&edge.from) && node_ids.contains(&edge.to))
+            .filter(|edge| bbox_node_ids.contains(&edge.from) && bbox_node_ids.contains(&edge.to))
+            .collect();
+
+        // Filter out unused nodes: only keep nodes referenced by edges.
+        // Without this, the engine snaps waypoints to isolated nodes with
+        // no edges, making routing fail.
+        let used_node_ids: std::collections::HashSet<u64> = filtered_edges
+            .iter()
+            .flat_map(|e| [e.from, e.to])
+            .collect();
+
+        let total_nodes = global_nodes.len();
+
+        // Remap node IDs to be contiguous (1, 2, 3...)
+        let mut old_to_new: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+        let mut final_nodes = Vec::with_capacity(used_node_ids.len());
+
+        for node in global_nodes {
+            if used_node_ids.contains(&node.id) {
+                let new_id = (final_nodes.len() + 1) as u64;
+                old_to_new.insert(node.id, new_id);
+                final_nodes.push(NodeRecord {
+                    id: new_id,
+                    lat: node.lat,
+                    lon: node.lon,
+                    elevation: node.elevation,
+                    population_density: node.population_density,
+                });
+            }
+        }
+
+        // Remap edge IDs
+        let final_edges: Vec<EdgeRecord> = filtered_edges
+            .into_iter()
+            .filter_map(|e| {
+                let new_from = old_to_new.get(&e.from)?;
+                let new_to = old_to_new.get(&e.to)?;
+                Some(EdgeRecord {
+                    from: *new_from,
+                    to: *new_to,
+                    surface: e.surface,
+                    length_m: e.length_m,
+                    waypoints: e.waypoints,
+                })
+            })
             .collect();
 
         tracing::info!(
-            "Merged {} tiles: {} unique nodes, {} edges (deduped by coordinates)",
+            "Merged {} tiles: {} -> {} nodes (unused filtered), {} edges",
             tile_ids.len(),
-            filtered_nodes.len(),
-            filtered_edges.len()
+            total_nodes,
+            final_nodes.len(),
+            final_edges.len()
         );
 
         Ok(GraphFile {
-            nodes: filtered_nodes,
-            edges: filtered_edges,
+            nodes: final_nodes,
+            edges: final_edges,
         })
     }
 
