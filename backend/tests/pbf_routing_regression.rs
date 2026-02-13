@@ -178,10 +178,11 @@ fn full_loop_distance_is_stable() {
         distance_km
     );
 
-    // Snapshot: 2.8513 km, 98 waypoints (established 2026-02-13)
-    // 10% tolerance to catch major regressions but allow minor graph changes
+    // Snapshot: 2.8513 km, 98 waypoints (edge-projection snap with combined scoring)
+    // Combined score (road_dist + endpoint_dist) gives same result as original for
+    // well-placed waypoints while fixing snapping at road crossings.
     assert!(
-        (distance_km - 2.8513).abs() < 0.30,
+        (distance_km - 2.85).abs() < 0.30,
         "Loop distance regressed: {:.4} km (expected ~2.85 km, tolerance ±0.30)",
         distance_km
     );

@@ -610,17 +610,39 @@ update msg model =
                                         |> List.reverse
                                         |> List.drop 1
                                         |> List.reverse
+
+                        isMultiPoint =
+                            not (List.isEmpty waypoints)
+
+                        -- Restore map markers (waypoint markers for multi-point,
+                        -- selection markers for point-to-point)
+                        markerCmds =
+                            if isMultiPoint then
+                                [ Ports.updateWaypointMarkers waypoints ]
+
+                            else
+                                let
+                                    startCoord = List.head route.path
+                                    endCoord = List.head (List.reverse route.path)
+                                in
+                                [ Ports.updateSelectionMarkers
+                                    { start = startCoord
+                                    , end = endCoord
+                                    }
+                                ]
                     in
                     ( applySavedRoute { model | pending = False, error = Nothing } route waypoints
                     , Cmd.batch
-                        [ Ports.updateRoute route.path
-                        , case route.metadata of
+                        ([ Ports.updateRoute route.path
+                         , case route.metadata of
                             Just meta ->
                                 Ports.centerOnMarkers { start = meta.start, end = meta.end }
 
                             Nothing ->
                                 Cmd.none
-                        ]
+                         ]
+                            ++ markerCmds
+                        )
                     )
 
                 Err error ->
@@ -738,7 +760,10 @@ update msg model =
 view : Model -> Html Msg
 view model =
     div [ class "app-container" ]
-        [ h1 [] [ text "Chemins Noirs – générateur GPX anti-bitume" ]
+        [ header [ class "app-header" ]
+            [ h1 [] [ text "Chemins Noirs" ]
+            , p [ class "app-subtitle" ] [ text "Générateur GPX anti-bitume" ]
+            ]
         , Form.view model
         , Preview.view model
         ]
@@ -828,11 +853,18 @@ applyRoute model route =
 applySavedRoute : Model -> RouteResponse -> List Coordinate -> Model
 applySavedRoute model route originalWaypoints =
     let
-        startCoord =
-            List.head route.path
-
-        endCoord =
-            List.head (List.reverse route.path)
+        -- For multi-point routes, use the original waypoints (click positions)
+        -- for form start/end instead of the path (which includes snap projections).
+        -- This ensures recalculating produces the same route.
+        ( startCoord, endCoord ) =
+            if not (List.isEmpty originalWaypoints) then
+                ( List.head originalWaypoints
+                , List.head (List.reverse originalWaypoints)
+                )
+            else
+                ( List.head route.path
+                , List.head (List.reverse route.path)
+                )
 
         form =
             model.form
