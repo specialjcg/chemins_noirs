@@ -33,12 +33,12 @@ const CAMERA_MODES = {
     altitude: 12,
     zoom: 19.0,
     lookahead: 100,
-    speed: 30, // m/s - fast
+    speed: 60, // m/s - fast
     smoothing: 0.25,
     banking: true,
     bankingAmount: 8, // degrees
     adaptiveSpeed: true,
-    minSpeed: 15, // m/s in sharp turns
+    minSpeed: 30, // m/s in sharp turns
     turnThreshold: 40, // degrees
     lateralOffset: 0, // No offset - follow path
     bearingOffset: 0 // Look straight ahead
@@ -50,12 +50,12 @@ const CAMERA_MODES = {
     altitude: 25, // Higher up to see more
     zoom: 18.5,
     lookahead: 150, // Look further ahead for cinematic effect
-    speed: 25, // m/s - moderate cinematic
+    speed: 50, // m/s - fast cinematic
     smoothing: 0.35, // Smooth movements
     banking: false, // No banking for stable shot
     bankingAmount: 0,
     adaptiveSpeed: true,
-    minSpeed: 12,
+    minSpeed: 24,
     turnThreshold: 45,
     lateralOffset: 40, // 40m to the side of the path
     bearingOffset: -25 // Look towards the path (negative = look left towards path)
@@ -67,12 +67,12 @@ const CAMERA_MODES = {
     altitude: 5, // Very low
     zoom: 19.8,
     lookahead: 60, // Short lookahead for aggressive feel
-    speed: 35, // m/s - FAST!
+    speed: 70, // m/s - FAST!
     smoothing: 0.15, // Quick reactions
     banking: true,
     bankingAmount: 18, // Aggressive banking
     adaptiveSpeed: true,
-    minSpeed: 20, // Still fast in turns
+    minSpeed: 40, // Still fast in turns
     turnThreshold: 30, // More aggressive
     lateralOffset: 0,
     bearingOffset: 0
@@ -84,7 +84,7 @@ const CAMERA_MODES = {
     altitude: 20, // High up for overview
     zoom: 18.3,
     lookahead: 200, // Long lookahead
-    speed: 18, // m/s - moderate discovery
+    speed: 36, // m/s - fast discovery
     smoothing: 0.45, // Very smooth
     banking: false,
     bankingAmount: 0,
