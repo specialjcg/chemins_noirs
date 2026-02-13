@@ -116,7 +116,7 @@ pub struct EdgeRecord {
     pub length_m: f64,
     /// Intermediate waypoints between from and to nodes (excluding from/to themselves)
     /// This preserves the actual geometry of the road
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub waypoints: Vec<Coordinate>,
 }
 
