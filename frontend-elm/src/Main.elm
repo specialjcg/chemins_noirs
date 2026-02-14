@@ -539,14 +539,28 @@ update msg model =
             let
                 newMode =
                     case model.mapViewMode of
-                        Standard ->
+                        Topo ->
                             Satellite
 
                         Satellite ->
-                            Standard
+                            Hybrid
+
+                        Hybrid ->
+                            Topo
+
+                styleStr =
+                    case newMode of
+                        Topo ->
+                            "topo"
+
+                        Satellite ->
+                            "satellite"
+
+                        Hybrid ->
+                            "hybrid"
             in
             ( { model | mapViewMode = newMode }
-            , Ports.toggleSatelliteView (newMode == Satellite)
+            , Ports.switchMapStyle styleStr
             )
 
         Toggle3DView ->
@@ -822,6 +836,46 @@ update msg model =
                     , Cmd.none
                     )
 
+        ExportGpx ->
+            case model.lastResponse of
+                Just route ->
+                    ( model
+                    , Ports.downloadGpx
+                        { filename = "chemins-noirs.gpx"
+                        , content = generateGpx route
+                        }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        CopyShareLink ->
+            let
+                waypointStr =
+                    model.waypoints
+                        |> List.map (\c -> String.fromFloat c.lat ++ "," ++ String.fromFloat c.lon)
+                        |> String.join ";"
+            in
+            ( model
+            , Ports.copyToClipboard ("#w=" ++ waypointStr)
+            )
+
+        GotGeolocation lat lon ->
+            update (AddWaypoint { lat = lat, lon = lon }) model
+
+        RequestGeolocation ->
+            ( model, Ports.requestGeolocation () )
+
+        ToggleElevationChart ->
+            ( { model | showElevationChart = not model.showElevationChart }
+            , Cmd.none
+            )
+
+        ElevationChartHover idx ->
+            ( { model | elevationHoverIndex = Just idx }
+            , Cmd.none
+            )
+
         NoOp ->
             ( model, Cmd.none )
 
@@ -857,6 +911,7 @@ subscriptions model =
                 RouteLoadedFromStorage
                     (Json.Decode.decodeValue Decoders.decodeRouteResponse value)
             )
+        , Ports.gotGeolocation (\{ lat, lon } -> GotGeolocation lat lon)
         ]
 
 
@@ -1036,6 +1091,52 @@ loopFormToRequest form loopForm =
 
         Nothing ->
             Err "Coordonnées de départ invalides"
+
+
+generateGpx : RouteResponse -> String
+generateGpx route =
+    let
+        header =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                ++ "<gpx version=\"1.1\" creator=\"Chemins Noirs\"\n"
+                ++ "  xmlns=\"http://www.topografix.com/GPX/1/1\">\n"
+                ++ "  <trk>\n"
+                ++ "    <name>Chemins Noirs</name>\n"
+                ++ "    <trkseg>\n"
+
+        elevations =
+            route.elevationProfile
+                |> Maybe.map .elevations
+                |> Maybe.withDefault []
+
+        points =
+            List.indexedMap
+                (\i coord ->
+                    let
+                        ele =
+                            elevations
+                                |> List.drop i
+                                |> List.head
+                                |> Maybe.andThen identity
+                                |> Maybe.map (\e -> "        <ele>" ++ String.fromFloat e ++ "</ele>\n")
+                                |> Maybe.withDefault ""
+                    in
+                    "      <trkpt lat=\""
+                        ++ String.fromFloat coord.lat
+                        ++ "\" lon=\""
+                        ++ String.fromFloat coord.lon
+                        ++ "\">\n"
+                        ++ ele
+                        ++ "      </trkpt>\n"
+                )
+                route.path
+
+        footer =
+            "    </trkseg>\n"
+                ++ "  </trk>\n"
+                ++ "</gpx>\n"
+    in
+    header ++ String.concat points ++ footer
 
 
 multiPointRequest : Model -> MultiPointRouteRequest

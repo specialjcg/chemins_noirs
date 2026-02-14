@@ -151,6 +151,14 @@ pub async fn generate_loops(
 
             let gpx_base64 = encode_route_as_gpx(&loop_path)?;
             let metadata = Some(crate::build_metadata(&loop_path));
+            let estimated_time_minutes = Some(
+                crate::routing::estimate_time_minutes(distance_km, elevation_profile.total_ascent),
+            );
+            let difficulty = Some(crate::routing::rate_difficulty(
+                &elevation_profile.elevations,
+                &loop_path,
+                elevation_profile.total_ascent,
+            ));
             let route = RouteResponse {
                 path: loop_path,
                 distance_km,
@@ -159,6 +167,9 @@ pub async fn generate_loops(
                 elevation_profile: Some(elevation_profile),
                 terrain: None,
                 snapped_waypoints: None,
+                estimated_time_minutes,
+                difficulty,
+                surface_breakdown: None,
             };
 
             candidates.push(LoopCandidate {

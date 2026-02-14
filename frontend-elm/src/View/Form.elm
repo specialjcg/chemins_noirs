@@ -97,13 +97,21 @@ view model =
                         , span [] [ text " Boucler (retour au point de départ)" ]
                         ]
                     ]
-                , button
-                    [ type_ "button"
-                    , class "btn-secondary btn-block"
-                    , disabled (List.isEmpty model.waypoints)
-                    , onClick ClearWaypoints
+                , div [ class "action-buttons" ]
+                    [ button
+                        [ type_ "button"
+                        , class "btn-geoloc"
+                        , onClick RequestGeolocation
+                        ]
+                        [ text "Ma position" ]
+                    , button
+                        [ type_ "button"
+                        , class "btn-secondary btn-block"
+                        , disabled (List.isEmpty model.waypoints)
+                        , onClick ClearWaypoints
+                        ]
+                        [ text "Effacer tous les points" ]
                     ]
-                    [ text "Effacer tous les points" ]
                 , small [ class "waypoints-summary" ]
                     [ text <|
                         String.fromInt (List.length model.waypoints)
@@ -159,11 +167,14 @@ view model =
                 ]
                 [ text <|
                     case model.mapViewMode of
-                        Standard ->
+                        Topo ->
                             "Vue Satellite"
 
                         Satellite ->
-                            "Vue Standard"
+                            "Vue Hybride"
+
+                        Hybrid ->
+                            "Vue Topo"
                 ]
             ]
         , if model.lastResponse /= Nothing then

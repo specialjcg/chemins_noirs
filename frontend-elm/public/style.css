@@ -1011,3 +1011,296 @@ small {
     border-radius: var(--radius-lg);
   }
 }
+
+/* ─── Stats Row (distance + time + difficulty) ─── */
+.stats-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.stat-time {
+  font-family: var(--font-mono);
+  color: var(--accent-brass-light);
+}
+
+/* Difficulty badge */
+.difficulty-badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.difficulty-easy    { background: #2e7d32; color: #e8f5e9; }
+.difficulty-moderate { background: #f9a825; color: #1a1a1a; }
+.difficulty-difficult { background: #ef6c00; color: #fff3e0; }
+.difficulty-expert  { background: #c62828; color: #ffebee; }
+
+/* ─── Surface Breakdown Bar ─── */
+.surface-breakdown {
+  margin-top: 0.5rem;
+}
+
+.surface-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-input);
+}
+
+.surface-segment {
+  min-width: 2px;
+  transition: width var(--transition-normal);
+}
+.surface-paved  { background: #78909c; }
+.surface-trail  { background: #66bb6a; }
+.surface-dirt   { background: #a1887f; }
+
+.surface-legend {
+  display: flex;
+  gap: 0.8rem;
+  margin-top: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.surface-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.surface-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.surface-dot.surface-paved { background: #78909c; }
+.surface-dot.surface-trail { background: #66bb6a; }
+.surface-dot.surface-dirt  { background: #a1887f; }
+
+/* ─── Elevation Chart ─── */
+.elevation-chart-container {
+  margin-top: 1rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-card);
+}
+
+.elevation-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.elevation-chart-header:hover {
+  background: var(--bg-card-hover);
+}
+
+.elevation-chart-body {
+  padding: 0.5rem;
+}
+
+.elevation-chart-body svg {
+  width: 100%;
+  display: block;
+}
+
+/* ─── GPX Export Button ─── */
+.btn-gpx-export {
+  background: var(--accent-forest);
+  color: var(--text-primary);
+  border: none;
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: background var(--transition-fast);
+}
+.btn-gpx-export:hover {
+  background: var(--accent-forest-light);
+}
+
+/* ─── Share Link Button ─── */
+.btn-share-link {
+  background: var(--info-blue-dim);
+  color: var(--info-blue);
+  border: 1px solid var(--info-blue);
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+.btn-share-link:hover {
+  background: var(--info-blue);
+  color: white;
+}
+
+/* ─── KM Markers ─── */
+.km-marker {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(12, 16, 13, 0.75);
+  border: 1.5px solid var(--accent-brass);
+  color: var(--accent-brass-light);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* ─── Action Buttons Row ─── */
+.action-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  flex-wrap: wrap;
+}
+
+/* ─── Geolocation Button ─── */
+.btn-geoloc {
+  background: var(--accent-brass-dim);
+  color: var(--accent-brass);
+  border: 1px solid var(--accent-brass);
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+.btn-geoloc:hover {
+  background: var(--accent-brass);
+  color: var(--text-inverse);
+}
+
+/* ─── Mobile Responsive (< 768px) ─── */
+@media (max-width: 768px) {
+  body {
+    padding: 0;
+    overflow-x: hidden;
+  }
+
+  /* Map takes full screen */
+  #map {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 1;
+    border-radius: 0 !important;
+  }
+
+  /* App container becomes bottom sheet */
+  .app-container {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    max-width: 100%;
+    max-height: 55vh;
+    overflow-y: auto;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    padding: 1rem;
+    margin: 0;
+    background: rgba(18, 26, 20, 0.97);
+    backdrop-filter: blur(16px);
+    box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.5);
+    transition: max-height 0.3s var(--ease-out);
+  }
+
+  /* Drag handle indicator */
+  .app-container::before {
+    content: '';
+    display: block;
+    width: 40px;
+    height: 4px;
+    background: var(--border-medium);
+    border-radius: 2px;
+    margin: 0 auto 0.75rem;
+  }
+
+  .app-header {
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+  }
+
+  h1 {
+    font-size: 1.3rem;
+  }
+
+  .app-subtitle {
+    font-size: 0.65rem;
+  }
+
+  /* Touch-friendly buttons */
+  button, .btn-submit, .btn-secondary, .map-toggle,
+  .save-btn, .load-btn, .btn-gpx-export, .btn-share-link, .btn-geoloc {
+    min-height: 44px;
+    font-size: 0.85rem;
+  }
+
+  /* Radio labels need more touch area */
+  .route-type label,
+  .click-mode label {
+    padding: 0.5rem 0;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+
+  /* Input fields */
+  input[type="text"], input:not([type]) {
+    min-height: 44px;
+    font-size: 1rem;
+  }
+
+  /* Stats row stacks vertically */
+  .stats-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  /* Metadata grid single column */
+  .metadata-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Path preview hidden on mobile (too verbose) */
+  .path-preview {
+    display: none;
+  }
+
+  /* Saved routes panel */
+  .saved-routes-panel {
+    max-height: 30vh;
+  }
+
+  /* Loop candidates scroll */
+  .loop-candidates {
+    max-height: 25vh;
+    overflow-y: auto;
+  }
+}

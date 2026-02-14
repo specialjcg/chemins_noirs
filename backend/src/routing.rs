@@ -33,6 +33,45 @@ fn perpendicular_unit(start: Coordinate, end: Coordinate) -> Coordinate {
     }
 }
 
+/// Estimate hiking time using Naismith's rule:
+/// time_h = distance_km / 5.0 + ascent_m / 600.0
+pub fn estimate_time_minutes(distance_km: f64, total_ascent: f64) -> u32 {
+    let hours = distance_km / 5.0 + total_ascent / 600.0;
+    (hours * 60.0).round() as u32
+}
+
+/// Rate difficulty based on max slope, total elevation, and distance.
+/// Returns "easy", "moderate", "difficult", or "expert".
+pub fn rate_difficulty(
+    elevations: &[Option<f64>],
+    path: &[Coordinate],
+    total_ascent: f64,
+) -> String {
+    // Compute max slope between consecutive points
+    let mut max_slope_pct: f64 = 0.0;
+    for i in 1..path.len().min(elevations.len()) {
+        if let (Some(e1), Some(e2)) = (elevations[i - 1], elevations[i]) {
+            let horiz_m = haversine_km(path[i - 1], path[i]) * 1000.0;
+            if horiz_m > 1.0 {
+                let slope = ((e2 - e1).abs() / horiz_m * 100.0).abs();
+                if slope > max_slope_pct {
+                    max_slope_pct = slope;
+                }
+            }
+        }
+    }
+
+    if max_slope_pct < 15.0 && total_ascent < 300.0 {
+        "easy".to_string()
+    } else if max_slope_pct < 25.0 && total_ascent < 600.0 {
+        "moderate".to_string()
+    } else if max_slope_pct < 35.0 && total_ascent < 1000.0 {
+        "difficult".to_string()
+    } else {
+        "expert".to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

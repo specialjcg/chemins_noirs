@@ -9,6 +9,7 @@ pub mod graph;
 pub mod loops;
 pub mod models;
 pub mod partial_graph;
+pub mod poi;
 pub mod routing;
 pub mod saved_routes_handlers;
 pub mod terrain;
@@ -123,6 +124,9 @@ async fn route_handler(
         elevation_profile: None, // Not available in this handler (legacy backend)
         terrain: None,
         snapped_waypoints: None,
+        estimated_time_minutes: None,
+        difficulty: None,
+        surface_breakdown: None,
     };
 
     Ok(Json(response))

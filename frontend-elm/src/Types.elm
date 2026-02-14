@@ -26,6 +26,8 @@ type alias Model =
     , saveRouteName : String
     , saveRouteDescription : String
     , showSavedRoutes : Bool
+    , showElevationChart : Bool
+    , elevationHoverIndex : Maybe Int
     }
 
 
@@ -89,13 +91,15 @@ initialModel =
     , error = Nothing
     , clickMode = Start
     , routeMode = PointToPoint
-    , mapViewMode = Standard
+    , mapViewMode = Topo
     , viewMode = Map2D
     , animationState = Stopped
     , savedRoutes = []
     , saveRouteName = ""
     , saveRouteDescription = ""
     , showSavedRoutes = False
+    , showElevationChart = False
+    , elevationHoverIndex = Nothing
     }
 
 
@@ -148,6 +152,12 @@ type Msg
     | ClearWaypoints
     | ToggleCloseLoop
     | ComputeMultiPointRoute
+    | ExportGpx
+    | CopyShareLink
+    | GotGeolocation Float Float
+    | RequestGeolocation
+    | ToggleElevationChart
+    | ElevationChartHover Int
     | NoOp
 
 
@@ -167,8 +177,9 @@ type RouteMode
 
 
 type MapViewMode
-    = Standard
+    = Topo
     | Satellite
+    | Hybrid
 
 
 type ViewMode
@@ -227,6 +238,9 @@ type alias RouteResponse =
     , metadata : Maybe RouteMetadata
     , elevationProfile : Maybe ElevationProfile
     , snappedWaypoints : Maybe (List Coordinate)
+    , estimatedTimeMinutes : Maybe Int
+    , difficulty : Maybe String
+    , surfaceBreakdown : Maybe (List ( String, Float ))
     }
 
 

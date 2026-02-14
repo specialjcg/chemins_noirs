@@ -109,7 +109,19 @@ encodeRouteResponse response =
         , ( "metadata", encodeMaybe encodeRouteMetadata response.metadata )
         , ( "elevation_profile", encodeMaybe encodeElevationProfile response.elevationProfile )
         , ( "snapped_waypoints", encodeMaybe (Encode.list encodeCoordinate) response.snappedWaypoints )
+        , ( "estimated_time_minutes", encodeMaybe Encode.int response.estimatedTimeMinutes )
+        , ( "difficulty", encodeMaybe Encode.string response.difficulty )
+        , ( "surface_breakdown", encodeMaybe encodeSurfaceBreakdown response.surfaceBreakdown )
         ]
+
+
+encodeSurfaceBreakdown : List ( String, Float ) -> Encode.Value
+encodeSurfaceBreakdown items =
+    Encode.list
+        (\( name, dist ) ->
+            Encode.list identity [ Encode.string name, Encode.float dist ]
+        )
+        items
 
 
 

@@ -19,6 +19,11 @@ let terrainSampleWarned = false;
 let lastTurnAngle = 0; // Track turn angle for banking effect
 let lastTerrainZoomAdjust = 0; // Smoothed zoom offset for terrain avoidance
 let waypointMarkers = []; // Markers for multi-point route waypoints
+let currentMapStyle = 'topo'; // 'topo' | 'satellite' | 'hybrid'
+let kmMarkers = []; // Kilometer markers along route
+let poiMarkers = []; // POI markers on map
+let poisVisible = false; // POI toggle state
+let lastPoiBbox = null; // Last fetched POI bbox to avoid re-fetching
 
 // Terrain configuration - Using Terrarium format tiles from AWS
 const TERRAIN_EXAGGERATION = 1.5; // Amplify terrain for better visibility
@@ -181,6 +186,7 @@ function ensureMap() {
 
   mapInstance = new maplibregl.Map({
     container: 'map',
+    projection: 'globe',
     style: {
       version: 8,
       sources: {
@@ -194,13 +200,11 @@ function ensureMap() {
         'satellite': {
           type: 'raster',
           tiles: [
-            'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-            'https://mt2.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-            'https://mt3.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
           ],
           tileSize: 256,
-          maxzoom: 20,
-          attribution: '© Google'
+          maxzoom: 19,
+          attribution: '© Esri'
         }
       },
       layers: [
@@ -245,6 +249,27 @@ function ensureMap() {
       layout: { visibility: 'visible' },
       paint: { 'hillshade-shadow-color': '#473B24' }
     }, 'osm-tiles');
+
+    // Sky atmosphere layer (visible when globe projection is active at low zoom)
+    mapInstance.addLayer({
+      id: 'sky',
+      type: 'sky',
+      paint: {
+        'sky-type': 'atmosphere',
+        'sky-atmosphere-sun': [0.0, 90.0],
+        'sky-atmosphere-sun-intensity': 15
+      }
+    });
+
+    // Atmospheric fog — horizon blend for immersive globe view
+    mapInstance.setFog({
+      range: [1, 10],
+      color: 'white',
+      'horizon-blend': 0.1,
+      'high-color': '#245cdf',
+      'space-color': '#000000',
+      'star-intensity': 0.2
+    });
 
     // Add route source (will be populated later)
     mapInstance.addSource('route', {
@@ -306,6 +331,46 @@ function ensureMap() {
   // Add camera mode control
   const cameraModeControl = createCameraModeControl();
   mapInstance.addControl(cameraModeControl, 'top-right');
+
+  // Add pitch toggle control (for free tilt)
+  const pitchControl = createPitchControl();
+  mapInstance.addControl(pitchControl, 'top-right');
+
+  // Add POI toggle control
+  const poiControl = createPoiControl();
+  mapInstance.addControl(poiControl, 'top-right');
+}
+
+function createPitchControl() {
+  class PitchControl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+
+      this._button = document.createElement('button');
+      this._button.className = 'maplibregl-ctrl-pitch';
+      this._button.textContent = '45°';
+      this._button.title = 'Toggle 45° pitch';
+      this._button.onclick = () => this.togglePitch();
+
+      this._container.appendChild(this._button);
+      return this._container;
+    }
+
+    togglePitch() {
+      const currentPitch = this._map.getPitch();
+      const targetPitch = currentPitch < 10 ? 45 : 0;
+      this._map.easeTo({ pitch: targetPitch, duration: 800 });
+      this._button.textContent = targetPitch === 0 ? '45°' : '0°';
+    }
+
+    onRemove() {
+      this._container.parentNode.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+  return new PitchControl();
 }
 
 function createTerrainControl() {
@@ -491,6 +556,106 @@ function createCameraModeControl() {
   return new CameraModeControl();
 }
 
+function createPoiControl() {
+  const POI_ICONS = {
+    water: '💧', peak: '⛰️', hut: '🏠', shelter: '🏕️',
+    parking: '🅿️', viewpoint: '👁️', saddle: '🏔️'
+  };
+
+  class PoiControl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+
+      this._button = document.createElement('button');
+      this._button.className = 'maplibregl-ctrl-poi';
+      this._button.textContent = 'POI';
+      this._button.title = 'Afficher les points d\'intérêt';
+      this._button.onclick = () => this.togglePoi();
+
+      this._container.appendChild(this._button);
+      return this._container;
+    }
+
+    togglePoi() {
+      poisVisible = !poisVisible;
+
+      if (poisVisible) {
+        this._button.style.backgroundColor = '#4dab7b';
+        this._button.style.color = 'white';
+        this.fetchPois();
+        // Refresh POIs when map moves
+        this._moveHandler = () => this.fetchPois();
+        this._map.on('moveend', this._moveHandler);
+      } else {
+        this._button.style.backgroundColor = '';
+        this._button.style.color = '';
+        clearPoiMarkers();
+        if (this._moveHandler) {
+          this._map.off('moveend', this._moveHandler);
+        }
+      }
+    }
+
+    fetchPois() {
+      const bounds = this._map.getBounds();
+      const bbox = {
+        min_lat: bounds.getSouth(),
+        max_lat: bounds.getNorth(),
+        min_lon: bounds.getWest(),
+        max_lon: bounds.getEast()
+      };
+
+      // Skip if same bbox (throttle)
+      const bboxKey = `${bbox.min_lat.toFixed(3)},${bbox.max_lat.toFixed(3)},${bbox.min_lon.toFixed(3)},${bbox.max_lon.toFixed(3)}`;
+      if (bboxKey === lastPoiBbox) return;
+      lastPoiBbox = bboxKey;
+
+      const url = `/api/pois?min_lat=${bbox.min_lat}&max_lat=${bbox.max_lat}&min_lon=${bbox.min_lon}&max_lon=${bbox.max_lon}`;
+      fetch(url)
+        .then(r => r.json())
+        .then(pois => {
+          clearPoiMarkers();
+          pois.forEach(poi => {
+            const icon = POI_ICONS[poi.poi_type] || '📍';
+            const el = document.createElement('div');
+            el.style.fontSize = '18px';
+            el.style.cursor = 'pointer';
+            el.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.5))';
+            el.textContent = icon;
+
+            const popup = new maplibregl.Popup({ offset: 15, closeButton: false })
+              .setText(poi.name || poi.poi_type);
+
+            const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+              .setLngLat([poi.lon, poi.lat])
+              .setPopup(popup)
+              .addTo(mapInstance);
+
+            poiMarkers.push(marker);
+          });
+          console.debug(`[maplibre] Displayed ${pois.length} POIs`);
+        })
+        .catch(err => console.warn('[maplibre] POI fetch error:', err));
+    }
+
+    onRemove() {
+      this._container.parentNode.removeChild(this._container);
+      if (this._moveHandler) {
+        this._map.off('moveend', this._moveHandler);
+      }
+      this._map = undefined;
+    }
+  }
+  return new PoiControl();
+}
+
+function clearPoiMarkers() {
+  poiMarkers.forEach(m => m.remove());
+  poiMarkers = [];
+}
+
 export function initMap() {
   ensureMap();
   if (!clickHandlerSet) {
@@ -543,6 +708,9 @@ export function updateRoute(coords) {
       features: []
     });
     currentRoute = null;
+    // Clear km markers when route is cleared
+    kmMarkers.forEach(m => m.remove());
+    kmMarkers = [];
     return;
   }
 
@@ -570,6 +738,8 @@ export function updateRoute(coords) {
   lastAnimationMode = null;
   terrainSampleWarned = false;
 
+  // Place kilometer markers along the route
+  updateKmMarkers(coords);
 }
 
 export function updateSelectionMarkers(start, end) {
@@ -610,58 +780,62 @@ function updateMarker(type, coord) {
 }
 
 export function toggleSatelliteView(enabled) {
+  // Legacy compatibility: true → satellite, false → topo
+  switchMapStyle(enabled ? 'satellite' : 'topo');
+}
+
+/**
+ * Switch map style between topo, satellite, and hybrid.
+ * @param {string} style - 'topo' | 'satellite' | 'hybrid'
+ */
+export function switchMapStyle(style) {
   ensureMap();
-  console.debug('[maplibre] toggleSatelliteView', enabled);
+  currentMapStyle = style;
+  console.debug('[maplibre] switchMapStyle', style);
 
-  if (enabled) {
-    // Hide OSM tiles
-    if (mapInstance.getLayer('osm-tiles')) {
-      mapInstance.setLayoutProperty('osm-tiles', 'visibility', 'none');
-    }
+  // Ensure satellite layer exists
+  if (!mapInstance.getLayer('satellite-tiles') && (style === 'satellite' || style === 'hybrid')) {
+    mapInstance.addLayer({
+      id: 'satellite-tiles',
+      type: 'raster',
+      source: 'satellite',
+      minzoom: 0,
+      maxzoom: 22
+    });
+  }
 
-    // Add satellite layer if it doesn't exist
-    if (!mapInstance.getLayer('satellite-tiles')) {
-      console.log('[maplibre] Adding satellite layer');
-      // Add after hillshade but before any route/marker layers
-      mapInstance.addLayer({
-        id: 'satellite-tiles',
-        type: 'raster',
-        source: 'satellite',
-        minzoom: 0,
-        maxzoom: 22
-      });
+  const showOsm = style === 'topo' || style === 'hybrid';
+  const showSatellite = style === 'satellite' || style === 'hybrid';
 
-      // IMPORTANT: Ensure route layers are always on top
-      // Move route layers above all other layers for visibility on satellite
-      if (mapInstance.getLayer('route-line-outline')) {
-        mapInstance.moveLayer('route-line-outline');
-      }
-      if (mapInstance.getLayer('route-line')) {
-        mapInstance.moveLayer('route-line');
-      }
-
-      console.debug('[maplibre] Route layers repositioned on top for satellite visibility');
+  // Set OSM visibility
+  if (mapInstance.getLayer('osm-tiles')) {
+    mapInstance.setLayoutProperty('osm-tiles', 'visibility', showOsm ? 'visible' : 'none');
+    // In hybrid mode, make OSM semi-transparent
+    if (style === 'hybrid') {
+      mapInstance.setPaintProperty('osm-tiles', 'raster-opacity', 0.45);
     } else {
-      mapInstance.setLayoutProperty('satellite-tiles', 'visibility', 'visible');
-
-      // Also reposition route layers when showing existing satellite layer
-      if (mapInstance.getLayer('route-line-outline')) {
-        mapInstance.moveLayer('route-line-outline');
-      }
-      if (mapInstance.getLayer('route-line')) {
-        mapInstance.moveLayer('route-line');
-      }
-    }
-  } else {
-    // Show OSM tiles
-    if (mapInstance.getLayer('osm-tiles')) {
-      mapInstance.setLayoutProperty('osm-tiles', 'visibility', 'visible');
-    }
-    // Hide satellite
-    if (mapInstance.getLayer('satellite-tiles')) {
-      mapInstance.setLayoutProperty('satellite-tiles', 'visibility', 'none');
+      mapInstance.setPaintProperty('osm-tiles', 'raster-opacity', 1);
     }
   }
+
+  // Set satellite visibility
+  if (mapInstance.getLayer('satellite-tiles')) {
+    mapInstance.setLayoutProperty('satellite-tiles', 'visibility', showSatellite ? 'visible' : 'none');
+  }
+
+  // Set hillshade visibility — hide in satellite, show in topo/hybrid
+  if (mapInstance.getLayer('hills')) {
+    mapInstance.setLayoutProperty('hills', 'visibility', style === 'satellite' ? 'none' : 'visible');
+  }
+
+  // Adjust terrain exaggeration for satellite mode (more dramatic relief)
+  if (terrainEnabled || mapInstance.getTerrain()) {
+    const exag = style === 'satellite' ? 1.8 : TERRAIN_EXAGGERATION;
+    mapInstance.setTerrain({ source: 'terrainSource', exaggeration: exag });
+  }
+
+  // Ensure route layers are always on top
+  ensureRouteLayers();
 }
 
 export function updateBbox(bounds) {
@@ -1164,6 +1338,54 @@ function smoothAngle(previous, target, factor) {
   const easedFactor = factor * factor * (3 - 2 * factor); // smoothstep
 
   return previous + delta * easedFactor;
+}
+
+/** Place small numbered markers every kilometer along the route polyline */
+function updateKmMarkers(coords) {
+  // Remove existing km markers
+  kmMarkers.forEach(m => m.remove());
+  kmMarkers = [];
+
+  if (!coords || coords.length < 2 || !mapInstance) return;
+
+  let accDist = 0;
+  let nextKm = 1;
+
+  for (let i = 1; i < coords.length; i++) {
+    const segDist = haversineMeters(coords[i - 1], coords[i]) / 1000; // km
+    const prevDist = accDist;
+    accDist += segDist;
+
+    // Check if we crossed a km boundary in this segment
+    while (accDist >= nextKm) {
+      const t = (nextKm - prevDist) / segDist;
+      const lat = coords[i - 1].lat + (coords[i].lat - coords[i - 1].lat) * t;
+      const lon = coords[i - 1].lon + (coords[i].lon - coords[i - 1].lon) * t;
+
+      const el = document.createElement('div');
+      el.className = 'km-marker';
+      el.textContent = String(nextKm);
+
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([lon, lat])
+        .addTo(mapInstance);
+
+      kmMarkers.push(marker);
+      nextKm++;
+    }
+  }
+
+  console.debug(`[maplibre] Placed ${kmMarkers.length} km markers`);
+}
+
+/** Ensure route layers are on top of all raster layers */
+function ensureRouteLayers() {
+  if (mapInstance.getLayer('route-line-outline')) {
+    mapInstance.moveLayer('route-line-outline');
+  }
+  if (mapInstance.getLayer('route-line')) {
+    mapInstance.moveLayer('route-line');
+  }
 }
 
 function queryElevation(point) {

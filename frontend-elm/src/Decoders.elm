@@ -24,13 +24,45 @@ decodeCoordinate =
 
 decodeRouteResponse : Decoder RouteResponse
 decodeRouteResponse =
-    Decode.map6 RouteResponse
+    Decode.map8
+        (\path dist gpx meta elev snapped time diff ->
+            \surface ->
+                { path = path
+                , distanceKm = dist
+                , gpxBase64 = gpx
+                , metadata = meta
+                , elevationProfile = elev
+                , snappedWaypoints = snapped
+                , estimatedTimeMinutes = time
+                , difficulty = diff
+                , surfaceBreakdown = surface
+                }
+        )
         (Decode.field "path" (Decode.list decodeCoordinate))
         (Decode.field "distance_km" Decode.float)
         (Decode.field "gpx_base64" Decode.string)
         (Decode.maybe (Decode.field "metadata" decodeRouteMetadata))
         (Decode.maybe (Decode.field "elevation_profile" decodeElevationProfile))
         (Decode.maybe (Decode.field "snapped_waypoints" (Decode.list decodeCoordinate)))
+        (Decode.maybe (Decode.field "estimated_time_minutes" Decode.int))
+        (Decode.maybe (Decode.field "difficulty" Decode.string))
+        |> Decode.andThen
+            (\fn ->
+                Decode.map fn
+                    (Decode.maybe (Decode.field "surface_breakdown" decodeSurfaceBreakdown))
+            )
+
+
+decodeSurfaceBreakdown : Decoder (List ( String, Float ))
+decodeSurfaceBreakdown =
+    Decode.list (decodeTuple2 Decode.string Decode.float)
+
+
+decodeTuple2 : Decoder a -> Decoder b -> Decoder ( a, b )
+decodeTuple2 da db =
+    Decode.map2 Tuple.pair
+        (Decode.index 0 da)
+        (Decode.index 1 db)
 
 
 decodeRouteMetadata : Decoder RouteMetadata

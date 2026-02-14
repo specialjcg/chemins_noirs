@@ -45,10 +45,16 @@ app.ports.updateWaypointMarkers.subscribe((waypoints) => {
   MapLibreMap.updateWaypointMarkers(waypoints);
 });
 
-// Basculer vue satellite/standard
+// Basculer vue satellite/standard (legacy)
 app.ports.toggleSatelliteView.subscribe((enabled) => {
   console.log('[Elm→JS] toggleSatelliteView', enabled);
   MapLibreMap.toggleSatelliteView(enabled);
+});
+
+// Switch map style: topo / satellite / hybrid
+app.ports.switchMapStyle.subscribe((style) => {
+  console.log('[Elm→JS] switchMapStyle', style);
+  MapLibreMap.switchMapStyle(style);
 });
 
 // Basculer vue 3D/2D
@@ -142,5 +148,70 @@ window.addEventListener('waypoint-deleted', (event) => {
     index: event.detail.index
   });
 });
+
+// Download GPX file
+app.ports.downloadGpx.subscribe(({ filename, content }) => {
+  console.log('[Elm→JS] downloadGpx', filename);
+  const blob = new Blob([content], { type: 'application/gpx+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+// Copy text to clipboard
+app.ports.copyToClipboard.subscribe((text) => {
+  console.log('[Elm→JS] copyToClipboard');
+  const fullUrl = window.location.origin + window.location.pathname + text;
+  navigator.clipboard.writeText(fullUrl).then(() => {
+    console.log('✅ Link copied to clipboard');
+  }).catch(err => {
+    console.error('Failed to copy:', err);
+  });
+});
+
+// Geolocation
+app.ports.requestGeolocation.subscribe(() => {
+  console.log('[Elm→JS] requestGeolocation');
+  if ('geolocation' in navigator) {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        app.ports.gotGeolocation.send({
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude
+        });
+      },
+      (err) => {
+        console.warn('Geolocation error:', err.message);
+      }
+    );
+  }
+});
+
+// Parse URL hash for shared waypoints on page load
+(function parseUrlWaypoints() {
+  const hash = window.location.hash;
+  if (hash && hash.startsWith('#w=')) {
+    const waypointStr = hash.substring(3);
+    const points = waypointStr.split(';').map(p => {
+      const [lat, lon] = p.split(',').map(Number);
+      return { lat, lon };
+    }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
+
+    if (points.length >= 2) {
+      console.log('[URL] Restoring', points.length, 'waypoints from URL');
+      // Wait for map initialization, then simulate clicks
+      setTimeout(() => {
+        points.forEach(p => {
+          app.ports.mapClickReceived.send({ lat: p.lat, lon: p.lon });
+        });
+      }, 1000);
+    }
+  }
+})();
 
 console.log('✅ Elm application initialized with MapLibre ports');

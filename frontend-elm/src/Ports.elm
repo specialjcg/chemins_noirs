@@ -30,6 +30,9 @@ port updateWaypointMarkers : List Coordinate -> Cmd msg
 port toggleSatelliteView : Bool -> Cmd msg
 
 
+port switchMapStyle : String -> Cmd msg
+
+
 port toggleThree3DView : Bool -> Cmd msg
 
 
@@ -55,6 +58,15 @@ port saveRouteToLocalStorage : Encode.Value -> Cmd msg
 port loadRouteFromLocalStorage : () -> Cmd msg
 
 
+port downloadGpx : { filename : String, content : String } -> Cmd msg
+
+
+port copyToClipboard : String -> Cmd msg
+
+
+port requestGeolocation : () -> Cmd msg
+
+
 
 -- PORTS IN (JavaScript → Elm)
 
@@ -69,3 +81,9 @@ port waypointDeleted : ({ index : Int } -> msg) -> Sub msg
 
 
 port routeLoadedFromLocalStorage : (Encode.Value -> msg) -> Sub msg
+
+
+port gotGeolocation : ({ lat : Float, lon : Float } -> msg) -> Sub msg
+
+
+port elevationChartHover : ({ index : Int } -> msg) -> Sub msg

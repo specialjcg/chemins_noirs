@@ -9,7 +9,8 @@ use backend::{
     loops::{self, LoopGenerationError},
     models::{ApiError, Coordinate, LoopRouteRequest, LoopRouteResponse, RouteRequest},
     partial_graph::PartialGraphConfig,
-    routing::haversine_km,
+    poi,
+    routing::{estimate_time_minutes, haversine_km, rate_difficulty},
     saved_routes_handlers,
 };
 use shared::MultiPointRouteRequest;
@@ -79,7 +80,16 @@ async fn route_handler(
             // For now, GPX base64 is empty - we can implement it later
             let gpx_base64 = String::new();
 
-            // Terrain mesh generation removed - MapLibre GL JS handles terrain rendering client-side
+            // Compute analytics from elevation profile
+            let (estimated_time, difficulty) = match &elevation_profile {
+                Some(profile) => {
+                    let time = estimate_time_minutes(distance_km, profile.total_ascent);
+                    let diff = rate_difficulty(&profile.elevations, &path, profile.total_ascent);
+                    (Some(time), Some(diff))
+                }
+                None => (None, None),
+            };
+
             let response = RouteResponse {
                 path,
                 distance_km,
@@ -88,6 +98,9 @@ async fn route_handler(
                 elevation_profile,
                 terrain: None,
                 snapped_waypoints: None,
+                estimated_time_minutes: estimated_time,
+                difficulty,
+                surface_breakdown: None,
             };
 
             Ok(Json(response))
@@ -319,6 +332,15 @@ async fn multi_route_handler(
         }
     };
 
+    let (estimated_time, difficulty) = match &elevation_profile {
+        Some(profile) => {
+            let time = estimate_time_minutes(total_distance, profile.total_ascent);
+            let diff = rate_difficulty(&profile.elevations, &all_coords, profile.total_ascent);
+            (Some(time), Some(diff))
+        }
+        None => (None, None),
+    };
+
     let response = RouteResponse {
         path: all_coords,
         distance_km: total_distance,
@@ -327,6 +349,9 @@ async fn multi_route_handler(
         elevation_profile,
         terrain: None,
         snapped_waypoints: Some(snapped_waypoints),
+        estimated_time_minutes: estimated_time,
+        difficulty,
+        surface_breakdown: None,
     };
 
     Ok(Json(response))
@@ -423,6 +448,7 @@ async fn main() {
         .route("/api/route", axum::routing::post(route_handler))
         .route("/api/route/multi", axum::routing::post(multi_route_handler))
         .route("/api/click_mode", axum::routing::get(click_mode_handler))
+        .route("/api/pois", axum::routing::get(pois_handler))
         .layer(cors.clone())
         .with_state(config)
         // Saved routes endpoints (PostgreSQL) - separate state
@@ -458,6 +484,37 @@ async fn main() {
 /// Handler for /api/click_mode - returns a simple status
 async fn click_mode_handler() -> &'static str {
     "RouteStart"
+}
+
+#[derive(serde::Deserialize)]
+struct PoiQuery {
+    min_lat: f64,
+    max_lat: f64,
+    min_lon: f64,
+    max_lon: f64,
+}
+
+/// Handler for /api/pois?min_lat=&max_lat=&min_lon=&max_lon=
+async fn pois_handler(
+    State(config): State<Arc<PartialGraphConfig>>,
+    axum::extract::Query(query): axum::extract::Query<PoiQuery>,
+) -> Result<Json<Vec<poi::Poi>>, (StatusCode, String)> {
+    let bbox = BoundingBox {
+        min_lat: query.min_lat,
+        max_lat: query.max_lat,
+        min_lon: query.min_lon,
+        max_lon: query.max_lon,
+    };
+
+    let pbf_path = config.pbf_path.clone();
+    let pois = tokio::task::spawn_blocking(move || {
+        poi::extract_pois_from_pbf(&pbf_path, bbox)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task error: {}", e)))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(pois))
 }
 
 fn prepare_graph_for_bbox(

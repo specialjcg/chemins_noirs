@@ -102,6 +102,15 @@ pub struct RouteResponse {
     /// Frontend uses these to place markers exactly on the route line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapped_waypoints: Option<Vec<Coordinate>>,
+    /// Estimated hiking time in minutes (Naismith's rule)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_time_minutes: Option<u32>,
+    /// Difficulty rating: "easy", "moderate", "difficult", "expert"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<String>,
+    /// Surface type breakdown: vec of (surface_name, distance_km)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_breakdown: Option<Vec<(String, f64)>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -285,6 +285,9 @@ mod tests {
             }),
             terrain: None,
             snapped_waypoints: None,
+            estimated_time_minutes: None,
+            difficulty: None,
+            surface_breakdown: None,
         };
 
         SaveRouteRequest {
@@ -452,6 +455,9 @@ mod tests {
             elevation_profile: None, // No elevation data
             terrain: None,
             snapped_waypoints: None,
+            estimated_time_minutes: None,
+            difficulty: None,
+            surface_breakdown: None,
         };
 
         let request = SaveRouteRequest {
