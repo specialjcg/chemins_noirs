@@ -42,3 +42,18 @@ proptest = "1.6"
 [[bench]]
 name = "graph_generation"
 harness = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.bench]
+inherits = "release"
+debug = true
+strip = false
+
+[profile.dev.package."*"]
+opt-level = 3  # Optimize dependencies in dev

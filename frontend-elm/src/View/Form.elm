@@ -86,7 +86,7 @@ view model =
             fieldset []
                 [ legend [] [ text "Points du tracé" ]
                 , viewWaypoints model
-                , div [ style "margin-top" "1rem" ]
+                , div [ class "input-field" ]
                     [ label []
                         [ input
                             [ type_ "checkbox"
@@ -97,21 +97,14 @@ view model =
                         , span [] [ text " Boucler (retour au point de départ)" ]
                         ]
                     ]
-                , div [ style "margin-top" "1rem" ]
-                    [ button
-                        [ style "padding" "0.5rem 1rem"
-                        , style "background" "#6c757d"
-                        , style "color" "white"
-                        , style "border" "none"
-                        , style "border-radius" "4px"
-                        , style "cursor" "pointer"
-                        , style "width" "100%"
-                        , disabled (List.isEmpty model.waypoints)
-                        , onClick ClearWaypoints
-                        ]
-                        [ text "Effacer tous les points" ]
+                , button
+                    [ type_ "button"
+                    , class "btn-secondary btn-block"
+                    , disabled (List.isEmpty model.waypoints)
+                    , onClick ClearWaypoints
                     ]
-                , small [ style "display" "block", style "margin-top" "0.5rem" ]
+                    [ text "Effacer tous les points" ]
+                , small [ class "waypoints-summary" ]
                     [ text <|
                         String.fromInt (List.length model.waypoints)
                             ++ " point(s) • Distance: "
@@ -204,7 +197,7 @@ view model =
                     , onClick SaveRouteToDb
                     , disabled (String.isEmpty model.saveRouteName)
                     ]
-                    [ text "💾 Sauvegarder dans la base" ]
+                    [ text "Sauvegarder dans la base" ]
                 , button
                     [ type_ "button"
                     , class "load-btn"
@@ -212,22 +205,17 @@ view model =
                     ]
                     [ text <|
                         if model.showSavedRoutes then
-                            "🔽 Masquer les tracés"
+                            "Masquer les tracés"
 
                         else
-                            "📂 Mes tracés sauvegardés ("
+                            "Mes tracés sauvegardés ("
                                 ++ String.fromInt (List.length model.savedRoutes)
                                 ++ ")"
                     ]
                 , if model.showSavedRoutes then
-                    div [ class "saved-routes-panel", style "margin-top" "1rem" ]
+                    div [ class "saved-routes-panel" ]
                         [ if List.isEmpty model.savedRoutes then
-                            p
-                                [ style "font-style" "italic"
-                                , style "color" "#666"
-                                , style "text-align" "center"
-                                , style "padding" "1rem"
-                                ]
+                            p [ class "empty-state" ]
                                 [ text "Aucun tracé sauvegardé" ]
 
                           else
@@ -247,22 +235,17 @@ view model =
                     ]
                     [ text <|
                         if model.showSavedRoutes then
-                            "🔽 Masquer les tracés"
+                            "Masquer les tracés"
 
                         else
-                            "📂 Mes tracés sauvegardés ("
+                            "Mes tracés sauvegardés ("
                                 ++ String.fromInt (List.length model.savedRoutes)
                                 ++ ")"
                     ]
                 , if model.showSavedRoutes then
-                    div [ class "saved-routes-panel", style "margin-top" "1rem" ]
+                    div [ class "saved-routes-panel" ]
                         [ if List.isEmpty model.savedRoutes then
-                            p
-                                [ style "font-style" "italic"
-                                , style "color" "#666"
-                                , style "text-align" "center"
-                                , style "padding" "1rem"
-                                ]
+                            p [ class "empty-state" ]
                                 [ text "Aucun tracé sauvegardé" ]
 
                           else
@@ -274,6 +257,7 @@ view model =
                 ]
         , button
             [ type_ "button"
+            , class "btn-submit"
             , onClick Submit
             , disabled model.pending
             ]
@@ -306,10 +290,7 @@ viewWaypoints : Model -> Html Msg
 viewWaypoints model =
     div [ class "waypoints-list" ]
         [ if List.isEmpty model.waypoints then
-            p
-                [ style "font-style" "italic"
-                , style "color" "#666"
-                ]
+            p [ class "empty-state" ]
                 [ text "Cliquez sur la carte pour ajouter des points" ]
 
           else
@@ -320,17 +301,8 @@ viewWaypoints model =
 
 viewWaypoint : Int -> Coordinate -> Html Msg
 viewWaypoint idx coord =
-    div
-        [ class "waypoint-item"
-        , style "display" "flex"
-        , style "justify-content" "space-between"
-        , style "align-items" "center"
-        , style "padding" "0.5rem"
-        , style "margin-bottom" "0.25rem"
-        , style "background" "#f5f5f5"
-        , style "border-radius" "4px"
-        ]
-        [ span [ style "color" "#333" ]
+    div [ class "waypoint-item" ]
+        [ span [ class "waypoint-coord" ]
             [ text <|
                 String.fromInt (idx + 1)
                     ++ ". ("
@@ -341,54 +313,42 @@ viewWaypoint idx coord =
             ]
         , button
             [ type_ "button"
-            , style "padding" "0.25rem 0.5rem"
-            , style "background" "#dc3545"
-            , style "color" "white"
-            , style "border" "none"
-            , style "border-radius" "3px"
-            , style "cursor" "pointer"
+            , class "waypoint-remove"
             , onClick (RemoveWaypoint idx)
             ]
-            [ text "✕" ]
+            [ text "\u{2715}" ]
         ]
 
 
 viewSavedRoute : SavedRoute -> Html Msg
 viewSavedRoute route =
-    div
-        [ class "saved-route-item"
-        , style "border" "1px solid #ddd"
-        , style "border-radius" "8px"
-        , style "padding" "1rem"
-        , style "margin-bottom" "0.75rem"
-        , style "background" "#ffffff"
-        ]
-        [ div [ style "display" "flex", style "justify-content" "space-between", style "align-items" "start", style "margin-bottom" "0.5rem" ]
-            [ div [ style "flex" "1" ]
-                [ h4 [ style "margin" "0 0 0.25rem 0", style "color" "#2c3e50" ]
+    div [ class "saved-route-item" ]
+        [ div [ class "saved-route-header" ]
+            [ div [ class "saved-route-info" ]
+                [ h4 [ class "saved-route-name" ]
                     [ text route.name
                     , if route.isFavorite then
-                        span [ style "margin-left" "0.5rem", style "color" "#ffc107" ] [ text "⭐" ]
+                        span [ class "favorite-star" ] [ text "\u{2B50}" ]
 
                       else
                         text ""
                     ]
                 , case route.description of
                     Just desc ->
-                        p [ style "margin" "0 0 0.5rem 0", style "color" "#666", style "font-size" "0.9rem" ]
+                        p [ class "saved-route-desc" ]
                             [ text desc ]
 
                     Nothing ->
                         text ""
-                , div [ style "font-size" "0.85rem", style "color" "#888" ]
+                , div [ class "saved-route-stats" ]
                     [ text <|
                         String.fromFloat route.distanceKm
                             ++ " km"
                             ++ (case ( route.totalAscentM, route.totalDescentM ) of
                                     ( Just ascent, Just descent ) ->
-                                        " • D+ "
+                                        " \u{2022} D+ "
                                             ++ String.fromFloat ascent
-                                            ++ "m • D- "
+                                            ++ "m \u{2022} D- "
                                             ++ String.fromFloat descent
                                             ++ "m"
 
@@ -398,33 +358,16 @@ viewSavedRoute route =
                     ]
                 ]
             ]
-        , div [ style "display" "flex", style "gap" "0.5rem", style "margin-top" "0.75rem" ]
+        , div [ class "saved-route-actions" ]
             [ button
                 [ type_ "button"
-                , style "flex" "1"
-                , style "padding" "0.5rem"
-                , style "background" "#28a745"
-                , style "color" "white"
-                , style "border" "none"
-                , style "border-radius" "4px"
-                , style "cursor" "pointer"
-                , style "font-size" "0.9rem"
+                , class "action-load"
                 , onClick (LoadSavedRoute route.id)
                 ]
-                [ text "📥 Charger" ]
+                [ text "Charger" ]
             , button
                 [ type_ "button"
-                , style "padding" "0.5rem"
-                , style "background" <|
-                    if route.isFavorite then
-                        "#ffc107"
-
-                    else
-                        "#6c757d"
-                , style "color" "white"
-                , style "border" "none"
-                , style "border-radius" "4px"
-                , style "cursor" "pointer"
+                , classList [ ( "action-fav", True ), ( "active", route.isFavorite ) ]
                 , onClick (ToggleFavorite route.id)
                 , title <|
                     if route.isFavorite then
@@ -433,18 +376,13 @@ viewSavedRoute route =
                     else
                         "Ajouter aux favoris"
                 ]
-                [ text "⭐" ]
+                [ text "\u{2B50}" ]
             , button
                 [ type_ "button"
-                , style "padding" "0.5rem"
-                , style "background" "#dc3545"
-                , style "color" "white"
-                , style "border" "none"
-                , style "border-radius" "4px"
-                , style "cursor" "pointer"
+                , class "action-delete"
                 , onClick (DeleteSavedRoute route.id)
                 , title "Supprimer"
                 ]
-                [ text "🗑️" ]
+                [ text "\u{2715}" ]
             ]
         ]

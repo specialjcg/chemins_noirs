@@ -24,12 +24,13 @@ decodeCoordinate =
 
 decodeRouteResponse : Decoder RouteResponse
 decodeRouteResponse =
-    Decode.map5 RouteResponse
+    Decode.map6 RouteResponse
         (Decode.field "path" (Decode.list decodeCoordinate))
         (Decode.field "distance_km" Decode.float)
         (Decode.field "gpx_base64" Decode.string)
         (Decode.maybe (Decode.field "metadata" decodeRouteMetadata))
         (Decode.maybe (Decode.field "elevation_profile" decodeElevationProfile))
+        (Decode.maybe (Decode.field "snapped_waypoints" (Decode.list decodeCoordinate)))
 
 
 decodeRouteMetadata : Decoder RouteMetadata

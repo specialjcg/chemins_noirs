@@ -770,6 +770,44 @@ export function stopAnimation() {
   terrainSampleWarned = false;
 }
 
+/**
+ * Project a point onto the nearest position on a polyline.
+ * Returns the projected {lat, lon} that lies exactly on the line.
+ */
+function snapToPolyline(point, polyline) {
+  let bestDist = Infinity;
+  let bestPoint = point;
+
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const a = polyline[i];
+    const b = polyline[i + 1];
+
+    // Vector AB and AP
+    const abLat = b.lat - a.lat;
+    const abLon = b.lon - a.lon;
+    const apLat = point.lat - a.lat;
+    const apLon = point.lon - a.lon;
+
+    // Project: t = dot(AP, AB) / dot(AB, AB), clamped to [0, 1]
+    const dotAB = abLat * abLat + abLon * abLon;
+    if (dotAB < 1e-14) continue; // degenerate segment
+    const t = Math.max(0, Math.min(1, (apLat * abLat + apLon * abLon) / dotAB));
+
+    const projLat = a.lat + t * abLat;
+    const projLon = a.lon + t * abLon;
+
+    const dLat = point.lat - projLat;
+    const dLon = point.lon - projLon;
+    const dist = dLat * dLat + dLon * dLon;
+
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestPoint = { lat: projLat, lon: projLon };
+    }
+  }
+  return bestPoint;
+}
+
 export function updateWaypointMarkers(waypoints) {
   // Remove all existing waypoint markers
   waypointMarkers.forEach(marker => marker.remove());
@@ -780,29 +818,39 @@ export function updateWaypointMarkers(waypoints) {
   }
 
   // Create numbered, draggable markers with delete button
+  // If a route is displayed, snap markers onto the route line
   waypoints.forEach((coord, index) => {
+    // The coord may already be a backend-snapped position (on the road).
+    // Apply JS snap as safety net to ensure marker sits exactly on the route line.
+    const hasRoute = currentRoute && currentRoute.length >= 2;
+    let displayCoord = coord;
+    if (hasRoute) {
+      const snapped = snapToPolyline(coord, currentRoute);
+      const dLat = (snapped.lat - coord.lat) * 111000;
+      const dLon = (snapped.lon - coord.lon) * 111000 * Math.cos(coord.lat * Math.PI / 180);
+      const distM = Math.sqrt(dLat * dLat + dLon * dLon);
+      console.log(`[snap] wp${index + 1}: (${coord.lat.toFixed(6)},${coord.lon.toFixed(6)}) → (${snapped.lat.toFixed(6)},${snapped.lon.toFixed(6)}) Δ${distM.toFixed(1)}m ${distM < 50 ? '✓' : '✗ >50m'}`);
+      if (distM < 50) {
+        displayCoord = snapped;
+      }
+    }
+    // Circle element = marker root (no wrapper div to avoid anchor miscalculation)
     const el = document.createElement('div');
-    el.style.position = 'relative';
+    el.style.boxSizing = 'border-box';
     el.style.width = '28px';
     el.style.height = '28px';
-
-    // Blue circle with number
-    const circle = document.createElement('div');
-    circle.style.width = '28px';
-    circle.style.height = '28px';
-    circle.style.borderRadius = '50%';
-    circle.style.backgroundColor = '#2196F3';
-    circle.style.border = '2px solid white';
-    circle.style.display = 'flex';
-    circle.style.alignItems = 'center';
-    circle.style.justifyContent = 'center';
-    circle.style.fontSize = '12px';
-    circle.style.fontWeight = 'bold';
-    circle.style.color = 'white';
-    circle.style.cursor = 'grab';
-    circle.style.boxShadow = '0 2px 6px rgba(0,0,0,0.3)';
-    circle.textContent = (index + 1).toString();
-    el.appendChild(circle);
+    el.style.borderRadius = '50%';
+    el.style.backgroundColor = '#2196F3';
+    el.style.border = '2px solid white';
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.fontSize = '12px';
+    el.style.fontWeight = 'bold';
+    el.style.color = 'white';
+    el.style.cursor = 'grab';
+    el.style.boxShadow = '0 2px 6px rgba(0,0,0,0.3)';
+    el.textContent = (index + 1).toString();
 
     // Delete button (× top-right, visible on hover)
     const delBtn = document.createElement('div');
@@ -836,7 +884,7 @@ export function updateWaypointMarkers(waypoints) {
     });
 
     const marker = new maplibregl.Marker({ element: el, draggable: true, anchor: 'center' })
-      .setLngLat([coord.lon, coord.lat])
+      .setLngLat([displayCoord.lon, displayCoord.lat])
       .addTo(mapInstance);
 
     // Drag end → dispatch event to Elm with new position

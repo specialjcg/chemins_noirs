@@ -77,14 +77,24 @@ pub async fn partial_graph_handler(
         ))
         .exists();
 
-    // Build partial graph (with caching)
-    let graph = GraphBuilder::build_partial_cached(
-        &config.pbf_path,
-        &config.cache_dir,
-        req.start,
-        req.end,
-        req.margin_km,
-    )
+    // Build partial graph (with caching) - use spawn_blocking to avoid blocking async runtime
+    let pbf_path = config.pbf_path.clone();
+    let cache_dir = config.cache_dir.clone();
+    let start = req.start;
+    let end = req.end;
+    let margin_km = req.margin_km;
+
+    let graph = tokio::task::spawn_blocking(move || {
+        GraphBuilder::build_partial_cached(pbf_path, cache_dir, start, end, margin_km)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!("Task spawn error: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task spawn error: {}", e),
+        )
+    })?
     .map_err(|e| {
         tracing::error!("Failed to build partial graph: {}", e);
         (

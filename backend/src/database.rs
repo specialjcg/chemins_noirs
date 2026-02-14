@@ -284,6 +284,7 @@ mod tests {
                 total_descent: 0.0,
             }),
             terrain: None,
+            snapped_waypoints: None,
         };
 
         SaveRouteRequest {
@@ -450,6 +451,7 @@ mod tests {
             metadata: None,
             elevation_profile: None, // No elevation data
             terrain: None,
+            snapped_waypoints: None,
         };
 
         let request = SaveRouteRequest {

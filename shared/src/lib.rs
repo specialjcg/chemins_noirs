@@ -98,6 +98,10 @@ pub struct RouteResponse {
     pub elevation_profile: Option<ElevationProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terrain: Option<TerrainMesh>,
+    /// Snapped waypoint positions (on-road) for multi-point routes.
+    /// Frontend uses these to place markers exactly on the route line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapped_waypoints: Option<Vec<Coordinate>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

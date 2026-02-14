@@ -226,6 +226,7 @@ type alias RouteResponse =
     , gpxBase64 : String
     , metadata : Maybe RouteMetadata
     , elevationProfile : Maybe ElevationProfile
+    , snappedWaypoints : Maybe (List Coordinate)
     }
 
 

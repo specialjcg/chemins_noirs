@@ -1,43 +1,47 @@
-use std::error::Error;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use shared::{Coordinate, ElevationProfile};
 
 use crate::dem::ArcAsciiDem;
+use crate::geo_utils::haversine_m;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ElevationError {
+    #[error("local DEM not available: ensure LOCAL_DEM_PATH is set or backend/data/dem/region.asc exists")]
+    DemNotAvailable,
+    #[error("DEM coverage incomplete: {0} coordinates outside DEM bounds")]
+    IncompleteCoverage(usize),
+    #[error("elevation data size mismatch: expected {expected}, got {actual}")]
+    SizeMismatch { expected: usize, actual: usize },
+}
 
 /// Get elevation data for a batch of coordinates from local DEM
-pub async fn get_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Box<dyn Error>> {
+pub async fn get_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, ElevationError> {
     if coords.is_empty() {
         return Ok(Vec::new());
     }
 
-    let grid = local_dem_grid()
-        .ok_or("Local DEM not available. Please ensure LOCAL_DEM_PATH is set or backend/data/dem/region.asc exists.")?;
+    let grid = local_dem_grid().ok_or(ElevationError::DemNotAvailable)?;
 
     let mut values = Vec::with_capacity(coords.len());
-    let mut missing_coords = Vec::new();
+    let mut missing_count = 0usize;
 
     for &(lat, lon) in &coords {
         match grid.sample(lat, lon) {
             Some(val) => values.push(val),
             None => {
-                missing_coords.push((lat, lon));
+                missing_count += 1;
             }
         }
     }
 
-    if !missing_coords.is_empty() {
+    if missing_count > 0 {
         tracing::warn!(
-            "Local DEM does not cover {} coordinate(s): {:?}",
-            missing_coords.len(),
-            &missing_coords[..missing_coords.len().min(5)]
+            "Local DEM does not cover {} coordinate(s)",
+            missing_count,
         );
-        return Err(format!(
-            "DEM coverage incomplete: {} coordinates outside DEM bounds",
-            missing_coords.len()
-        )
-        .into());
+        return Err(ElevationError::IncompleteCoverage(missing_count));
     }
 
     tracing::debug!("Fetched {} elevations from local DEM", values.len());
@@ -87,21 +91,6 @@ fn median(values: &mut [f64]) -> Option<f64> {
     Some(values[values.len() / 2])
 }
 
-fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    const R: f64 = 6_371_000.0;
-    let (lat1, lon1, lat2, lon2) = (
-        lat1.to_radians(),
-        lon1.to_radians(),
-        lat2.to_radians(),
-        lon2.to_radians(),
-    );
-    let dlat = lat2 - lat1;
-    let dlon = lon2 - lon1;
-    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
-    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-    R * c
-}
-
 /// Smooth elevations by applying a small median filter and distance-aware clamping to reduce outliers.
 fn smooth_elevation_profile(path: &[Coordinate], raw: &[Option<f64>]) -> Vec<Option<f64>> {
     let mut smoothed = Vec::with_capacity(raw.len());
@@ -146,7 +135,7 @@ fn smooth_elevation_profile(path: &[Coordinate], raw: &[Option<f64>]) -> Vec<Opt
 /// Create an elevation profile for a route path using local DEM
 pub async fn create_elevation_profile(
     path: &[Coordinate],
-) -> Result<ElevationProfile, Box<dyn Error>> {
+) -> Result<ElevationProfile, ElevationError> {
     if path.is_empty() {
         return Ok(ElevationProfile {
             elevations: Vec::new(),
@@ -270,41 +259,6 @@ mod tests {
     fn test_median_with_duplicates() {
         let mut values = vec![5.0, 5.0, 5.0, 5.0];
         assert_eq!(median(&mut values), Some(5.0));
-    }
-
-    #[test]
-    fn test_haversine_zero_distance() {
-        let dist = haversine_m(45.0, 5.0, 45.0, 5.0);
-        assert!(dist.abs() < 0.01);
-    }
-
-    #[test]
-    fn test_haversine_1km_north() {
-        // 1km north ≈ 0.009° at any latitude
-        let dist = haversine_m(45.0, 5.0, 45.009, 5.0);
-        assert!((dist - 1000.0).abs() < 10.0); // Within 10m
-    }
-
-    #[test]
-    fn test_haversine_1km_east() {
-        // 1km east at 45° latitude
-        let dist = haversine_m(45.0, 5.0, 45.0, 5.0127);
-        assert!((dist - 1000.0).abs() < 50.0); // Within 50m (projection approximation)
-    }
-
-    #[test]
-    fn test_haversine_symmetry() {
-        let dist1 = haversine_m(45.0, 5.0, 46.0, 6.0);
-        let dist2 = haversine_m(46.0, 6.0, 45.0, 5.0);
-        assert!((dist1 - dist2).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_haversine_known_distance() {
-        // Paris (48.8566, 2.3522) to London (51.5074, -0.1278)
-        // Known distance: ~343 km
-        let dist = haversine_m(48.8566, 2.3522, 51.5074, -0.1278);
-        assert!((dist - 343_000.0).abs() < 5_000.0); // Within 5km
     }
 
     #[test]

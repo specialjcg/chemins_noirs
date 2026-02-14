@@ -158,6 +158,7 @@ pub async fn generate_loops(
                 metadata,
                 elevation_profile: Some(elevation_profile),
                 terrain: None,
+                snapped_waypoints: None,
             };
 
             candidates.push(LoopCandidate {

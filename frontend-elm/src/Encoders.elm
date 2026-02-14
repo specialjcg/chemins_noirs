@@ -108,6 +108,7 @@ encodeRouteResponse response =
         , ( "gpx_base64", Encode.string response.gpxBase64 )
         , ( "metadata", encodeMaybe encodeRouteMetadata response.metadata )
         , ( "elevation_profile", encodeMaybe encodeElevationProfile response.elevationProfile )
+        , ( "snapped_waypoints", encodeMaybe (Encode.list encodeCoordinate) response.snappedWaypoints )
         ]
 
 

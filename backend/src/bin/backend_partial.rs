@@ -87,6 +87,7 @@ async fn route_handler(
                 metadata: None,
                 elevation_profile,
                 terrain: None,
+                snapped_waypoints: None,
             };
 
             Ok(Json(response))
@@ -218,8 +219,24 @@ async fn multi_route_handler(
         graph.edges.len()
     );
 
-    // Now find path for each segment using the SAME engine
-    let mut all_coords = Vec::new();
+    // Helper: push coordinate only if it differs from the last one (dedup)
+    let push_dedup = |coords: &mut Vec<Coordinate>, c: Coordinate| {
+        if coords
+            .last()
+            .map_or(true, |last| {
+                (last.lat - c.lat).abs() > 1e-7 || (last.lon - c.lon).abs() > 1e-7
+            })
+        {
+            coords.push(c);
+        }
+    };
+
+    // Now find path for each segment using the SAME engine.
+    // Path only contains road-snapped coordinates (no off-road spikes to click positions).
+    // We also collect the snapped waypoint positions (on-road projections) so the
+    // frontend can place markers exactly on the route line.
+    let mut all_coords: Vec<Coordinate> = Vec::new();
+    let mut snapped_waypoints: Vec<Coordinate> = Vec::new();
     let mut total_distance = 0.0;
 
     for i in 0..points.len() - 1 {
@@ -239,14 +256,21 @@ async fn multi_route_handler(
                     path.len()
                 );
 
-                // Merge paths, avoiding duplicate waypoints
+                // Collect snapped positions: path starts at snap(points[i]),
+                // ends at snap(points[i+1])
                 if i == 0 {
-                    all_coords.extend(path.clone());
-                } else {
-                    all_coords.extend(path.into_iter().skip(1));
+                    snapped_waypoints.push(path[0]);
+                }
+                if let Some(&last) = path.last() {
+                    snapped_waypoints.push(last);
                 }
 
-                // Calculate segment distance
+                // Add the routed path (dedup avoids duplicate at segment boundaries)
+                for &coord in &path {
+                    push_dedup(&mut all_coords, coord);
+                }
+
+                // Calculate total distance so far
                 let segment_distance: f64 = all_coords
                     .windows(2)
                     .map(|pair| haversine_km(pair[0], pair[1]))
@@ -267,6 +291,9 @@ async fn multi_route_handler(
             }
         }
     }
+
+    // Only keep snapped positions for original waypoints (exclude close_loop duplicate)
+    snapped_waypoints.truncate(req.waypoints.len());
 
     tracing::info!(
         "Multi-point route complete: {} total waypoints, {:.2}km",
@@ -299,6 +326,7 @@ async fn multi_route_handler(
         metadata: None,
         elevation_profile,
         terrain: None,
+        snapped_waypoints: Some(snapped_waypoints),
     };
 
     Ok(Json(response))

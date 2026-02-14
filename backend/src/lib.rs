@@ -3,6 +3,7 @@ pub mod dem;
 pub mod elevation;
 pub mod engine;
 pub mod error;
+pub mod geo_utils;
 pub mod gpx_export;
 pub mod graph;
 pub mod loops;
@@ -27,12 +28,13 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::engine::RouteEngine;
 use crate::error::RouteError;
+use crate::geo_utils::{approximate_distance_km, compute_bounds};
 use crate::gpx_export::encode_route_as_gpx;
 use crate::loops::LoopGenerationError;
 use crate::models::{
     ApiError, Coordinate, LoopRouteRequest, RouteBounds, RouteMetadata, RouteRequest, RouteResponse,
 };
-use crate::routing::{approximate_distance_km, generate_route};
+use crate::routing::generate_route;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -58,6 +60,8 @@ pub struct SavedRouteInfo {
 pub struct LoadRouteQuery {
     pub filename: String,
 }
+
+const SAVED_ROUTES_DIR: &str = "backend/data/saved_routes";
 
 pub fn create_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
@@ -118,6 +122,7 @@ async fn route_handler(
         metadata: Some(metadata),
         elevation_profile: None, // Not available in this handler (legacy backend)
         terrain: None,
+        snapped_waypoints: None,
     };
 
     Ok(Json(response))
@@ -134,17 +139,7 @@ async fn loop_route_handler(
 }
 
 pub(crate) fn build_metadata(path: &[Coordinate]) -> RouteMetadata {
-    let mut min_lat = f64::MAX;
-    let mut max_lat = f64::MIN;
-    let mut min_lon = f64::MAX;
-    let mut max_lon = f64::MIN;
-
-    for coord in path {
-        min_lat = min_lat.min(coord.lat);
-        max_lat = max_lat.max(coord.lat);
-        min_lon = min_lon.min(coord.lon);
-        max_lon = max_lon.max(coord.lon);
-    }
+    let (min_lat, max_lat, min_lon, max_lon) = compute_bounds(path);
 
     RouteMetadata {
         point_count: path.len(),
@@ -196,7 +191,7 @@ async fn save_route_handler(
     State(_state): State<AppState>,
     Json(req): Json<SaveRouteRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
-    let save_dir = PathBuf::from("backend/data/saved_routes");
+    let save_dir = PathBuf::from(SAVED_ROUTES_DIR);
 
     // Créer le répertoire s'il n'existe pas (async I/O)
     if let Err(e) = tokio::fs::create_dir_all(&save_dir).await {
@@ -269,7 +264,7 @@ async fn load_route_handler(
         ));
     }
 
-    let save_dir = PathBuf::from("backend/data/saved_routes");
+    let save_dir = PathBuf::from(SAVED_ROUTES_DIR);
     let file_path = save_dir.join(&query.filename);
 
     // Additional security: verify the resolved path is still within save_dir
@@ -340,7 +335,7 @@ async fn load_route_handler(
 async fn list_routes_handler(
     State(_state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
-    let save_dir = PathBuf::from("backend/data/saved_routes");
+    let save_dir = PathBuf::from(SAVED_ROUTES_DIR);
 
     // Créer le répertoire s'il n'existe pas (async I/O)
     if let Err(e) = tokio::fs::create_dir_all(&save_dir).await {

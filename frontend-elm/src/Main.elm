@@ -259,26 +259,36 @@ update msg model =
         RouteFetched result ->
             case result of
                 Ok route ->
-                    ( applyRoute model route
-                    , Cmd.batch
-                        [ Ports.updateRoute route.path
-                        , if model.routeMode == MultiPoint then
-                            -- In multi-point mode, don't re-center the map
-                            -- (user is actively placing points, don't interrupt)
-                            Cmd.none
+                    if model.routeMode == MultiPoint then
+                        -- Use backend snapped positions (exact on-road projections at segment junctions)
+                        -- Falls back to original click positions if backend doesn't provide them
+                        let
+                            markerPositions =
+                                Maybe.withDefault model.waypoints route.snappedWaypoints
 
-                          else
-                            Cmd.batch
-                                [ case route.metadata of
-                                    Just meta ->
-                                        Ports.updateBbox meta.bounds
+                            updatedModel =
+                                applyRoute model route
+                        in
+                        ( { updatedModel | waypoints = markerPositions }
+                        , Cmd.batch
+                            [ Ports.updateRoute route.path
+                            , Ports.updateWaypointMarkers markerPositions
+                            ]
+                        )
 
-                                    Nothing ->
-                                        Cmd.none
-                                , centerOnRouteCmd route
-                                ]
-                        ]
-                    )
+                    else
+                        ( applyRoute model route
+                        , Cmd.batch
+                            [ Ports.updateRoute route.path
+                            , case route.metadata of
+                                Just meta ->
+                                    Ports.updateBbox meta.bounds
+
+                                Nothing ->
+                                    Cmd.none
+                            , centerOnRouteCmd route
+                            ]
+                        )
 
                 Err httpError ->
                     ( { model

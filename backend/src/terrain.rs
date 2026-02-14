@@ -1,10 +1,9 @@
-use crate::elevation::get_elevations;
+use crate::elevation::{get_elevations, ElevationError};
+use crate::geo_utils::compute_bounds;
 use crate::models::RouteBounds;
 use serde_json;
 use shared::{Coordinate, TerrainMesh};
-use std::fs;
 use std::future::Future;
-use std::io;
 use std::path::PathBuf;
 
 const METERS_PER_DEGREE_LAT: f64 = 111_000.0;
@@ -33,52 +32,43 @@ fn cache_path(bounds: &RouteBounds) -> PathBuf {
     terrain_cache_dir().join(file)
 }
 
-fn try_load_cache(bounds: &RouteBounds) -> io::Result<TerrainMesh> {
+async fn try_load_cache(bounds: &RouteBounds) -> std::io::Result<TerrainMesh> {
     let path = cache_path(bounds);
-    let content = fs::read_to_string(path)?;
+    let content = tokio::fs::read_to_string(path).await?;
     let mesh: TerrainMesh = serde_json::from_str(&content)?;
     Ok(mesh)
 }
 
-fn persist_cache(bounds: &RouteBounds, mesh: &TerrainMesh) -> io::Result<()> {
+async fn persist_cache(bounds: &RouteBounds, mesh: &TerrainMesh) -> std::io::Result<()> {
     let dir = terrain_cache_dir();
-    fs::create_dir_all(&dir)?;
+    tokio::fs::create_dir_all(&dir).await?;
     let path = cache_path(bounds);
     let data = serde_json::to_string(mesh)?;
-    fs::write(path, data)?;
+    tokio::fs::write(path, data).await?;
     Ok(())
 }
 
 /// Build a 3D terrain mesh (positions, uvs, indices) around the route.
 pub async fn build_terrain_mesh(
     path: &[Coordinate],
-) -> Result<TerrainMesh, Box<dyn std::error::Error>> {
+) -> Result<TerrainMesh, ElevationError> {
     build_terrain_mesh_with_fetch(path, get_elevations).await
 }
 
 async fn build_terrain_mesh_with_fetch<F, Fut>(
     path: &[Coordinate],
     fetch_fn: F,
-) -> Result<TerrainMesh, Box<dyn std::error::Error>>
+) -> Result<TerrainMesh, ElevationError>
 where
     F: Fn(Vec<(f64, f64)>) -> Fut,
-    Fut: Future<Output = Result<Vec<f64>, Box<dyn std::error::Error>>>,
+    Fut: Future<Output = Result<Vec<f64>, ElevationError>>,
 {
     if path.is_empty() {
-        return Err("empty path".into());
+        return Err(ElevationError::DemNotAvailable);
     }
 
     // Compute bounds with padding
-    let mut min_lat = f64::MAX;
-    let mut max_lat = f64::MIN;
-    let mut min_lon = f64::MAX;
-    let mut max_lon = f64::MIN;
-    for c in path {
-        min_lat = min_lat.min(c.lat);
-        max_lat = max_lat.max(c.lat);
-        min_lon = min_lon.min(c.lon);
-        max_lon = max_lon.max(c.lon);
-    }
+    let (min_lat, max_lat, min_lon, max_lon) = compute_bounds(path);
     let lat_padding = (max_lat - min_lat) * 0.3;
     let lon_padding = (max_lon - min_lon) * 0.3;
 
@@ -89,7 +79,7 @@ where
         max_lon: max_lon + lon_padding,
     };
 
-    if let Ok(mesh) = try_load_cache(&padded_bounds) {
+    if let Ok(mesh) = try_load_cache(&padded_bounds).await {
         tracing::info!("Terrain cache hit");
         return Ok(mesh);
     }
@@ -120,7 +110,10 @@ where
 
     let elevations = fetch_fn(samples).await?;
     if elevations.len() != (steps + 1) * (steps + 1) {
-        return Err("elevation vector size mismatch".into());
+        return Err(ElevationError::SizeMismatch {
+            expected: (steps + 1) * (steps + 1),
+            actual: elevations.len(),
+        });
     }
 
     // Convert to positions/uvs
@@ -185,7 +178,7 @@ where
         segments: SEGMENTS,
     };
 
-    if let Err(err) = persist_cache(&padded_bounds, &mesh) {
+    if let Err(err) = persist_cache(&padded_bounds, &mesh).await {
         tracing::warn!("Failed to persist terrain cache: {}", err);
     }
 
@@ -210,7 +203,7 @@ mod tests {
         ];
 
         let fetch = |coords: Vec<(f64, f64)>| async move {
-            Ok(coords
+            Ok::<_, crate::elevation::ElevationError>(coords
                 .iter()
                 .enumerate()
                 .map(|(idx, _)| idx as f64)
