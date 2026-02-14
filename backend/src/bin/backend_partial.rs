@@ -348,7 +348,17 @@ async fn main() {
     let pbf_path =
         std::env::var("PBF_PATH").unwrap_or_else(|_| "data/rhone-alpes-251111.osm.pbf".to_string());
     let cache_dir = std::env::var("CACHE_DIR").unwrap_or_else(|_| "data/cache".to_string());
-    let tiles_dir = std::env::var("TILES_DIR").ok().map(PathBuf::from);
+    let tiles_dir = std::env::var("TILES_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| {
+            let default = PathBuf::from("data/tiles");
+            if default.exists() {
+                Some(default)
+            } else {
+                None
+            }
+        });
 
     tracing::info!(
         "Starting backend with on-demand graph generation from PBF: {}",

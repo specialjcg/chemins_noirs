@@ -816,7 +816,9 @@ impl GraphBuilder {
                             && lon >= bbox.min_lon
                             && lon <= bbox.max_lon
                         {
-                            let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
+                            // Inline elevation extraction — avoids tags().collect() allocation
+                            let elevation = node.tags()
+                                .find_map(|(k, v)| if k == "ele" { v.parse::<f64>().ok() } else { None });
                             (vec![(node.id(), (lat, lon, elevation))], Vec::new())
                         } else {
                             (Vec::new(), Vec::new())
@@ -831,25 +833,19 @@ impl GraphBuilder {
                             && lon >= bbox.min_lon
                             && lon <= bbox.max_lon
                         {
-                            let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
+                            let elevation = node.tags()
+                                .find_map(|(k, v)| if k == "ele" { v.parse::<f64>().ok() } else { None });
                             (vec![(node.id(), (lat, lon, elevation))], Vec::new())
                         } else {
                             (Vec::new(), Vec::new())
                         }
                     }
                     Element::Way(way) => {
-                        let tags: Vec<_> = way.tags().collect();
-
-                        // Only collect supported highway types (path, track, residential, etc.)
-                        // This filters out motorways, cycleways, etc. early — ~10s saving
-                        let dominated_by_supported = tags
-                            .iter()
-                            .any(|(k, v)| *k == "highway" && is_supported_highway(v));
-
-                        if dominated_by_supported {
+                        // Quick highway check without collecting all tags (avoids millions of Vec allocations)
+                        if way.tags().any(|(k, v)| k == "highway" && is_supported_highway(v)) {
                             let node_refs: Vec<i64> = way.refs().collect();
                             let tag_pairs: Vec<(String, String)> =
-                                tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+                                way.tags().map(|(k, v)| (k.to_string(), v.to_string())).collect();
 
                             (Vec::new(), vec![(way.id(), node_refs, tag_pairs)])
                         } else {
@@ -924,7 +920,8 @@ impl GraphBuilder {
                 match element {
                     Element::Node(node) => {
                         if missing_node_ids.contains(&node.id()) {
-                            let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
+                            let elevation = node.tags()
+                                .find_map(|(k, v)| if k == "ele" { v.parse::<f64>().ok() } else { None });
                             vec![(node.id(), (node.lat(), node.lon(), elevation))]
                         } else {
                             Vec::new()
@@ -932,7 +929,8 @@ impl GraphBuilder {
                     }
                     Element::DenseNode(node) => {
                         if missing_node_ids.contains(&node.id()) {
-                            let elevation = extract_elevation(&node.tags().collect::<Vec<_>>());
+                            let elevation = node.tags()
+                                .find_map(|(k, v)| if k == "ele" { v.parse::<f64>().ok() } else { None });
                             vec![(node.id(), (node.lat(), node.lon(), elevation))]
                         } else {
                             Vec::new()
