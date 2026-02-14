@@ -186,7 +186,6 @@ function ensureMap() {
 
   mapInstance = new maplibregl.Map({
     container: 'map',
-    projection: 'globe',
     style: {
       version: 8,
       sources: {
@@ -215,11 +214,7 @@ function ensureMap() {
           minzoom: 0,
           maxzoom: 22
         }
-      ],
-      terrain: {
-        source: 'terrainSource',
-        exaggeration: TERRAIN_EXAGGERATION
-      }
+      ]
     },
     center: [5.0, 45.0],
     zoom: 8,
@@ -249,27 +244,6 @@ function ensureMap() {
       layout: { visibility: 'visible' },
       paint: { 'hillshade-shadow-color': '#473B24' }
     }, 'osm-tiles');
-
-    // Sky atmosphere layer (visible when globe projection is active at low zoom)
-    mapInstance.addLayer({
-      id: 'sky',
-      type: 'sky',
-      paint: {
-        'sky-type': 'atmosphere',
-        'sky-atmosphere-sun': [0.0, 90.0],
-        'sky-atmosphere-sun-intensity': 15
-      }
-    });
-
-    // Atmospheric fog — horizon blend for immersive globe view
-    mapInstance.setFog({
-      range: [1, 10],
-      color: 'white',
-      'horizon-blend': 0.1,
-      'high-color': '#245cdf',
-      'space-color': '#000000',
-      'star-intensity': 0.2
-    });
 
     // Add route source (will be populated later)
     mapInstance.addSource('route', {
@@ -339,6 +313,48 @@ function ensureMap() {
   // Add POI toggle control
   const poiControl = createPoiControl();
   mapInstance.addControl(poiControl, 'top-right');
+
+  // Add map style switcher (topo / satellite / hybrid)
+  const styleControl = createStyleSwitcherControl();
+  mapInstance.addControl(styleControl, 'bottom-left');
+}
+
+function createStyleSwitcherControl() {
+  const STYLES = [
+    { id: 'topo',      label: 'Topo',      icon: '◈' },
+    { id: 'satellite', label: 'Satellite',  icon: '◉' },
+    { id: 'hybrid',    label: 'Hybride',    icon: '◎' }
+  ];
+
+  class StyleSwitcherControl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl style-switcher';
+
+      STYLES.forEach(s => {
+        const btn = document.createElement('button');
+        btn.className = 'style-switcher-btn' + (s.id === currentMapStyle ? ' active' : '');
+        btn.dataset.style = s.id;
+        btn.title = s.label;
+        btn.innerHTML = `<span class="style-icon">${s.icon}</span><span class="style-label">${s.label}</span>`;
+        btn.onclick = () => {
+          switchMapStyle(s.id);
+          this._container.querySelectorAll('.style-switcher-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+        };
+        this._container.appendChild(btn);
+      });
+
+      return this._container;
+    }
+
+    onRemove() {
+      this._container.parentNode.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+  return new StyleSwitcherControl();
 }
 
 function createPitchControl() {
@@ -793,7 +809,7 @@ export function switchMapStyle(style) {
   currentMapStyle = style;
   console.debug('[maplibre] switchMapStyle', style);
 
-  // Ensure satellite layer exists
+  // Ensure satellite layer exists — insert it below osm-tiles so stacking is correct
   if (!mapInstance.getLayer('satellite-tiles') && (style === 'satellite' || style === 'hybrid')) {
     mapInstance.addLayer({
       id: 'satellite-tiles',
@@ -801,29 +817,25 @@ export function switchMapStyle(style) {
       source: 'satellite',
       minzoom: 0,
       maxzoom: 22
-    });
+    }, 'osm-tiles'); // Insert below OSM so hybrid overlay works
   }
 
   const showOsm = style === 'topo' || style === 'hybrid';
   const showSatellite = style === 'satellite' || style === 'hybrid';
-
-  // Set OSM visibility
-  if (mapInstance.getLayer('osm-tiles')) {
-    mapInstance.setLayoutProperty('osm-tiles', 'visibility', showOsm ? 'visible' : 'none');
-    // In hybrid mode, make OSM semi-transparent
-    if (style === 'hybrid') {
-      mapInstance.setPaintProperty('osm-tiles', 'raster-opacity', 0.45);
-    } else {
-      mapInstance.setPaintProperty('osm-tiles', 'raster-opacity', 1);
-    }
-  }
 
   // Set satellite visibility
   if (mapInstance.getLayer('satellite-tiles')) {
     mapInstance.setLayoutProperty('satellite-tiles', 'visibility', showSatellite ? 'visible' : 'none');
   }
 
-  // Set hillshade visibility — hide in satellite, show in topo/hybrid
+  // Set OSM visibility and opacity
+  if (mapInstance.getLayer('osm-tiles')) {
+    mapInstance.setLayoutProperty('osm-tiles', 'visibility', showOsm ? 'visible' : 'none');
+    // In hybrid mode, make OSM semi-transparent on top of satellite
+    mapInstance.setPaintProperty('osm-tiles', 'raster-opacity', style === 'hybrid' ? 0.45 : 1);
+  }
+
+  // Set hillshade visibility — hide in pure satellite, show in topo/hybrid
   if (mapInstance.getLayer('hills')) {
     mapInstance.setLayoutProperty('hills', 'visibility', style === 'satellite' ? 'none' : 'visible');
   }
@@ -836,6 +848,11 @@ export function switchMapStyle(style) {
 
   // Ensure route layers are always on top
   ensureRouteLayers();
+
+  // Sync the on-map style switcher buttons
+  document.querySelectorAll('.style-switcher-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.style === style);
+  });
 }
 
 export function updateBbox(bounds) {

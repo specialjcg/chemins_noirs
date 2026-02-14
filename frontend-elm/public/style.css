@@ -937,6 +937,66 @@ small {
   transform: scale(1.1);
 }
 
+/* ─── Map Style Switcher ─── */
+.style-switcher {
+  display: flex;
+  background: rgba(12, 16, 13, 0.88);
+  backdrop-filter: blur(12px);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-medium);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  padding: 3px;
+  gap: 2px;
+}
+
+.style-switcher-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.7rem;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+  min-height: 0;
+  letter-spacing: 0.02em;
+}
+
+.style-switcher-btn:hover {
+  background: rgba(201, 168, 76, 0.08);
+  color: var(--text-primary);
+  transform: none;
+  filter: none;
+}
+
+.style-switcher-btn.active {
+  background: var(--accent-brass);
+  color: var(--text-inverse);
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.style-switcher-btn.active:hover {
+  background: var(--accent-brass-light);
+}
+
+.style-icon {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.style-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
 /* ─── Custom Scrollbar ─── */
 ::-webkit-scrollbar {
   width: 6px;
@@ -1254,8 +1314,9 @@ small {
     font-size: 0.65rem;
   }
 
-  /* Touch-friendly buttons */
-  button, .btn-submit, .btn-secondary, .map-toggle,
+  /* Touch-friendly buttons (exclude map controls) */
+  button:not(.style-switcher-btn):not(.maplibregl-ctrl button),
+  .btn-submit, .btn-secondary, .map-toggle,
   .save-btn, .load-btn, .btn-gpx-export, .btn-share-link, .btn-geoloc {
     min-height: 44px;
     font-size: 0.85rem;
