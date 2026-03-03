@@ -12,6 +12,7 @@ import Html exposing (..)
 import Html.Attributes exposing (class)
 import Json.Decode
 import Ports
+import Dict exposing (Dict)
 import Types exposing (..)
 import View.Form as Form
 import View.Preview as Preview
@@ -37,26 +38,9 @@ main =
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    let
-        model =
-            initialModel
-
-        start =
-            parseCoordinate model.form.startLat model.form.startLon
-
-        end =
-            parseCoordinate model.form.endLat model.form.endLon
-    in
-    ( model
+    ( initialModel
     , Cmd.batch
         [ Ports.initMap ()
-        , Ports.updateSelectionMarkers { start = start, end = end }
-        , case ( start, end ) of
-            ( Just s, Just e ) ->
-                Ports.centerOnMarkers { start = s, end = e }
-
-            _ ->
-                Cmd.none
         , Api.listSavedRoutes SavedRoutesLoaded
         ]
     )
@@ -69,60 +53,6 @@ init _ =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        StartLatChanged val ->
-            let
-                form =
-                    model.form
-
-                newForm =
-                    { form | startLat = val }
-            in
-            ( { model | form = newForm }
-            , Cmd.batch
-                [ syncSelectionMarkersCmd newForm
-                , resetLoopCandidatesCmd model
-                ]
-            )
-
-        StartLonChanged val ->
-            let
-                form =
-                    model.form
-
-                newForm =
-                    { form | startLon = val }
-            in
-            ( { model | form = newForm }
-            , Cmd.batch
-                [ syncSelectionMarkersCmd newForm
-                , resetLoopCandidatesCmd model
-                ]
-            )
-
-        EndLatChanged val ->
-            let
-                form =
-                    model.form
-
-                newForm =
-                    { form | endLat = val }
-            in
-            ( { model | form = newForm }
-            , syncSelectionMarkersCmd newForm
-            )
-
-        EndLonChanged val ->
-            let
-                form =
-                    model.form
-
-                newForm =
-                    { form | endLon = val }
-            in
-            ( { model | form = newForm }
-            , syncSelectionMarkersCmd newForm
-            )
-
         PopWeightChanged val ->
             let
                 form =
@@ -214,34 +144,62 @@ update msg model =
             else
                 case model.routeMode of
                     PointToPoint ->
-                        case formToRequest model.form of
-                            Ok request ->
-                                ( { model | pending = True, error = Nothing }
-                                , Api.fetchRoute request RouteFetched
-                                )
+                        if List.length model.waypoints < 2 then
+                            ( { model | error = Just "Placez 2 points sur la carte" }
+                            , Cmd.none
+                            )
 
-                            Err err ->
-                                ( { model | error = Just err }
-                                , Cmd.none
-                                )
+                        else
+                            let
+                                startWp =
+                                    List.head model.waypoints |> Maybe.withDefault { lat = 0, lon = 0 }
+
+                                endWp =
+                                    List.head (List.drop 1 model.waypoints) |> Maybe.withDefault { lat = 0, lon = 0 }
+
+                                ( wPop, wPaved ) =
+                                    if model.cheminNoir then
+                                        ( 5.0, 8.0 )
+
+                                    else
+                                        ( String.toFloat model.form.wPop |> Maybe.withDefault 1.5
+                                        , String.toFloat model.form.wPaved |> Maybe.withDefault 4.0
+                                        )
+
+                                request =
+                                    { start = startWp
+                                    , end = endWp
+                                    , wPop = wPop
+                                    , wPaved = wPaved
+                                    }
+                            in
+                            ( { model | pending = True, error = Nothing }
+                            , Api.fetchRoute request RouteFetched
+                            )
 
                     Loop ->
-                        case loopFormToRequest model.form model.loopForm of
-                            Ok request ->
-                                ( { model
-                                    | pending = True
-                                    , error = Nothing
-                                    , loopCandidates = []
-                                    , loopMeta = Nothing
-                                    , selectedLoopIdx = Nothing
-                                  }
-                                , Api.fetchLoopRoute request LoopRouteFetched
-                                )
+                        if List.isEmpty model.waypoints then
+                            ( { model | error = Just "Placez un point de départ sur la carte" }
+                            , Cmd.none
+                            )
 
-                            Err err ->
-                                ( { model | error = Just err }
-                                , Cmd.none
-                                )
+                        else
+                            case loopFormToRequest model.cheminNoir model.form model.loopForm model.waypoints of
+                                Ok request ->
+                                    ( { model
+                                        | pending = True
+                                        , error = Nothing
+                                        , loopCandidates = []
+                                        , loopMeta = Nothing
+                                        , selectedLoopIdx = Nothing
+                                      }
+                                    , Api.fetchLoopRoute request LoopRouteFetched
+                                    )
+
+                                Err err ->
+                                    ( { model | error = Just err }
+                                    , Cmd.none
+                                    )
 
                     MultiPoint ->
                         if List.length model.waypoints < 2 then
@@ -266,12 +224,15 @@ update msg model =
                             markerPositions =
                                 Maybe.withDefault model.waypoints route.snappedWaypoints
 
+                            displayRoute =
+                                applyFreehandOverrides model.freehandSegments model.freehandDrawing markerPositions route
+
                             updatedModel =
-                                applyRoute model route
+                                applyRoute model displayRoute
                         in
-                        ( { updatedModel | waypoints = markerPositions }
+                        ( { updatedModel | waypoints = markerPositions, originalResponse = Just route }
                         , Cmd.batch
-                            [ Ports.updateRoute route.path
+                            [ Ports.updateRoute displayRoute.path
                             , Ports.updateWaypointMarkers markerPositions
                             ]
                         )
@@ -280,6 +241,7 @@ update msg model =
                         ( applyRoute model route
                         , Cmd.batch
                             [ Ports.updateRoute route.path
+                            , Ports.updateWaypointMarkers model.waypoints
                             , case route.metadata of
                                 Just meta ->
                                     Ports.updateBbox meta.bounds
@@ -295,7 +257,10 @@ update msg model =
                         | pending = False
                         , error = Just (httpErrorToString httpError)
                       }
-                    , Ports.updateRoute []
+                    , Cmd.batch
+                        [ Ports.updateRoute []
+                        , Ports.updateWaypointMarkers model.waypoints
+                        ]
                     )
 
         LoopRouteFetched result ->
@@ -374,55 +339,136 @@ update msg model =
                     ( model, Cmd.none )
 
         MapClicked lat lon ->
-            if model.routeMode == MultiPoint then
-                update (AddWaypoint { lat = lat, lon = lon }) model
+            let
+                coord =
+                    { lat = lat, lon = lon }
+
+                maxWp =
+                    case model.routeMode of
+                        PointToPoint ->
+                            2
+
+                        Loop ->
+                            1
+
+                        MultiPoint ->
+                            999
+
+                wpCount =
+                    List.length model.waypoints
+            in
+            if model.freehandEnabled && model.routeMode == MultiPoint && model.lastResponse /= Nothing then
+                -- Freehand drawing mode
+                case model.freehandDrawing of
+                    Nothing ->
+                        -- Start drawing: find nearest waypoint (not the last one)
+                        case findNearestWaypoint coord model.waypoints of
+                            Just ( idx, dist ) ->
+                                if dist < 0.1 && idx < List.length model.waypoints - 1 then
+                                    let
+                                        newModel =
+                                            { model | freehandDrawing = Just { fromIdx = idx, points = [] } }
+                                    in
+                                    rebuildAndDisplayRoute newModel
+
+                                else
+                                    ( model, Cmd.none )
+
+                            Nothing ->
+                                ( model, Cmd.none )
+
+                    Just state ->
+                        -- Drawing in progress: check if finishing or adding point
+                        let
+                            targetIdx =
+                                state.fromIdx + 1
+
+                            targetWp =
+                                getAt targetIdx model.waypoints
+                        in
+                        case targetWp of
+                            Just target ->
+                                if haversineKm coord target < 0.1 then
+                                    -- Finish: store segment
+                                    let
+                                        newModel =
+                                            { model
+                                                | freehandSegments = Dict.insert state.fromIdx state.points model.freehandSegments
+                                                , freehandDrawing = Nothing
+                                            }
+                                    in
+                                    rebuildAndDisplayRoute newModel
+
+                                else
+                                    -- Add intermediate point
+                                    let
+                                        newState =
+                                            { state | points = state.points ++ [ coord ] }
+
+                                        newModel =
+                                            { model | freehandDrawing = Just newState }
+                                    in
+                                    rebuildAndDisplayRoute newModel
+
+                            Nothing ->
+                                ( model, Cmd.none )
+
+            else if wpCount >= 2 && model.lastResponse /= Nothing && model.routeMode == MultiPoint then
+                -- Insert between the two nearest waypoints
+                let
+                    idx =
+                        findInsertionIndex coord model.waypoints
+                in
+                update (InsertWaypoint idx coord) model
+
+            else if wpCount < maxWp then
+                update (AddWaypoint coord) model
 
             else
-                let
-                    coord =
-                        { lat = lat, lon = lon }
-
-                    form =
-                        model.form
-                in
-                case model.clickMode of
-                    Start ->
-                        let
-                            newForm =
-                                { form
-                                    | startLat = formatCoord lat
-                                    , startLon = formatCoord lon
-                                }
-                        in
-                        ( { model | form = newForm }
-                        , Cmd.batch
-                            [ syncSelectionMarkersCmd newForm
-                            , resetLoopCandidatesCmd model
-                            ]
-                        )
-
-                    End ->
-                        let
-                            newForm =
-                                { form
-                                    | endLat = formatCoord lat
-                                    , endLon = formatCoord lon
-                                }
-                        in
-                        ( { model | form = newForm }
-                        , syncSelectionMarkersCmd newForm
-                        )
+                ( model, Cmd.none )
 
         AddWaypoint coord ->
             let
+                modelWithHistory =
+                    pushWaypointHistory model
+
                 newWaypoints =
-                    model.waypoints ++ [ coord ]
+                    modelWithHistory.waypoints ++ [ coord ]
 
                 newModel =
-                    { model | waypoints = newWaypoints, error = Nothing }
+                    { modelWithHistory | waypoints = newWaypoints, error = Nothing }
             in
             if List.length newWaypoints >= 2 then
-                -- Auto-calculate route immediately
+                let
+                    ( routedModel, routeCmd ) =
+                        update ComputeMultiPointRoute newModel
+                in
+                ( routedModel
+                , Cmd.batch
+                    [ Ports.updateWaypointMarkers newWaypoints
+                    , routeCmd
+                    ]
+                )
+
+            else
+                ( newModel
+                , Ports.updateWaypointMarkers newWaypoints
+                )
+
+        InsertWaypoint idx coord ->
+            let
+                modelWithHistory =
+                    pushWaypointHistory model
+
+                newWaypoints =
+                    List.take (idx + 1) modelWithHistory.waypoints
+                        ++ [ coord ]
+                        ++ List.drop (idx + 1) modelWithHistory.waypoints
+
+                newModel =
+                    { modelWithHistory | waypoints = newWaypoints, error = Nothing }
+            in
+            if List.length newWaypoints >= 2 then
                 let
                     ( routedModel, routeCmd ) =
                         update ComputeMultiPointRoute newModel
@@ -441,15 +487,17 @@ update msg model =
 
         RemoveWaypoint idx ->
             let
+                modelWithHistory =
+                    pushWaypointHistory model
+
                 newWaypoints =
-                    List.take idx model.waypoints
-                        ++ List.drop (idx + 1) model.waypoints
+                    List.take idx modelWithHistory.waypoints
+                        ++ List.drop (idx + 1) modelWithHistory.waypoints
 
                 newModel =
-                    { model | waypoints = newWaypoints }
+                    { modelWithHistory | waypoints = newWaypoints }
             in
             if List.length newWaypoints >= 2 then
-                -- Auto-recalculate route
                 let
                     ( routedModel, routeCmd ) =
                         update ComputeMultiPointRoute newModel
@@ -471,6 +519,9 @@ update msg model =
 
         MoveWaypoint idx lat lon ->
             let
+                modelWithHistory =
+                    pushWaypointHistory model
+
                 newWaypoints =
                     List.indexedMap
                         (\i wp ->
@@ -480,13 +531,12 @@ update msg model =
                             else
                                 wp
                         )
-                        model.waypoints
+                        modelWithHistory.waypoints
 
                 newModel =
-                    { model | waypoints = newWaypoints, error = Nothing }
+                    { modelWithHistory | waypoints = newWaypoints, error = Nothing }
             in
             if List.length newWaypoints >= 2 then
-                -- Auto-recalculate route after drag
                 let
                     ( routedModel, routeCmd ) =
                         update ComputeMultiPointRoute newModel
@@ -497,7 +547,11 @@ update msg model =
                 ( newModel, Cmd.none )
 
         ClearWaypoints ->
-            ( { model
+            let
+                modelWithHistory =
+                    pushWaypointHistory model
+            in
+            ( { modelWithHistory
                 | waypoints = []
                 , lastResponse = Nothing
                 , error = Nothing
@@ -508,31 +562,112 @@ update msg model =
                 ]
             )
 
+        UndoWaypoints ->
+            case model.waypointHistory of
+                prev :: rest ->
+                    let
+                        newModel =
+                            { model
+                                | waypoints = prev
+                                , waypointHistory = rest
+                                , waypointFuture = model.waypoints :: model.waypointFuture
+                                , error = Nothing
+                                , freehandSegments = Dict.empty
+                                , freehandDrawing = Nothing
+                            }
+                    in
+                    if List.length prev >= 2 then
+                        let
+                            ( routedModel, routeCmd ) =
+                                update ComputeMultiPointRoute newModel
+                        in
+                        ( routedModel
+                        , Cmd.batch
+                            [ Ports.updateWaypointMarkers prev
+                            , routeCmd
+                            ]
+                        )
+
+                    else
+                        ( { newModel | lastResponse = Nothing }
+                        , Cmd.batch
+                            [ Ports.updateWaypointMarkers prev
+                            , Ports.updateRoute []
+                            ]
+                        )
+
+                [] ->
+                    ( model, Cmd.none )
+
+        RedoWaypoints ->
+            case model.waypointFuture of
+                next :: rest ->
+                    let
+                        newModel =
+                            { model
+                                | waypoints = next
+                                , waypointFuture = rest
+                                , waypointHistory = model.waypoints :: model.waypointHistory
+                                , error = Nothing
+                                , freehandSegments = Dict.empty
+                                , freehandDrawing = Nothing
+                            }
+                    in
+                    if List.length next >= 2 then
+                        let
+                            ( routedModel, routeCmd ) =
+                                update ComputeMultiPointRoute newModel
+                        in
+                        ( routedModel
+                        , Cmd.batch
+                            [ Ports.updateWaypointMarkers next
+                            , routeCmd
+                            ]
+                        )
+
+                    else
+                        ( { newModel | lastResponse = Nothing }
+                        , Cmd.batch
+                            [ Ports.updateWaypointMarkers next
+                            , Ports.updateRoute []
+                            ]
+                        )
+
+                [] ->
+                    ( model, Cmd.none )
+
         ToggleCloseLoop ->
-            ( { model | closeLoop = not model.closeLoop }
-            , Cmd.none
-            )
+            let
+                newModel =
+                    { model | closeLoop = not model.closeLoop }
+            in
+            if List.length newModel.waypoints >= 2 then
+                update ComputeMultiPointRoute newModel
+
+            else
+                ( newModel, Cmd.none )
 
         ComputeMultiPointRoute ->
             update Submit model
 
-        SetClickMode mode ->
-            ( { model | clickMode = mode }
-            , Cmd.none
-            )
-
         ToggleRouteMode mode ->
             ( { model
                 | routeMode = mode
+                , waypoints = []
+                , lastResponse = Nothing
                 , loopCandidates = []
                 , loopMeta = Nothing
                 , selectedLoopIdx = Nothing
+                , error = Nothing
+                , freehandSegments = Dict.empty
+                , originalResponse = Nothing
+                , freehandDrawing = Nothing
+                , freehandEnabled = False
               }
-            , if mode /= MultiPoint && not (List.isEmpty model.waypoints) then
-                Ports.updateWaypointMarkers []
-
-              else
-                Cmd.none
+            , Cmd.batch
+                [ Ports.updateWaypointMarkers []
+                , Ports.updateRoute []
+                ]
             )
 
         ToggleMapView ->
@@ -698,25 +833,8 @@ update msg model =
                                         |> List.drop 1
                                         |> List.reverse
 
-                        isMultiPoint =
-                            not (List.isEmpty waypoints)
-
-                        -- Restore map markers (waypoint markers for multi-point,
-                        -- selection markers for point-to-point)
                         markerCmds =
-                            if isMultiPoint then
-                                [ Ports.updateWaypointMarkers waypoints ]
-
-                            else
-                                let
-                                    startCoord = List.head route.path
-                                    endCoord = List.head (List.reverse route.path)
-                                in
-                                [ Ports.updateSelectionMarkers
-                                    { start = startCoord
-                                    , end = endCoord
-                                    }
-                                ]
+                            [ Ports.updateWaypointMarkers waypoints ]
                     in
                     ( applySavedRoute { model | pending = False, error = Nothing } route waypoints
                     , Cmd.batch
@@ -872,9 +990,146 @@ update msg model =
             )
 
         ElevationChartHover idx ->
+            let
+                coordAtIndex =
+                    case model.lastResponse of
+                        Just route ->
+                            route.path
+                                |> List.drop idx
+                                |> List.head
+
+                        Nothing ->
+                            Nothing
+
+                hoverCmd =
+                    case coordAtIndex of
+                        Just c ->
+                            Ports.setElevationHoverMarker (Just { lat = c.lat, lon = c.lon })
+
+                        Nothing ->
+                            Cmd.none
+            in
             ( { model | elevationHoverIndex = Just idx }
+            , hoverCmd
+            )
+
+        ElevationChartLeave ->
+            ( { model | elevationHoverIndex = Nothing }
+            , Ports.setElevationHoverMarker Nothing
+            )
+
+        ImportGpxClicked ->
+            ( model, Ports.triggerGpxImport () )
+
+        GpxWaypointsReceived rawCoords ->
+            let
+                coords =
+                    List.map (\c -> { lat = c.lat, lon = c.lon }) rawCoords
+
+                modelWithHistory =
+                    pushWaypointHistory model
+
+                newModel =
+                    { modelWithHistory
+                        | waypoints = coords
+                        , routeMode = MultiPoint
+                        , error = Nothing
+                    }
+            in
+            if List.length coords >= 2 then
+                let
+                    ( routedModel, routeCmd ) =
+                        update ComputeMultiPointRoute newModel
+                in
+                ( routedModel
+                , Cmd.batch
+                    [ Ports.updateWaypointMarkers coords
+                    , routeCmd
+                    ]
+                )
+
+            else
+                ( newModel
+                , Ports.updateWaypointMarkers coords
+                )
+
+        MapRouteHoverIndex idx ->
+            ( { model | mapRouteHoverIndex = Just idx }
             , Cmd.none
             )
+
+        MapRouteLeave ->
+            ( { model | mapRouteHoverIndex = Nothing }
+            , Cmd.none
+            )
+
+        ToggleCheminNoir ->
+            ( { model | cheminNoir = not model.cheminNoir }
+            , Cmd.none
+            )
+
+        MapSearchChanged val ->
+            ( { model | mapSearch = val, mapSearchResults = [] }
+            , Cmd.none
+            )
+
+        SearchMap ->
+            if String.isEmpty (String.trim model.mapSearch) then
+                ( model, Cmd.none )
+
+            else
+                ( model
+                , Api.geocodeAddress model.mapSearch MapSearchResults
+                )
+
+        MapSearchResults result ->
+            case result of
+                Ok results ->
+                    ( { model | mapSearchResults = results }
+                    , Cmd.none
+                    )
+
+                Err _ ->
+                    ( { model | mapSearchResults = [] }
+                    , Cmd.none
+                    )
+
+        SelectMapSearchResult geo ->
+            ( { model | mapSearchResults = [], mapSearch = "" }
+            , Ports.centerMapOn { lat = geo.lat, lon = geo.lon }
+            )
+
+        ToggleFreehandMode ->
+            let
+                newEnabled =
+                    not model.freehandEnabled
+            in
+            if newEnabled then
+                ( { model | freehandEnabled = True }
+                , Cmd.none
+                )
+
+            else
+                -- Turning off: cancel any active drawing
+                let
+                    newModel =
+                        { model | freehandEnabled = False, freehandDrawing = Nothing }
+                in
+                rebuildAndDisplayRoute newModel
+
+        CancelFreehandDrawing ->
+            let
+                newModel =
+                    { model | freehandDrawing = Nothing }
+            in
+            rebuildAndDisplayRoute newModel
+
+        ClearFreehandSegment idx ->
+            let
+                newModel =
+                    { model | freehandSegments = Dict.remove idx model.freehandSegments }
+            in
+            rebuildAndDisplayRoute newModel
 
         NoOp ->
             ( model, Cmd.none )
@@ -912,6 +1167,30 @@ subscriptions model =
                     (Json.Decode.decodeValue Decoders.decodeRouteResponse value)
             )
         , Ports.gotGeolocation (\{ lat, lon } -> GotGeolocation lat lon)
+        , Ports.undoRedoReceived
+            (\{ action } ->
+                if action == "undo" then
+                    UndoWaypoints
+
+                else if action == "redo" then
+                    RedoWaypoints
+
+                else
+                    NoOp
+            )
+        , Ports.gpxWaypointsReceived
+            (\coords ->
+                GpxWaypointsReceived (List.map (\c -> { lat = c.lat, lon = c.lon }) coords)
+            )
+        , Ports.mapRouteHover
+            (\{ index } ->
+                if index < 0 then
+                    MapRouteLeave
+
+                else
+                    MapRouteHoverIndex index
+            )
+        , Ports.closeLoopRequested (\_ -> ToggleCloseLoop)
         ]
 
 
@@ -919,16 +1198,255 @@ subscriptions model =
 -- HELPERS
 
 
-syncSelectionMarkersCmd : RouteForm -> Cmd Msg
-syncSelectionMarkersCmd form =
+applyFreehandOverrides : Dict Int (List Coordinate) -> Maybe FreehandDrawingState -> List Coordinate -> RouteResponse -> RouteResponse
+applyFreehandOverrides freehandDict activeDrawing waypoints response =
     let
-        start =
-            parseCoordinate form.startLat form.startLon
-
-        end =
-            parseCoordinate form.endLat form.endLon
+        hasOverrides =
+            not (Dict.isEmpty freehandDict) || activeDrawing /= Nothing
     in
-    Ports.updateSelectionMarkers { start = start, end = end }
+    if not hasOverrides then
+        response
+
+    else
+        case response.segments of
+            Nothing ->
+                response
+
+            Just segments ->
+                let
+                    originalPath =
+                        response.path
+
+                    buildSegment idx seg =
+                        case Dict.get idx freehandDict of
+                            Just pts ->
+                                -- Stored freehand: waypoint → intermediate points → next waypoint
+                                let
+                                    wpA =
+                                        getAt idx waypoints
+
+                                    wpB =
+                                        getAt (idx + 1) waypoints
+                                in
+                                case ( wpA, wpB ) of
+                                    ( Just a, Just b ) ->
+                                        let
+                                            fullPath =
+                                                [ a ] ++ pts ++ [ b ]
+                                        in
+                                        { path = fullPath
+                                        , dist = freehandDistance fullPath
+                                        }
+
+                                    _ ->
+                                        { path = List.take (seg.toIndex - seg.fromIndex + 1) (List.drop seg.fromIndex originalPath)
+                                        , dist = seg.distanceKm
+                                        }
+
+                            Nothing ->
+                                case activeDrawing of
+                                    Just drawing ->
+                                        if drawing.fromIdx == idx then
+                                            -- Live preview of active drawing
+                                            let
+                                                wpA =
+                                                    getAt idx waypoints
+
+                                                wpB =
+                                                    getAt (idx + 1) waypoints
+                                            in
+                                            case ( wpA, wpB ) of
+                                                ( Just a, Just b ) ->
+                                                    let
+                                                        fullPath =
+                                                            [ a ] ++ drawing.points ++ [ b ]
+                                                    in
+                                                    { path = fullPath
+                                                    , dist = freehandDistance fullPath
+                                                    }
+
+                                                _ ->
+                                                    { path = List.take (seg.toIndex - seg.fromIndex + 1) (List.drop seg.fromIndex originalPath)
+                                                    , dist = seg.distanceKm
+                                                    }
+
+                                        else
+                                            { path = List.take (seg.toIndex - seg.fromIndex + 1) (List.drop seg.fromIndex originalPath)
+                                            , dist = seg.distanceKm
+                                            }
+
+                                    Nothing ->
+                                        { path = List.take (seg.toIndex - seg.fromIndex + 1) (List.drop seg.fromIndex originalPath)
+                                        , dist = seg.distanceKm
+                                        }
+
+                    built =
+                        List.indexedMap buildSegment segments
+
+                    mergedPath =
+                        built
+                            |> List.indexedMap
+                                (\i piece ->
+                                    if i == 0 then
+                                        piece.path
+
+                                    else
+                                        List.drop 1 piece.path
+                                )
+                            |> List.concat
+
+                    totalDist =
+                        List.map .dist built |> List.sum
+
+                    roundedDist =
+                        toFloat (round (totalDist * 100)) / 100
+                in
+                { response
+                    | path = mergedPath
+                    , distanceKm = roundedDist
+                }
+
+
+getAt : Int -> List a -> Maybe a
+getAt idx list =
+    List.head (List.drop idx list)
+
+
+haversineKm : Coordinate -> Coordinate -> Float
+haversineKm a b =
+    let
+        r =
+            6371.0
+
+        dLat =
+            degrees (b.lat - a.lat)
+
+        dLon =
+            degrees (b.lon - a.lon)
+
+        lat1 =
+            degrees a.lat
+
+        lat2 =
+            degrees b.lat
+
+        sinDLat =
+            sin (dLat / 2)
+
+        sinDLon =
+            sin (dLon / 2)
+
+        h =
+            sinDLat * sinDLat + cos lat1 * cos lat2 * sinDLon * sinDLon
+    in
+    2 * r * asin (sqrt h)
+
+
+rebuildAndDisplayRoute : Model -> ( Model, Cmd Msg )
+rebuildAndDisplayRoute model =
+    case model.originalResponse of
+        Just origResponse ->
+            let
+                displayRoute =
+                    applyFreehandOverrides model.freehandSegments model.freehandDrawing model.waypoints origResponse
+            in
+            ( { model | lastResponse = Just displayRoute }
+            , Ports.updateRoute displayRoute.path
+            )
+
+        Nothing ->
+            ( model, Cmd.none )
+
+
+findNearestWaypoint : Coordinate -> List Coordinate -> Maybe ( Int, Float )
+findNearestWaypoint coord waypoints =
+    waypoints
+        |> List.indexedMap (\i wp -> ( i, haversineKm coord wp ))
+        |> List.sortBy Tuple.second
+        |> List.head
+
+
+freehandDistance : List Coordinate -> Float
+freehandDistance coords =
+    let
+        pairs =
+            List.map2 Tuple.pair coords (List.drop 1 coords)
+    in
+    List.foldl (\( a, b ) acc -> acc + haversineKm a b) 0 pairs
+
+
+pushWaypointHistory : Model -> Model
+pushWaypointHistory model =
+    { model
+        | waypointHistory = List.take 50 (model.waypoints :: model.waypointHistory)
+        , waypointFuture = []
+        , freehandSegments = Dict.empty
+        , freehandDrawing = Nothing
+    }
+
+
+findInsertionIndex : Coordinate -> List Coordinate -> Int
+findInsertionIndex point waypoints =
+    let
+        pairs =
+            List.map2 Tuple.pair
+                (List.indexedMap Tuple.pair waypoints)
+                (List.drop 1 waypoints)
+
+        distances =
+            List.map
+                (\( ( idx, a ), b ) ->
+                    ( idx, distToSegment point a b )
+                )
+                pairs
+    in
+    distances
+        |> List.sortBy Tuple.second
+        |> List.head
+        |> Maybe.map Tuple.first
+        |> Maybe.withDefault (List.length waypoints - 1)
+
+
+distToSegment : Coordinate -> Coordinate -> Coordinate -> Float
+distToSegment p a b =
+    let
+        dx =
+            b.lon - a.lon
+
+        dy =
+            b.lat - a.lat
+
+        lenSq =
+            dx * dx + dy * dy
+    in
+    if lenSq == 0 then
+        let
+            ex =
+                p.lon - a.lon
+
+            ey =
+                p.lat - a.lat
+        in
+        sqrt (ex * ex + ey * ey)
+
+    else
+        let
+            t =
+                clamp 0 1 (((p.lon - a.lon) * dx + (p.lat - a.lat) * dy) / lenSq)
+
+            projLon =
+                a.lon + t * dx
+
+            projLat =
+                a.lat + t * dy
+
+            ex =
+                p.lon - projLon
+
+            ey =
+                p.lat - projLat
+        in
+        sqrt (ex * ex + ey * ey)
 
 
 resetLoopCandidatesCmd : Model -> Cmd Msg
@@ -1029,68 +1547,56 @@ applySavedRoute model route originalWaypoints =
     }
 
 
-formToRequest : RouteForm -> Result String RouteRequest
-formToRequest form =
-    case ( parseCoordinate form.startLat form.startLon, parseCoordinate form.endLat form.endLon ) of
-        ( Just start, Just end ) ->
-            case ( String.toFloat form.wPop, String.toFloat form.wPaved ) of
-                ( Just wPop, Just wPaved ) ->
-                    Ok
-                        { start = start
-                        , end = end
-                        , wPop = wPop
-                        , wPaved = wPaved
-                        }
-
-                _ ->
-                    Err "Poids invalides"
-
-        _ ->
-            Err "Coordonnées invalides"
-
-
-loopFormToRequest : RouteForm -> LoopForm -> Result String LoopRouteRequest
-loopFormToRequest form loopForm =
-    case parseCoordinate form.startLat form.startLon of
+loopFormToRequest : Bool -> RouteForm -> LoopForm -> List Coordinate -> Result String LoopRouteRequest
+loopFormToRequest cheminNoir form loopForm waypoints =
+    case List.head waypoints of
         Just start ->
-            case String.toFloat form.wPop of
-                Just wPop ->
-                    case String.toFloat form.wPaved of
-                        Just wPaved ->
-                            case String.toFloat loopForm.distanceKm of
-                                Just distanceKm ->
-                                    case String.toFloat loopForm.toleranceKm of
-                                        Just toleranceKm ->
-                                            case String.toInt loopForm.candidateCount of
-                                                Just candidateCount ->
-                                                    Ok
-                                                        { start = start
-                                                        , targetDistanceKm = distanceKm
-                                                        , distanceToleranceKm = toleranceKm
-                                                        , candidateCount = max 1 candidateCount
-                                                        , wPop = wPop
-                                                        , wPaved = wPaved
-                                                        , maxTotalAscent = String.toFloat loopForm.maxAscentM
-                                                        , minTotalAscent = String.toFloat loopForm.minAscentM
-                                                        }
+            let
+                weightsResult =
+                    if cheminNoir then
+                        Ok ( 5.0, 8.0 )
 
-                                                Nothing ->
-                                                    Err "Nombre de candidats invalide"
+                    else
+                        case ( String.toFloat form.wPop, String.toFloat form.wPaved ) of
+                            ( Just wPop, Just wPaved ) ->
+                                Ok ( wPop, wPaved )
+
+                            _ ->
+                                Err "Poids invalides"
+            in
+            case weightsResult of
+                Ok ( wPop, wPaved ) ->
+                    case String.toFloat loopForm.distanceKm of
+                        Just distanceKm ->
+                            case String.toFloat loopForm.toleranceKm of
+                                Just toleranceKm ->
+                                    case String.toInt loopForm.candidateCount of
+                                        Just candidateCount ->
+                                            Ok
+                                                { start = start
+                                                , targetDistanceKm = distanceKm
+                                                , distanceToleranceKm = toleranceKm
+                                                , candidateCount = max 1 candidateCount
+                                                , wPop = wPop
+                                                , wPaved = wPaved
+                                                , maxTotalAscent = String.toFloat loopForm.maxAscentM
+                                                , minTotalAscent = String.toFloat loopForm.minAscentM
+                                                }
 
                                         Nothing ->
-                                            Err "Tolérance invalide"
+                                            Err "Nombre de candidats invalide"
 
                                 Nothing ->
-                                    Err "Distance invalide"
+                                    Err "Tolérance invalide"
 
                         Nothing ->
-                            Err "Poids pavé invalide"
+                            Err "Distance invalide"
 
-                Nothing ->
-                    Err "Poids population invalide"
+                Err err ->
+                    Err err
 
         Nothing ->
-            Err "Coordonnées de départ invalides"
+            Err "Placez un point de départ sur la carte"
 
 
 generateGpx : RouteResponse -> String
@@ -1141,8 +1647,16 @@ generateGpx route =
 
 multiPointRequest : Model -> MultiPointRouteRequest
 multiPointRequest model =
-    { waypoints = model.waypoints
-    , closeLoop = model.closeLoop
-    , wPop = String.toFloat model.form.wPop |> Maybe.withDefault 1.0
-    , wPaved = String.toFloat model.form.wPaved |> Maybe.withDefault 1.0
-    }
+    if model.cheminNoir then
+        { waypoints = model.waypoints
+        , closeLoop = model.closeLoop
+        , wPop = 5.0
+        , wPaved = 8.0
+        }
+
+    else
+        { waypoints = model.waypoints
+        , closeLoop = model.closeLoop
+        , wPop = String.toFloat model.form.wPop |> Maybe.withDefault 1.0
+        , wPaved = String.toFloat model.form.wPaved |> Maybe.withDefault 1.0
+        }

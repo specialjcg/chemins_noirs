@@ -6,16 +6,14 @@ Approche fonctionnelle pure : génération déclarative du HTML.
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Html.Events exposing (onCheck, onClick, onInput)
+import Html.Events exposing (onCheck, onClick, onInput, onMouseDown, preventDefaultOn)
+import Json.Decode as Decode
+import Dict
 import Types exposing (..)
 
 
 view : Model -> Html Msg
 view model =
-    let
-        disableEnd =
-            model.routeMode == Loop
-    in
     Html.form [ class "controls" ]
         [ fieldset []
             [ legend [] [ text "Type de tracé" ]
@@ -52,23 +50,99 @@ view model =
                     ]
                 ]
             ]
-        , fieldset []
-            [ legend [] [ text "Points" ]
-            , inputField "Latitude départ" model.form.startLat StartLatChanged False
-            , inputField "Longitude départ" model.form.startLon StartLonChanged False
-            , inputField "Latitude arrivée" model.form.endLat EndLatChanged disableEnd
-            , inputField "Longitude arrivée" model.form.endLon EndLonChanged disableEnd
-            , if disableEnd then
-                small [] [ text "Les coordonnées d'arrivée sont ignorées en mode boucle." ]
+        , div [ class "chemin-noir-toggle" ]
+            [ label [ class "toggle-label" ]
+                [ div [ class "toggle-switch" ]
+                    [ input
+                        [ type_ "checkbox"
+                        , checked model.cheminNoir
+                        , onCheck (\_ -> ToggleCheminNoir)
+                        , class "toggle-input"
+                        ]
+                        []
+                    , span [ class "toggle-slider" ] []
+                    ]
+                , div [ class "toggle-text" ]
+                    [ span [ class "toggle-title" ] [ text "Mode Chemin Noir" ]
+                    , span [ class "toggle-desc" ]
+                        [ text
+                            (if model.cheminNoir then
+                                "Actif — routes et zones habitées évitées"
 
-              else
-                text ""
+                             else
+                                "Inactif — poids personnalisables"
+                            )
+                        ]
+                    ]
+                ]
             ]
+
+        -- Geocoding: centrer la carte
         , fieldset []
-            [ legend [] [ text "Poids" ]
-            , inputField "Éviter population" model.form.wPop PopWeightChanged False
-            , inputField "Éviter bitume" model.form.wPaved PavedWeightChanged False
+            [ legend [] [ text "Centrer la carte" ]
+            , div [ class "address-search" ]
+                [ div [ class "address-input-row" ]
+                    [ input
+                        [ Html.Attributes.value model.mapSearch
+                        , onInput MapSearchChanged
+                        , placeholder "Rechercher un lieu..."
+                        , autocomplete False
+                        , spellcheck False
+                        , onEnter SearchMap
+                        ]
+                        []
+                    , button
+                        [ type_ "button"
+                        , class "btn-address-search"
+                        , onClick SearchMap
+                        ]
+                        [ text "Rechercher" ]
+                    ]
+                , if not (List.isEmpty model.mapSearchResults) then
+                    div [ class "address-chips-wrapper" ]
+                        [ small [ class "address-chips-hint" ] [ text "Choisissez une adresse :" ]
+                        , div [ class "address-chips" ]
+                            (List.map
+                                (\geo ->
+                                    let
+                                        parts =
+                                            String.split ", " geo.displayName
+
+                                        line1 =
+                                            List.head parts |> Maybe.withDefault ""
+
+                                        line2 =
+                                            parts
+                                                |> List.drop 1
+                                                |> List.take 2
+                                                |> String.join ", "
+                                    in
+                                    button
+                                        [ type_ "button"
+                                        , class "address-chip"
+                                        , onMouseDown (SelectMapSearchResult geo)
+                                        ]
+                                        [ span [ class "address-chip-line1" ] [ text line1 ]
+                                        , span [ class "address-chip-line2" ] [ text line2 ]
+                                        ]
+                                )
+                                (List.take 3 model.mapSearchResults)
+                            )
+                        ]
+
+                  else
+                    text ""
+                ]
             ]
+        , if not model.cheminNoir then
+            fieldset []
+                [ legend [] [ text "Poids" ]
+                , inputField "Éviter population" model.form.wPop PopWeightChanged False
+                , inputField "Éviter bitume" model.form.wPaved PavedWeightChanged False
+                ]
+
+          else
+            text ""
         , if model.routeMode == Loop then
             fieldset []
                 [ legend [] [ text "Options boucle" ]
@@ -82,82 +156,32 @@ view model =
 
           else
             text ""
+
         , if model.routeMode == MultiPoint then
-            fieldset []
-                [ legend [] [ text "Points du tracé" ]
-                , viewWaypoints model
-                , div [ class "input-field" ]
-                    [ label []
-                        [ input
-                            [ type_ "checkbox"
-                            , checked model.closeLoop
-                            , onCheck (\_ -> ToggleCloseLoop)
-                            ]
-                            []
-                        , span [] [ text " Boucler (retour au point de départ)" ]
-                        ]
+            div [ class "action-buttons" ]
+                [ button
+                    [ type_ "button"
+                    , class "btn-gpx-import"
+                    , onClick ImportGpxClicked
                     ]
-                , div [ class "action-buttons" ]
-                    [ button
-                        [ type_ "button"
-                        , class "btn-geoloc"
-                        , onClick RequestGeolocation
-                        ]
-                        [ text "Ma position" ]
-                    , button
-                        [ type_ "button"
-                        , class "btn-secondary btn-block"
-                        , disabled (List.isEmpty model.waypoints)
-                        , onClick ClearWaypoints
-                        ]
-                        [ text "Effacer tous les points" ]
-                    ]
-                , small [ class "waypoints-summary" ]
-                    [ text <|
-                        String.fromInt (List.length model.waypoints)
-                            ++ " point(s) • Distance: "
-                            ++ (case model.lastResponse of
-                                    Just r ->
-                                        String.fromFloat r.distanceKm ++ " km"
-
-                                    Nothing ->
-                                        "0.0 km"
-                               )
-                    ]
+                    [ text "Importer GPX" ]
                 ]
 
           else
             text ""
-        , if model.routeMode /= MultiPoint then
-            fieldset []
-                [ legend [] [ text "Sélection via la carte" ]
-                , div [ class "click-mode" ]
-                    [ label []
-                        [ input
-                            [ type_ "radio"
-                            , name "click-mode"
-                            , checked (model.clickMode == Start)
-                            , onClick (SetClickMode Start)
-                            ]
-                            []
-                        , span [] [ text "Départ" ]
-                        ]
-                    , label []
-                        [ input
-                            [ type_ "radio"
-                            , name "click-mode"
-                            , checked (model.clickMode == End)
-                            , onClick (SetClickMode End)
-                            ]
-                            []
-                        , span [] [ text "Arrivée" ]
-                        ]
-                    ]
-                , small [] [ text "Cliquez sur la carte pour remplir la position sélectionnée." ]
-                ]
+        , small [ class "waypoints-summary" ]
+            [ text <|
+                String.fromInt (List.length model.waypoints)
+                    ++ " point(s) • Distance: "
+                    ++ (case model.lastResponse of
+                            Just r ->
+                                String.fromFloat r.distanceKm ++ " km"
 
-          else
-            text ""
+                            Nothing ->
+                                "0.0 km"
+                       )
+            ]
+        , viewFreehandPanel model
         , fieldset []
             [ legend [] [ text "Vue de la carte" ]
             , button
@@ -297,38 +321,19 @@ inputField label value msg isDisabled =
         ]
 
 
-viewWaypoints : Model -> Html Msg
-viewWaypoints model =
-    div [ class "waypoints-list" ]
-        [ if List.isEmpty model.waypoints then
-            p [ class "empty-state" ]
-                [ text "Cliquez sur la carte pour ajouter des points" ]
+onEnter : Msg -> Attribute Msg
+onEnter msg =
+    preventDefaultOn "keydown"
+        (Decode.field "key" Decode.string
+            |> Decode.andThen
+                (\key ->
+                    if key == "Enter" then
+                        Decode.succeed ( msg, True )
 
-          else
-            div []
-                (List.indexedMap viewWaypoint model.waypoints)
-        ]
-
-
-viewWaypoint : Int -> Coordinate -> Html Msg
-viewWaypoint idx coord =
-    div [ class "waypoint-item" ]
-        [ span [ class "waypoint-coord" ]
-            [ text <|
-                String.fromInt (idx + 1)
-                    ++ ". ("
-                    ++ String.left 6 (String.fromFloat coord.lat)
-                    ++ ", "
-                    ++ String.left 6 (String.fromFloat coord.lon)
-                    ++ ")"
-            ]
-        , button
-            [ type_ "button"
-            , class "waypoint-remove"
-            , onClick (RemoveWaypoint idx)
-            ]
-            [ text "\u{2715}" ]
-        ]
+                    else
+                        Decode.fail "not Enter"
+                )
+        )
 
 
 viewSavedRoute : SavedRoute -> Html Msg
@@ -397,3 +402,103 @@ viewSavedRoute route =
                 [ text "\u{2715}" ]
             ]
         ]
+
+
+viewFreehandPanel : Model -> Html Msg
+viewFreehandPanel model =
+    case ( model.routeMode, model.lastResponse ) of
+        ( MultiPoint, Just _ ) ->
+            if List.length model.waypoints >= 2 then
+                div [ class "freehand-panel" ]
+                    [ -- Toggle switch
+                      label [ class "toggle-label" ]
+                        [ div [ class "toggle-switch" ]
+                            [ input
+                                [ type_ "checkbox"
+                                , checked model.freehandEnabled
+                                , onCheck (\_ -> ToggleFreehandMode)
+                                , class "toggle-input"
+                                ]
+                                []
+                            , span [ class "toggle-slider" ] []
+                            ]
+                        , div [ class "toggle-text" ]
+                            [ span [ class "toggle-title" ] [ text "Tracé libre" ]
+                            , span [ class "toggle-desc" ]
+                                [ text (freehandStatusText model) ]
+                            ]
+                        ]
+
+                    -- Cancel button (visible during active drawing)
+                    , case model.freehandDrawing of
+                        Just _ ->
+                            button
+                                [ type_ "button"
+                                , class "btn-cancel-freehand"
+                                , onClick CancelFreehandDrawing
+                                ]
+                                [ text "Annuler le dessin" ]
+
+                        Nothing ->
+                            text ""
+
+                    -- List of stored freehand segments
+                    , if not (Dict.isEmpty model.freehandSegments) then
+                        div [ class "freehand-segments-list" ]
+                            (Dict.toList model.freehandSegments
+                                |> List.map
+                                    (\( idx, pts ) ->
+                                        div [ class "freehand-segment-item" ]
+                                            [ span []
+                                                [ text
+                                                    ("Segment "
+                                                        ++ String.fromInt (idx + 1)
+                                                        ++ " → "
+                                                        ++ String.fromInt (idx + 2)
+                                                        ++ " ("
+                                                        ++ String.fromInt (List.length pts)
+                                                        ++ " pts)"
+                                                    )
+                                                ]
+                                            , button
+                                                [ type_ "button"
+                                                , class "btn-clear-segment"
+                                                , onClick (ClearFreehandSegment idx)
+                                                , title "Supprimer ce segment libre"
+                                                ]
+                                                [ text "\u{2715}" ]
+                                            ]
+                                    )
+                            )
+
+                      else
+                        text ""
+                    ]
+
+            else
+                text ""
+
+        _ ->
+            text ""
+
+
+freehandStatusText : Model -> String
+freehandStatusText model =
+    if not model.freehandEnabled then
+        "Dessinez des segments à main levée sur la carte"
+
+    else
+        case model.freehandDrawing of
+            Nothing ->
+                "Cliquez près d'un waypoint pour commencer"
+
+            Just state ->
+                "Segment "
+                    ++ String.fromInt (state.fromIdx + 1)
+                    ++ " → "
+                    ++ String.fromInt (state.fromIdx + 2)
+                    ++ " ("
+                    ++ String.fromInt (List.length state.points)
+                    ++ " pts) — cliquez près du waypoint suivant"
+
+

@@ -2,6 +2,7 @@ module Types exposing (..)
 
 import Http
 import Json.Decode
+import Dict exposing (Dict)
 
 
 -- MODEL
@@ -17,7 +18,6 @@ type alias Model =
     , loopMeta : Maybe LoopMeta
     , selectedLoopIdx : Maybe Int
     , error : Maybe String
-    , clickMode : ClickMode
     , routeMode : RouteMode
     , mapViewMode : MapViewMode
     , viewMode : ViewMode
@@ -28,6 +28,16 @@ type alias Model =
     , showSavedRoutes : Bool
     , showElevationChart : Bool
     , elevationHoverIndex : Maybe Int
+    , waypointHistory : List (List Coordinate)
+    , waypointFuture : List (List Coordinate)
+    , mapRouteHoverIndex : Maybe Int
+    , cheminNoir : Bool
+    , mapSearch : String
+    , mapSearchResults : List GeoResult
+    , freehandSegments : Dict Int (List Coordinate)
+    , originalResponse : Maybe RouteResponse
+    , freehandDrawing : Maybe FreehandDrawingState
+    , freehandEnabled : Bool
     }
 
 
@@ -53,6 +63,12 @@ type alias LoopForm =
 type alias LoopMeta =
     { targetDistanceKm : Float
     , distanceToleranceKm : Float
+    }
+
+
+type alias FreehandDrawingState =
+    { fromIdx : Int
+    , points : List Coordinate
     }
 
 
@@ -89,7 +105,6 @@ initialModel =
     , loopMeta = Nothing
     , selectedLoopIdx = Nothing
     , error = Nothing
-    , clickMode = Start
     , routeMode = PointToPoint
     , mapViewMode = Topo
     , viewMode = Map2D
@@ -100,6 +115,16 @@ initialModel =
     , showSavedRoutes = False
     , showElevationChart = False
     , elevationHoverIndex = Nothing
+    , waypointHistory = []
+    , waypointFuture = []
+    , mapRouteHoverIndex = Nothing
+    , cheminNoir = True
+    , mapSearch = ""
+    , mapSearchResults = []
+    , freehandSegments = Dict.empty
+    , originalResponse = Nothing
+    , freehandDrawing = Nothing
+    , freehandEnabled = False
     }
 
 
@@ -108,11 +133,7 @@ initialModel =
 
 
 type Msg
-    = StartLatChanged String
-    | StartLonChanged String
-    | EndLatChanged String
-    | EndLonChanged String
-    | PopWeightChanged String
+    = PopWeightChanged String
     | PavedWeightChanged String
     | LoopDistanceChanged String
     | LoopToleranceChanged String
@@ -120,7 +141,6 @@ type Msg
     | LoopMaxAscentChanged String
     | LoopMinAscentChanged String
     | Submit
-    | SetClickMode ClickMode
     | ToggleRouteMode RouteMode
     | ToggleMapView
     | Toggle3DView
@@ -147,6 +167,7 @@ type Msg
     | LoopRouteFetched (Result Http.Error LoopRouteResponse)
     | SelectLoopCandidate Int
     | AddWaypoint Coordinate
+    | InsertWaypoint Int Coordinate
     | RemoveWaypoint Int
     | MoveWaypoint Int Float Float
     | ClearWaypoints
@@ -158,16 +179,26 @@ type Msg
     | RequestGeolocation
     | ToggleElevationChart
     | ElevationChartHover Int
+    | ElevationChartLeave
+    | UndoWaypoints
+    | RedoWaypoints
+    | ImportGpxClicked
+    | GpxWaypointsReceived (List Coordinate)
+    | MapRouteHoverIndex Int
+    | MapRouteLeave
+    | ToggleCheminNoir
+    | MapSearchChanged String
+    | SearchMap
+    | MapSearchResults (Result Http.Error (List GeoResult))
+    | SelectMapSearchResult GeoResult
+    | ToggleFreehandMode
+    | CancelFreehandDrawing
+    | ClearFreehandSegment Int
     | NoOp
 
 
 
 -- ENUMS
-
-
-type ClickMode
-    = Start
-    | End
 
 
 type RouteMode
@@ -200,6 +231,13 @@ type AnimationState
 type alias Coordinate =
     { lat : Float
     , lon : Float
+    }
+
+
+type alias GeoResult =
+    { lat : Float
+    , lon : Float
+    , displayName : String
     }
 
 
@@ -241,6 +279,17 @@ type alias RouteResponse =
     , estimatedTimeMinutes : Maybe Int
     , difficulty : Maybe String
     , surfaceBreakdown : Maybe (List ( String, Float ))
+    , segments : Maybe (List SegmentStats)
+    }
+
+
+type alias SegmentStats =
+    { fromIndex : Int
+    , toIndex : Int
+    , distanceKm : Float
+    , ascentM : Float
+    , descentM : Float
+    , avgSlopePct : Float
     }
 
 

@@ -335,29 +335,6 @@ input[type="checkbox"]:checked::after {
   color: var(--accent-brass-light);
 }
 
-/* ─── Click Mode ─── */
-.click-mode {
-  display: flex;
-  gap: 1rem;
-  margin-bottom: 0.5rem;
-}
-
-.click-mode label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-weight: 500;
-  font-size: 0.88rem;
-  cursor: pointer;
-  padding: 0.4rem 0.8rem;
-  border-radius: var(--radius-sm);
-  transition: background var(--transition-fast);
-}
-
-.click-mode label:hover {
-  background: rgba(201, 168, 76, 0.06);
-}
-
 /* ─── Buttons ─── */
 button {
   font-family: var(--font-body);
@@ -1146,6 +1123,44 @@ small {
 .surface-dot.surface-trail { background: #66bb6a; }
 .surface-dot.surface-dirt  { background: #a1887f; }
 
+/* ─── Segment Stats ─── */
+.segment-stats {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border-faint);
+  padding-top: 0.75rem;
+}
+
+.segment-card {
+  background: var(--bg-input);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 0.35rem;
+  transition: border-color var(--transition-fast);
+}
+
+.segment-card:hover {
+  border-color: var(--border-medium);
+}
+
+.segment-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent-brass);
+}
+
+.segment-details {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
 /* ─── Elevation Chart ─── */
 .elevation-chart-container {
   margin-top: 1rem;
@@ -1211,21 +1226,223 @@ small {
   color: white;
 }
 
-/* ─── KM Markers ─── */
+/* ─── GPX Import Button ─── */
+.btn-gpx-import {
+  background: var(--info-blue-dim);
+  color: var(--info-blue);
+  border: 1px solid var(--info-blue);
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+.btn-gpx-import:hover {
+  background: var(--info-blue);
+  color: white;
+}
+
+/* ─── KM Markers (distance labels, NOT interactive) ─── */
 .km-marker {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: rgba(12, 16, 13, 0.75);
-  border: 1.5px solid var(--accent-brass);
-  color: var(--accent-brass-light);
-  font-size: 10px;
-  font-weight: 700;
+  width: auto;
+  height: auto;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  border: none;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
   font-family: var(--font-mono);
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  opacity: 0.7;
+}
+
+/* ─── Address Search ─── */
+.address-search {
+  margin-bottom: 0.85rem;
+}
+
+.address-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+}
+
+.address-input-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.address-input-row input {
+  flex: 1;
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+}
+
+.btn-address-search {
+  background: var(--accent-forest);
+  color: var(--text-primary);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  min-height: 0;
+}
+
+.btn-address-search:hover {
+  background: var(--accent-forest-light);
+}
+
+/* ─── Address Chips ─── */
+.address-chips-wrapper {
+  margin-top: 0.5rem;
+  animation: slideDown 0.2s var(--ease-out);
+}
+
+.address-chips-hint {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--text-brass);
+  font-weight: 500;
+}
+
+.address-chips {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.address-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-align: left;
+}
+
+.address-chip:hover {
+  background: var(--accent-brass-dim);
+  border-color: var(--accent-brass);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(201, 168, 76, 0.15);
+}
+
+.address-chip-line1 {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.address-chip-line2 {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* ─── Chemin Noir Toggle ─── */
+.chemin-noir-toggle {
+  padding: 0.75rem 1rem;
+  background: rgba(24, 32, 25, 0.3);
+  border-left: 2px solid var(--accent-forest);
+  transition: border-color var(--transition-normal);
+}
+
+.chemin-noir-toggle:hover {
+  border-left-color: var(--accent-forest-light);
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 24px;
+}
+
+.toggle-input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border-medium);
+  border-radius: 12px;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: all var(--transition-fast);
+}
+
+.toggle-input:checked + .toggle-slider {
+  background: var(--accent-forest);
+  border-color: var(--accent-forest-light);
+}
+
+.toggle-input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+  background: var(--text-primary);
+}
+
+.toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.toggle-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.toggle-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
 /* ─── Action Buttons Row ─── */
@@ -1251,6 +1468,74 @@ small {
 .btn-geoloc:hover {
   background: var(--accent-brass);
   color: var(--text-inverse);
+}
+
+/* ─── Freehand Panel ─── */
+.freehand-panel {
+  padding: 0.75rem 1rem;
+  background: rgba(24, 32, 25, 0.3);
+  border-left: 2px solid var(--accent-forest);
+  transition: border-color var(--transition-normal);
+}
+
+.freehand-panel:hover {
+  border-left-color: var(--accent-forest-light);
+}
+
+.btn-cancel-freehand {
+  background: var(--accent-terracotta-dim);
+  color: var(--accent-terracotta);
+  border: 1px solid rgba(199, 85, 62, 0.3);
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.82rem;
+}
+
+.btn-cancel-freehand:hover {
+  background: var(--accent-terracotta);
+  color: #fff;
+}
+
+.freehand-segments-list {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.freehand-segment-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0.7rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  transition: border-color var(--transition-fast);
+}
+
+.freehand-segment-item:hover {
+  border-color: var(--border-medium);
+}
+
+.btn-clear-segment {
+  background: transparent;
+  border: 1px solid rgba(199, 85, 62, 0.2);
+  color: var(--accent-terracotta);
+  padding: 0.15rem 0.4rem;
+  font-size: 0.72rem;
+  border-radius: var(--radius-sm);
+  min-height: 0;
+  margin: 0;
+}
+
+.btn-clear-segment:hover {
+  background: var(--accent-terracotta-dim);
+  border-color: var(--accent-terracotta);
 }
 
 /* ─── Mobile Responsive (< 768px) ─── */
