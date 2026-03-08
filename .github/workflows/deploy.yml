@@ -65,63 +65,61 @@ jobs:
           npm ci
           npm run build
 
-      # --- Deploy to VPS ---
-      - name: Setup SSH key
+      # --- Deploy to VPS (single SSH connection with multiplexing) ---
+      - name: Setup SSH with multiplexing
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan -p 9999 VPS-779132.ssh.vps1euro.fr >> ~/.ssh/known_hosts 2>/dev/null || echo "StrictHostKeyChecking no" >> ~/.ssh/config
+          ssh-keyscan -p 9999 VPS-779132.ssh.vps1euro.fr >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat >> ~/.ssh/config << 'SSHCFG'
+          Host vps
+            HostName VPS-779132.ssh.vps1euro.fr
+            Port 9999
+            User root
+            IdentityFile ~/.ssh/id_deploy
+            StrictHostKeyChecking no
+            ControlMaster auto
+            ControlPath ~/.ssh/ctrl-%r@%h:%p
+            ControlPersist 300
+          SSHCFG
 
-      - name: Stop service on VPS
+      - name: Open SSH tunnel and deploy
         run: |
-          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr \
-            "systemctl stop cheminsnoirs || true"
+          # Open persistent connection (all subsequent ssh/scp reuse it = 1 auth)
+          ssh -fN vps
 
-      - name: Deploy binary
-        run: |
-          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr \
-            "mkdir -p /opt/cheminsnoirs/{data/cache,frontend}"
-          scp -P 9999 -i ~/.ssh/id_deploy \
-            target/release/backend_partial \
-            root@VPS-779132.ssh.vps1euro.fr:/opt/cheminsnoirs/backend_partial
+          # Disable fail2ban to prevent SSH bans during deploy
+          ssh vps "systemctl stop fail2ban; systemctl disable fail2ban" || true
 
-      - name: Deploy frontend
-        run: |
-          scp -P 9999 -i ~/.ssh/id_deploy -r \
-            frontend-elm/dist/* \
-            root@VPS-779132.ssh.vps1euro.fr:/opt/cheminsnoirs/frontend/
+          # Stop service
+          ssh vps "systemctl stop cheminsnoirs || true"
 
-      - name: Update nginx config
-        run: |
-          scp -P 9999 -i ~/.ssh/id_deploy \
-            deploy.sh \
-            root@VPS-779132.ssh.vps1euro.fr:/tmp/deploy.sh
-          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'NGINX_EOF'
-          # Extract and update nginx CSP from deploy.sh template
-          # Update CSP headers in nginx config
+          # Create dirs
+          ssh vps "mkdir -p /opt/cheminsnoirs/{data/cache,frontend}"
+
+          # Deploy binary and frontend
+          scp target/release/backend_partial vps:/opt/cheminsnoirs/backend_partial
+          scp -r frontend-elm/dist/* vps:/opt/cheminsnoirs/frontend/
+
+          # Update nginx CSP + permissions + start service + diagnostics (single command)
+          ssh vps << 'DEPLOY'
+          set -e
+
+          # --- Update nginx CSP ---
           sed -i "s|style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;|style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com;|" /etc/nginx/sites-enabled/cheminsnoirs
           sed -i "s|connect-src 'self' https://\*\.tile\.openstreetmap\.org|connect-src 'self' https://tile.openstreetmap.org https://*.tile.openstreetmap.org|" /etc/nginx/sites-enabled/cheminsnoirs
           sed -i "s|img-src 'self' data: blob: https://\*\.tile\.openstreetmap\.org|img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org|" /etc/nginx/sites-enabled/cheminsnoirs
           nginx -t && systemctl reload nginx
-          rm /tmp/deploy.sh
-          NGINX_EOF
 
-      - name: Set permissions and start service
-        run: |
-          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'EOF'
-          set -e
-
-          # Créer l'utilisateur si nécessaire
+          # --- Permissions ---
           id cheminsnoirs &>/dev/null || useradd -r -s /usr/sbin/nologin -d /opt/cheminsnoirs -M cheminsnoirs
-
-          # Permissions
           chmod 750 /opt/cheminsnoirs/backend_partial
           chown -R cheminsnoirs:cheminsnoirs /opt/cheminsnoirs
           chmod 755 /opt/cheminsnoirs /opt/cheminsnoirs/frontend
           find /opt/cheminsnoirs/frontend -type f -exec chmod 644 {} \;
 
-          # Démarrer seulement si PBF présent
+          # --- Start service ---
           if [ -f /opt/cheminsnoirs/data/rhone-alpes-251111.osm.pbf ]; then
             systemctl start cheminsnoirs
             sleep 3
@@ -129,29 +127,18 @@ jobs:
           else
             echo "PBF absent — service non démarré (deploy frontend/binary OK)"
           fi
-          EOF
 
-      - name: VPS diagnostics
-        run: |
-          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'DIAG'
-          echo "=== MEMORY ==="
-          free -h
-          echo "=== DISK ==="
-          df -h /opt/cheminsnoirs
-          echo "=== PBF FILE ==="
-          ls -lh /opt/cheminsnoirs/data/*.pbf 2>/dev/null || echo "NO PBF"
-          echo "=== CACHE ==="
-          ls -lh /opt/cheminsnoirs/data/cache/ 2>/dev/null || echo "NO CACHE"
-          echo "=== SERVICE STATUS ==="
-          systemctl status cheminsnoirs --no-pager | head -15
-          echo "=== RECENT LOGS ==="
-          journalctl -u cheminsnoirs --no-pager -n 30
-          echo "=== NGINX CSP ==="
-          grep -o 'connect-src[^;]*' /etc/nginx/sites-enabled/cheminsnoirs
-          echo "=== SYSTEMD LIMITS ==="
-          grep -i memory /etc/systemd/system/cheminsnoirs.service 2>/dev/null || echo "no memory limits in service"
-          DIAG
+          # --- Diagnostics ---
+          echo "=== MEMORY ===" && free -h
+          echo "=== DISK ===" && df -h /opt/cheminsnoirs
+          echo "=== PBF ===" && ls -lh /opt/cheminsnoirs/data/*.pbf 2>/dev/null || echo "NO PBF"
+          echo "=== CACHE ===" && ls -lh /opt/cheminsnoirs/data/cache/ 2>/dev/null || echo "NO CACHE"
+          echo "=== RECENT LOGS ===" && journalctl -u cheminsnoirs --no-pager -n 20
+          echo "=== NGINX CSP ===" && grep -o 'connect-src[^;]*' /etc/nginx/sites-enabled/cheminsnoirs
+          DEPLOY
 
-      - name: Cleanup SSH key
+      - name: Cleanup SSH
         if: always()
-        run: rm -f ~/.ssh/id_deploy
+        run: |
+          ssh -O exit vps 2>/dev/null || true
+          rm -f ~/.ssh/id_deploy
