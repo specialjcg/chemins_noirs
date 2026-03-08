@@ -92,6 +92,23 @@ jobs:
           # Disable fail2ban to prevent SSH bans during deploy
           ssh vps "systemctl stop fail2ban; systemctl disable fail2ban" || true
 
+          # Ensure sufficient swap (VPS has only 1GB RAM, PBF parsing needs more)
+          ssh vps << 'SWAP'
+          if [ ! -f /swapfile ]; then
+            echo "Creating 2GB swap file..."
+            fallocate -l 2G /swapfile
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+            echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            echo "Swap created"
+          else
+            swapon /swapfile 2>/dev/null || true
+            echo "Swap already exists"
+          fi
+          free -h
+          SWAP
+
           # Stop service
           ssh vps "systemctl stop cheminsnoirs || true"
 
