@@ -194,6 +194,14 @@ impl BoundingBox {
             && coord.lon <= self.max_lon
     }
 
+    /// Check if this bbox fully contains another bbox
+    pub fn contains_bbox(&self, other: &BoundingBox) -> bool {
+        self.min_lat <= other.min_lat
+            && self.max_lat >= other.max_lat
+            && self.min_lon <= other.min_lon
+            && self.max_lon >= other.max_lon
+    }
+
     /// Validate that the bounding box is not excessively large (DoS protection)
     pub fn validate(&self) -> Result<(), &'static str> {
         let lat_diff = self.max_lat - self.min_lat;
@@ -1058,6 +1066,9 @@ impl GraphBuilder {
             total_waypoints
         );
 
+        // Merge nodes that are very close together (< 10m) to fix OSM connectivity gaps
+        let edges = merge_close_nodes(edges, &node_state);
+
         // Filter out unused nodes (nodes not referenced by any edge)
         // This keeps only intersection nodes that have edges connecting them
         let used_node_ids: std::collections::HashSet<u64> = edges
@@ -1540,6 +1551,149 @@ fn build_edge_with_waypoints(
         length_m,
         waypoints,
     })
+}
+
+/// Distance threshold for merging close nodes (meters).
+const NODE_MERGE_THRESHOLD_M: f64 = 10.0;
+
+/// Simple Union-Find (disjoint set) for node merging.
+struct UnionFind {
+    parent: HashMap<u64, u64>,
+}
+
+impl UnionFind {
+    fn new() -> Self {
+        Self {
+            parent: HashMap::new(),
+        }
+    }
+
+    fn find(&mut self, x: u64) -> u64 {
+        let p = *self.parent.get(&x).unwrap_or(&x);
+        if p == x {
+            return x;
+        }
+        let root = self.find(p);
+        self.parent.insert(x, root);
+        root
+    }
+
+    fn union(&mut self, a: u64, b: u64) {
+        let ra = self.find(a);
+        let rb = self.find(b);
+        if ra != rb {
+            self.parent.insert(rb, ra);
+        }
+    }
+}
+
+/// Merge nodes that are within NODE_MERGE_THRESHOLD_M of each other.
+///
+/// Uses a spatial grid (~11m cells) + Union-Find to cluster nearby nodes,
+/// then remaps edges to representative nodes, removes self-loops and
+/// deduplicates parallel edges (keeping the shortest).
+fn merge_close_nodes(edges: Vec<EdgeRecord>, node_state: &NodeCollectionState) -> Vec<EdgeRecord> {
+    // Build grid index: cell -> list of (graph_id, lat, lon)
+    let mut grid: HashMap<(i64, i64), Vec<(u64, f64, f64)>> = HashMap::new();
+    for node in &node_state.nodes {
+        let cell = (
+            (node.lat * 10_000.0).round() as i64,
+            (node.lon * 10_000.0).round() as i64,
+        );
+        grid.entry(cell).or_default().push((node.id, node.lat, node.lon));
+    }
+
+    // Union-Find: for each node, check its cell + 8 neighbors
+    let mut uf = UnionFind::new();
+    let threshold_km = NODE_MERGE_THRESHOLD_M / 1000.0;
+
+    for (&(cy, cx), nodes) in &grid {
+        for dy in -1..=1_i64 {
+            for dx in -1..=1_i64 {
+                let neighbor_cell = (cy + dy, cx + dx);
+                if let Some(neighbors) = grid.get(&neighbor_cell) {
+                    for &(id_a, lat_a, lon_a) in nodes {
+                        for &(id_b, lat_b, lon_b) in neighbors {
+                            if id_a >= id_b {
+                                continue;
+                            }
+                            let dist = haversine_km(
+                                Coordinate { lat: lat_a, lon: lon_a },
+                                Coordinate { lat: lat_b, lon: lon_b },
+                            );
+                            if dist < threshold_km {
+                                uf.union(id_a, id_b);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Build merge map: old_id -> representative_id
+    let all_ids: Vec<u64> = node_state.nodes.iter().map(|n| n.id).collect();
+    let mut merge_map: HashMap<u64, u64> = HashMap::with_capacity(all_ids.len());
+    let mut merged_count = 0u64;
+    for id in &all_ids {
+        let root = uf.find(*id);
+        merge_map.insert(*id, root);
+        if root != *id {
+            merged_count += 1;
+        }
+    }
+
+    if merged_count > 0 {
+        tracing::info!(
+            "Node merging: {} nodes merged into nearby representatives (threshold: {}m)",
+            merged_count,
+            NODE_MERGE_THRESHOLD_M
+        );
+    }
+
+    // Remap edges, remove self-loops, deduplicate
+    let original_edge_count = edges.len();
+    let mut seen: HashMap<(u64, u64), usize> = HashMap::new();
+    let mut result: Vec<EdgeRecord> = Vec::with_capacity(original_edge_count);
+
+    for mut edge in edges {
+        edge.from = *merge_map.get(&edge.from).unwrap_or(&edge.from);
+        edge.to = *merge_map.get(&edge.to).unwrap_or(&edge.to);
+
+        // Remove self-loops
+        if edge.from == edge.to {
+            continue;
+        }
+
+        // Canonical key (smaller id first) for deduplication
+        let key = if edge.from <= edge.to {
+            (edge.from, edge.to)
+        } else {
+            (edge.to, edge.from)
+        };
+
+        if let Some(&idx) = seen.get(&key) {
+            // Keep the shorter edge
+            if edge.length_m < result[idx].length_m {
+                result[idx] = edge;
+            }
+        } else {
+            seen.insert(key, result.len());
+            result.push(edge);
+        }
+    }
+
+    let removed = original_edge_count as i64 - result.len() as i64;
+    if removed > 0 || merged_count > 0 {
+        tracing::info!(
+            "Node merging: edges {} -> {} ({} self-loops/duplicates removed)",
+            original_edge_count,
+            result.len(),
+            removed
+        );
+    }
+
+    result
 }
 
 #[cfg(test)]

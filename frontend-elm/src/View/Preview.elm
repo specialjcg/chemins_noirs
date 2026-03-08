@@ -5,7 +5,8 @@ module View.Preview exposing (view)
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Html.Events exposing (onClick)
+import Html.Events exposing (onClick, on)
+import Json.Decode as Decode
 import Types exposing (..)
 
 
@@ -17,6 +18,7 @@ view model =
                 [ viewLoopCandidates model
                 , viewStats route
                 , viewActionButtons
+                , viewSegmentStats route.segments
                 , viewMetadata route.metadata
                 , viewElevationProfile route.elevationProfile
                 , viewElevationChart model route
@@ -163,6 +165,37 @@ surfaceLegendItem ( name, dist ) =
         ]
 
 
+viewSegmentStats : Maybe (List SegmentStats) -> Html Msg
+viewSegmentStats maybeSegments =
+    case maybeSegments of
+        Just segments ->
+            if List.length segments < 2 then
+                text ""
+
+            else
+                div [ class "segment-stats" ]
+                    [ h3 [] [ text "Stats par segment" ]
+                    , div [] (List.indexedMap viewSegment segments)
+                    ]
+
+        Nothing ->
+            text ""
+
+
+viewSegment : Int -> SegmentStats -> Html Msg
+viewSegment idx seg =
+    div [ class "segment-card" ]
+        [ span [ class "segment-label" ]
+            [ text ("Segment " ++ String.fromInt (idx + 1)) ]
+        , div [ class "segment-details" ]
+            [ span [] [ text (formatDistance seg.distanceKm ++ " km") ]
+            , span [] [ text ("D+ " ++ String.fromFloat seg.ascentM ++ " m") ]
+            , span [] [ text ("D- " ++ String.fromFloat seg.descentM ++ " m") ]
+            , span [] [ text (String.fromFloat seg.avgSlopePct ++ "% pente") ]
+            ]
+        ]
+
+
 viewMetadata : Maybe RouteMetadata -> Html Msg
 viewMetadata maybeMeta =
     case maybeMeta of
@@ -270,7 +303,7 @@ viewElevationChart model route =
                         ]
                     , if model.showElevationChart then
                         div [ class "elevation-chart-body" ]
-                            [ elevationSvg elevations profile ]
+                            [ elevationSvg model elevations profile ]
 
                       else
                         text ""
@@ -280,8 +313,8 @@ viewElevationChart model route =
             text ""
 
 
-elevationSvg : List Float -> ElevationProfile -> Html Msg
-elevationSvg elevations profile =
+elevationSvg : Model -> List Float -> ElevationProfile -> Html Msg
+elevationSvg model elevations profile =
     let
         width =
             600
@@ -334,24 +367,108 @@ elevationSvg elevations profile =
                 ++ ","
                 ++ String.fromInt (height - padding)
 
-        -- Y-axis labels
-        midE =
-            (minE + maxE) / 2
+        -- Mouse move decoder: offsetX / clientWidth → index
+        mouseMoveDecoder =
+            Decode.map2
+                (\offsetX clientWidth ->
+                    let
+                        ratio =
+                            (offsetX - toFloat padding) / (clientWidth - 2 * toFloat padding)
+
+                        idx =
+                            Basics.max 0 (Basics.min (count - 1) (round (ratio * toFloat (count - 1))))
+                    in
+                    ElevationChartHover idx
+                )
+                (Decode.field "offsetX" Decode.float)
+                (Decode.at [ "currentTarget", "clientWidth" ] Decode.float)
+
+        -- Hover indicator: green circle at hovered elevation point
+        chartHoverIndicator =
+            case model.elevationHoverIndex of
+                Just idx ->
+                    if idx >= 0 && idx < count then
+                        case List.drop idx elevations |> List.head of
+                            Just e ->
+                                let
+                                    cx =
+                                        toFloat padding + toFloat idx * xStep
+
+                                    cy =
+                                        toFloat padding + yScale e
+                                in
+                                [ Html.node "circle"
+                                    [ attribute "cx" (String.fromFloat cx)
+                                    , attribute "cy" (String.fromFloat cy)
+                                    , attribute "r" "4"
+                                    , attribute "fill" "#4dab7b"
+                                    , attribute "stroke" "white"
+                                    , attribute "stroke-width" "1.5"
+                                    ]
+                                    []
+                                , Html.node "text"
+                                    [ attribute "x" (String.fromFloat (cx + 6))
+                                    , attribute "y" (String.fromFloat (cy - 6))
+                                    , attribute "fill" "#e4ddd0"
+                                    , attribute "font-size" "10"
+                                    , attribute "font-family" "var(--font-mono)"
+                                    ]
+                                    [ text (String.fromInt (round e) ++ "m") ]
+                                ]
+
+                            Nothing ->
+                                []
+
+                    else
+                        []
+
+                Nothing ->
+                    []
+
+        -- Map route hover: gold dashed vertical line
+        mapHoverCursor =
+            case model.mapRouteHoverIndex of
+                Just idx ->
+                    if idx >= 0 && idx < count then
+                        let
+                            cx =
+                                toFloat padding + toFloat idx * xStep
+                        in
+                        [ Html.node "line"
+                            [ attribute "x1" (String.fromFloat cx)
+                            , attribute "y1" (String.fromInt padding)
+                            , attribute "x2" (String.fromFloat cx)
+                            , attribute "y2" (String.fromInt (height - padding))
+                            , attribute "stroke" "#c9a84c"
+                            , attribute "stroke-width" "1.5"
+                            , attribute "stroke-dasharray" "4 3"
+                            , attribute "opacity" "0.8"
+                            ]
+                            []
+                        ]
+
+                    else
+                        []
+
+                Nothing ->
+                    []
     in
     Html.node "svg"
         [ attribute "viewBox" ("0 0 " ++ String.fromInt width ++ " " ++ String.fromInt height)
         , attribute "preserveAspectRatio" "xMidYMid meet"
+        , on "mousemove" mouseMoveDecoder
+        , on "mouseleave" (Decode.succeed ElevationChartLeave)
         ]
-        [ -- Area fill
-          Html.node "polygon"
+        ([ -- Area fill
+           Html.node "polygon"
             [ attribute "points" areaPoints
             , attribute "fill" "rgba(77, 171, 123, 0.15)"
             , attribute "stroke" "none"
             ]
             []
 
-        -- Line
-        , Html.node "polyline"
+         -- Line
+         , Html.node "polyline"
             [ attribute "points" polyline
             , attribute "fill" "none"
             , attribute "stroke" "#4dab7b"
@@ -359,8 +476,8 @@ elevationSvg elevations profile =
             ]
             []
 
-        -- Min elevation label
-        , Html.node "text"
+         -- Min elevation label
+         , Html.node "text"
             [ attribute "x" "2"
             , attribute "y" (String.fromFloat (toFloat (height - padding) - 2))
             , attribute "fill" "#9b9484"
@@ -368,15 +485,18 @@ elevationSvg elevations profile =
             ]
             [ text (String.fromInt (round minE) ++ "m") ]
 
-        -- Max elevation label
-        , Html.node "text"
+         -- Max elevation label
+         , Html.node "text"
             [ attribute "x" "2"
             , attribute "y" (String.fromFloat (toFloat padding + 10))
             , attribute "fill" "#9b9484"
             , attribute "font-size" "10"
             ]
             [ text (String.fromInt (round maxE) ++ "m") ]
-        ]
+         ]
+            ++ mapHoverCursor
+            ++ chartHoverIndicator
+        )
 
 
 viewPath : RouteResponse -> Html Msg

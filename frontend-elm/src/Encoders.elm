@@ -112,6 +112,19 @@ encodeRouteResponse response =
         , ( "estimated_time_minutes", encodeMaybe Encode.int response.estimatedTimeMinutes )
         , ( "difficulty", encodeMaybe Encode.string response.difficulty )
         , ( "surface_breakdown", encodeMaybe encodeSurfaceBreakdown response.surfaceBreakdown )
+        , ( "segments", encodeMaybe (Encode.list encodeSegmentStats) response.segments )
+        ]
+
+
+encodeSegmentStats : SegmentStats -> Encode.Value
+encodeSegmentStats seg =
+    Encode.object
+        [ ( "from_index", Encode.int seg.fromIndex )
+        , ( "to_index", Encode.int seg.toIndex )
+        , ( "distance_km", Encode.float seg.distanceKm )
+        , ( "ascent_m", Encode.float seg.ascentM )
+        , ( "descent_m", Encode.float seg.descentM )
+        , ( "avg_slope_pct", Encode.float seg.avgSlopePct )
         ]
 
 

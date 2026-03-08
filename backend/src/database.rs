@@ -288,6 +288,7 @@ mod tests {
             estimated_time_minutes: None,
             difficulty: None,
             surface_breakdown: None,
+            segments: None,
         };
 
         SaveRouteRequest {
@@ -458,6 +459,7 @@ mod tests {
             estimated_time_minutes: None,
             difficulty: None,
             surface_breakdown: None,
+            segments: None,
         };
 
         let request = SaveRouteRequest {

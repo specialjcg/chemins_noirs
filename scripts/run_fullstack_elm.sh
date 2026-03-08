@@ -6,7 +6,7 @@ TARGET_DIR="$ROOT_DIR/target"
 FRONTEND_DIR="$ROOT_DIR/frontend-elm"
 BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_PORT="3000"  # Vite dev server port
-BACKEND_PORT="8080"
+BACKEND_PORT="8090"
 
 # Parse arguments
 USE_TILES=false  # Default: auto-detect tiles, use PBF as fallback
@@ -166,11 +166,8 @@ if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
     (cd "$FRONTEND_DIR" && npm install)
 fi
 
-# Check if Elm is installed
-if ! command -v elm &> /dev/null; then
-    echo "⚠️  Warning: 'elm' command not found. Installing globally..."
-    npm install -g elm elm-format elm-test
-fi
+# Make local node_modules/.bin/elm available to vite plugin
+export PATH="$FRONTEND_DIR/node_modules/.bin:$PATH"
 
 # Start backend with on-demand graph generation (release mode for performance)
 echo "Starting backend with on-demand graph generation (release mode)..."
@@ -214,7 +211,7 @@ echo "  - 🗺️  2D/3D map view with MapLibre GL JS"
 echo "  - 🏔️  Free terrain tiles (no API keys needed)"
 echo "  - 📊 On-demand graph generation from PBF data"
 echo "  - 🗄️  PostgreSQL database for route persistence"
-echo "  - 🔄 API proxy configured (port 3000 → 8080)"
+echo "  - 🔄 API proxy configured (port 3000 → 8090)"
 if [[ "$USE_TILES" == "true" ]] && [[ -n "${TILES_DIR:-}" ]]; then
     echo "  - ⚡ Mode TUILES actif (rapide, ~10s par route)"
 else

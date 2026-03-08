@@ -1,13 +1,13 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{extract::State, http::StatusCode, Json};
 use backend::{
     database::Database,
     elevation::create_elevation_profile,
     engine::RouteEngine,
     graph::{BoundingBox, GraphBuilder, GraphBuilderConfig, GraphFile},
     loops::{self, LoopGenerationError},
-    models::{ApiError, Coordinate, LoopRouteRequest, LoopRouteResponse, RouteRequest},
+    models::{Coordinate, LoopRouteRequest, LoopRouteResponse, RouteRequest},
     partial_graph::PartialGraphConfig,
     poi,
     routing::{estimate_time_minutes, haversine_km, rate_difficulty},
@@ -18,39 +18,114 @@ use shared::RouteResponse;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+/// In-memory engine cache: keeps the RouteEngine + its bbox so subsequent
+/// requests that fall within the same coverage area skip PBF parsing (~7-11s)
+/// and engine creation (~1-2s). Uses Arc to avoid cloning the large engine.
+struct CachedEngine {
+    engine: Arc<RouteEngine>,
+    bbox: BoundingBox,
+}
+
+static ENGINE_CACHE: std::sync::LazyLock<tokio::sync::RwLock<Option<CachedEngine>>> =
+    std::sync::LazyLock::new(|| tokio::sync::RwLock::new(None));
+
+/// Build or reuse an engine for the given bbox.
+/// On cache miss, builds with generous padding so nearby future requests hit.
+async fn get_or_build_engine(
+    config: &Arc<PartialGraphConfig>,
+    needed_bbox: BoundingBox,
+) -> Result<Arc<RouteEngine>, (StatusCode, String)> {
+    // Fast path: check if cached engine covers the needed bbox
+    {
+        let guard = ENGINE_CACHE.read().await;
+        if let Some(cached) = guard.as_ref() {
+            if cached.bbox.contains_bbox(&needed_bbox) {
+                tracing::info!("PERF ENGINE_CACHE HIT — reusing in-memory engine");
+                return Ok(Arc::clone(&cached.engine));
+            }
+        }
+    }
+
+    // Cache miss: build graph with generous bbox (2x padding)
+    let padded_bbox = pad_bbox(&needed_bbox);
+    tracing::info!("PERF ENGINE_CACHE MISS — building engine for padded bbox: {:?}", padded_bbox);
+
+    let t_graph = std::time::Instant::now();
+    let config_clone = config.clone();
+    let graph = tokio::task::spawn_blocking(move || {
+        prepare_graph_for_bbox(&config_clone, padded_bbox)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task spawn error: {}", e)))??;
+    tracing::info!(
+        "PERF graph: {:.0}ms ({} nodes, {} edges)",
+        t_graph.elapsed().as_secs_f64() * 1000.0,
+        graph.nodes.len(),
+        graph.edges.len()
+    );
+
+    let t_engine = std::time::Instant::now();
+    let engine = RouteEngine::from_graph_file(graph).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create engine: {}", e),
+        )
+    })?;
+    tracing::info!("PERF engine: {:.0}ms", t_engine.elapsed().as_secs_f64() * 1000.0);
+
+    let engine = Arc::new(engine);
+
+    // Store in cache
+    {
+        let mut guard = ENGINE_CACHE.write().await;
+        *guard = Some(CachedEngine {
+            engine: Arc::clone(&engine),
+            bbox: padded_bbox,
+        });
+        tracing::info!("PERF ENGINE_CACHE stored (padded bbox: {:?})", padded_bbox);
+    }
+
+    Ok(engine)
+}
+
+/// Pad a bbox proportionally to the route spread: 20% of span, min 2km per side.
+/// Small routes (nearby clicks) → small padding. Large routes → larger padding.
+fn pad_bbox(bbox: &BoundingBox) -> BoundingBox {
+    let lat_span = bbox.max_lat - bbox.min_lat;
+    let lon_span = bbox.max_lon - bbox.min_lon;
+
+    let min_pad_km = 2.0;
+    let lat_pad = (lat_span * 0.2).max(min_pad_km / 111.0);
+
+    let avg_lat = (bbox.min_lat + bbox.max_lat) / 2.0;
+    let cos_lat = avg_lat.to_radians().cos().abs().max(0.1);
+    let lon_pad = (lon_span * 0.2).max(min_pad_km / (111.0 * cos_lat));
+
+    BoundingBox {
+        min_lat: (bbox.min_lat - lat_pad).max(-90.0),
+        max_lat: (bbox.max_lat + lat_pad).min(90.0),
+        min_lon: (bbox.min_lon - lon_pad).clamp(-180.0, 180.0),
+        max_lon: (bbox.max_lon + lon_pad).clamp(-180.0, 180.0),
+    }
+}
+
 /// Handler for /api/route - generates partial graph on-demand and finds route
 async fn route_handler(
     State(config): State<Arc<PartialGraphConfig>>,
     Json(req): Json<RouteRequest>,
 ) -> Result<Json<RouteResponse>, (StatusCode, String)> {
+    let t_total = std::time::Instant::now();
     tracing::info!("Route request: {:?} -> {:?}", req.start, req.end);
 
     // Calculate bounding box with margin for the route
-    // Optimized: 5km margin as requested by user
-    let bbox = BoundingBox::from_route(req.start, req.end, 5.0); // 5km margin
+    let bbox = BoundingBox::from_route(req.start, req.end, 5.0);
 
-    // Use spawn_blocking to avoid blocking async runtime during graph generation
-    let config_clone = config.clone();
-    let graph = tokio::task::spawn_blocking(move || {
-        prepare_graph_for_bbox(&config_clone, bbox)
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task spawn error: {}", e)))??;
+    let engine = get_or_build_engine(&config, bbox).await?;
 
-    let engine = engine_from_graph(&config, &graph, "temp_route.json")?;
-
-    tracing::info!("Engine created from partial graph");
-
-    // Debug: Log graph stats
-    tracing::info!(
-        "Graph has {} nodes, {} edges",
-        graph.nodes.len(),
-        graph.edges.len()
-    );
-
+    let t_path = std::time::Instant::now();
     match engine.find_path(&req) {
         Some(path) => {
-            tracing::info!("Found path with {} waypoints", path.len());
+            tracing::info!("PERF pathfinding: {:.0}ms ({} points)", t_path.elapsed().as_secs_f64() * 1000.0, path.len());
 
             // Calculate distance
             let distance_km: f64 = path
@@ -59,20 +134,19 @@ async fn route_handler(
                 .sum();
 
             // Fetch elevation profile on-demand
-            tracing::info!("Fetching elevation profile for {} points...", path.len());
+            let t_elev = std::time::Instant::now();
             let elevation_profile = match create_elevation_profile(&path).await {
                 Ok(profile) => {
                     tracing::info!(
-                        "Elevation profile created: min={:?}m, max={:?}m, ascent={}m, descent={}m",
-                        profile.min_elevation,
-                        profile.max_elevation,
+                        "PERF elevation: {:.0}ms (ascent={:.0}m, descent={:.0}m)",
+                        t_elev.elapsed().as_secs_f64() * 1000.0,
                         profile.total_ascent,
                         profile.total_descent
                     );
                     Some(profile)
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to fetch elevation profile: {}", e);
+                    tracing::warn!("PERF elevation: {:.0}ms (FAILED: {})", t_elev.elapsed().as_secs_f64() * 1000.0, e);
                     None
                 }
             };
@@ -101,15 +175,15 @@ async fn route_handler(
                 estimated_time_minutes: estimated_time,
                 difficulty,
                 surface_breakdown: None,
+                segments: None,
             };
 
+            tracing::info!("PERF TOTAL /api/route: {:.0}ms ({:.2}km)", t_total.elapsed().as_secs_f64() * 1000.0, distance_km);
             Ok(Json(response))
         }
         None => {
             tracing::warn!(
-                "No path found - graph has {} nodes, {} edges. Start: {:?}, End: {:?}",
-                graph.nodes.len(),
-                graph.edges.len(),
+                "No path found. Start: {:?}, End: {:?}",
                 req.start,
                 req.end
             );
@@ -126,6 +200,7 @@ async fn loop_route_handler(
     State(config): State<Arc<PartialGraphConfig>>,
     Json(req): Json<LoopRouteRequest>,
 ) -> Result<Json<LoopRouteResponse>, (StatusCode, String)> {
+    let t_total = std::time::Instant::now();
     tracing::info!(
         "Loop request from {:?} targeting {:.1} km",
         req.start,
@@ -135,18 +210,15 @@ async fn loop_route_handler(
     let radius = (req.target_distance_km / 2.0).max(2.0) * 1.4 + req.distance_tolerance_km.max(1.0);
     let bbox = bbox_from_center(req.start, radius);
 
-    // Use spawn_blocking for graph generation
-    let config_clone = config.clone();
-    let graph = tokio::task::spawn_blocking(move || {
-        prepare_graph_for_bbox(&config_clone, bbox)
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task spawn error: {}", e)))??;
+    let engine = get_or_build_engine(&config, bbox).await?;
 
-    let engine = engine_from_graph(&config, &graph, "temp_loop.json")?;
-
+    let t_loops = std::time::Instant::now();
     match loops::generate_loops(&engine, &req).await {
-        Ok(response) => Ok(Json(response)),
+        Ok(response) => {
+            tracing::info!("PERF loops: {:.0}ms ({} candidates)", t_loops.elapsed().as_secs_f64() * 1000.0, response.candidates.len());
+            tracing::info!("PERF TOTAL /api/loops: {:.0}ms", t_total.elapsed().as_secs_f64() * 1000.0);
+            Ok(Json(response))
+        }
         Err(err) => {
             let status = match err {
                 LoopGenerationError::InvalidTargetDistance => StatusCode::BAD_REQUEST,
@@ -165,6 +237,7 @@ async fn multi_route_handler(
     State(config): State<Arc<PartialGraphConfig>>,
     Json(req): Json<MultiPointRouteRequest>,
 ) -> Result<Json<RouteResponse>, (StatusCode, String)> {
+    let t_total = std::time::Instant::now();
     if req.waypoints.len() < 2 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -214,23 +287,7 @@ async fn multi_route_handler(
         ));
     }
 
-    tracing::info!("Generating single graph for bbox: {:?}", bbox);
-
-    // Generate ONE graph for all segments using spawn_blocking
-    let config_clone = config.clone();
-    let graph = tokio::task::spawn_blocking(move || {
-        prepare_graph_for_bbox(&config_clone, bbox)
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task spawn error: {}", e)))??;
-
-    let engine = engine_from_graph(&config, &graph, "temp_multipoint.json")?;
-
-    tracing::info!(
-        "Engine created: {} nodes, {} edges",
-        graph.nodes.len(),
-        graph.edges.len()
-    );
+    let engine = get_or_build_engine(&config, bbox).await?;
 
     // Helper: push coordinate only if it differs from the last one (dedup)
     let push_dedup = |coords: &mut Vec<Coordinate>, c: Coordinate| {
@@ -251,7 +308,10 @@ async fn multi_route_handler(
     let mut all_coords: Vec<Coordinate> = Vec::new();
     let mut snapped_waypoints: Vec<Coordinate> = Vec::new();
     let mut total_distance = 0.0;
+    // Track segment boundaries: (start_idx, end_idx) in all_coords
+    let mut segment_boundaries: Vec<(usize, usize)> = Vec::new();
 
+    let t_pathfinding = std::time::Instant::now();
     for i in 0..points.len() - 1 {
         let segment_req = RouteRequest {
             start: points[i],
@@ -260,12 +320,14 @@ async fn multi_route_handler(
             w_paved: req.w_paved,
         };
 
+        let t_seg = std::time::Instant::now();
         match engine.find_path(&segment_req) {
             Some(path) => {
-                tracing::debug!(
-                    "Segment {}/{}: {} waypoints",
+                tracing::info!(
+                    "PERF segment {}/{}: {:.0}ms ({} pts)",
                     i + 1,
                     points.len() - 1,
+                    t_seg.elapsed().as_secs_f64() * 1000.0,
                     path.len()
                 );
 
@@ -278,10 +340,16 @@ async fn multi_route_handler(
                     snapped_waypoints.push(last);
                 }
 
+                // Record start index for this segment
+                let actual_start = if all_coords.is_empty() { 0 } else { all_coords.len() - 1 };
+
                 // Add the routed path (dedup avoids duplicate at segment boundaries)
                 for &coord in &path {
                     push_dedup(&mut all_coords, coord);
                 }
+
+                let end_idx = all_coords.len() - 1;
+                segment_boundaries.push((if i == 0 { 0 } else { actual_start }, end_idx));
 
                 // Calculate total distance so far
                 let segment_distance: f64 = all_coords
@@ -309,25 +377,27 @@ async fn multi_route_handler(
     snapped_waypoints.truncate(req.waypoints.len());
 
     tracing::info!(
-        "Multi-point route complete: {} total waypoints, {:.2}km",
+        "PERF pathfinding total: {:.0}ms ({} segments, {} pts, {:.2}km)",
+        t_pathfinding.elapsed().as_secs_f64() * 1000.0,
+        points.len() - 1,
         all_coords.len(),
         total_distance
     );
 
     // Fetch elevation profile for complete path
+    let t_elev = std::time::Instant::now();
     let elevation_profile = match create_elevation_profile(&all_coords).await {
         Ok(profile) => {
             tracing::info!(
-                "Elevation: min={:?}m, max={:?}m, ascent={:.0}m, descent={:.0}m",
-                profile.min_elevation,
-                profile.max_elevation,
+                "PERF elevation: {:.0}ms (ascent={:.0}m, descent={:.0}m)",
+                t_elev.elapsed().as_secs_f64() * 1000.0,
                 profile.total_ascent,
                 profile.total_descent
             );
             Some(profile)
         }
         Err(e) => {
-            tracing::warn!("Failed to fetch elevation profile: {}", e);
+            tracing::warn!("PERF elevation: {:.0}ms (FAILED: {})", t_elev.elapsed().as_secs_f64() * 1000.0, e);
             None
         }
     };
@@ -341,6 +411,61 @@ async fn multi_route_handler(
         None => (None, None),
     };
 
+    // Compute per-segment statistics
+    let segments = if segment_boundaries.len() >= 2 {
+        let seg_stats: Vec<shared::SegmentStats> = segment_boundaries
+            .iter()
+            .map(|&(from_idx, to_idx)| {
+                // Distance for this segment
+                let seg_dist: f64 = all_coords[from_idx..=to_idx]
+                    .windows(2)
+                    .map(|pair| haversine_km(pair[0], pair[1]))
+                    .sum();
+
+                // Elevation stats for this segment
+                let (ascent, descent) = match &elevation_profile {
+                    Some(profile) => {
+                        let mut asc = 0.0_f64;
+                        let mut desc = 0.0_f64;
+                        let elevs = &profile.elevations;
+                        for j in from_idx..to_idx {
+                            if j + 1 < elevs.len() {
+                                if let (Some(e1), Some(e2)) = (elevs[j], elevs[j + 1]) {
+                                    let diff = e2 - e1;
+                                    if diff > 0.0 {
+                                        asc += diff;
+                                    } else {
+                                        desc += diff.abs();
+                                    }
+                                }
+                            }
+                        }
+                        (asc, desc)
+                    }
+                    None => (0.0, 0.0),
+                };
+
+                let avg_slope = if seg_dist > 0.001 {
+                    (ascent - descent) / (seg_dist * 1000.0) * 100.0
+                } else {
+                    0.0
+                };
+
+                shared::SegmentStats {
+                    from_index: from_idx,
+                    to_index: to_idx,
+                    distance_km: (seg_dist * 100.0).round() / 100.0,
+                    ascent_m: ascent.round(),
+                    descent_m: descent.round(),
+                    avg_slope_pct: (avg_slope * 10.0).round() / 10.0,
+                }
+            })
+            .collect();
+        Some(seg_stats)
+    } else {
+        None
+    };
+
     let response = RouteResponse {
         path: all_coords,
         distance_km: total_distance,
@@ -352,8 +477,10 @@ async fn multi_route_handler(
         estimated_time_minutes: estimated_time,
         difficulty,
         surface_breakdown: None,
+        segments,
     };
 
+    tracing::info!("PERF TOTAL /api/route/multi: {:.0}ms ({} wps, {:.2}km)", t_total.elapsed().as_secs_f64() * 1000.0, req.waypoints.len(), total_distance);
     Ok(Json(response))
 }
 
@@ -460,7 +587,7 @@ async fn main() {
         .layer(cors)
         .with_state(db);
 
-    let addr: SocketAddr = "0.0.0.0:8080".parse().expect("valid socket address");
+    let addr: SocketAddr = "0.0.0.0:8090".parse().expect("valid socket address");
     tracing::info!("Starting backend on http://{addr}");
     tracing::info!("API endpoints:");
     tracing::info!("  POST /api/route - Find route with on-demand graph generation");
@@ -521,18 +648,20 @@ fn prepare_graph_for_bbox(
     config: &PartialGraphConfig,
     bbox: BoundingBox,
 ) -> Result<GraphFile, (StatusCode, String)> {
+    let t0 = std::time::Instant::now();
     let cache_key = bbox.cache_key();
     let cache_path = config.cache_dir.join(format!("{}.bin", cache_key));
 
     // Check cache first
     if cache_path.exists() {
-        tracing::info!("Loading cached partial graph: {}", cache_path.display());
-        return GraphFile::read_from_path(&cache_path).map_err(|e| {
+        let result = GraphFile::read_from_path(&cache_path).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to load cache: {}", e),
             )
         });
+        tracing::info!("PERF prepare_graph CACHE HIT: {:.0}ms ({})", t0.elapsed().as_secs_f64() * 1000.0, cache_path.display());
+        return result;
     }
 
     // Try to use tiles if available (FAST - <10s)
@@ -547,7 +676,7 @@ fn prepare_graph_for_bbox(
                     // Cache the result
                     std::fs::create_dir_all(&config.cache_dir).ok();
                     graph.write_to_path(&cache_path).ok();
-                    tracing::info!("Cached tile-based graph to: {}", cache_path.display());
+                    tracing::info!("PERF prepare_graph TILES: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
                     return Ok(graph);
                 }
                 Err(e) => {
@@ -569,24 +698,8 @@ fn prepare_graph_for_bbox(
     })?;
     std::fs::create_dir_all(&config.cache_dir).ok();
     graph.write_to_path(&cache_path).ok();
-    tracing::info!("Cached partial graph to: {}", cache_path.display());
+    tracing::info!("PERF prepare_graph PBF: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
     Ok(graph)
-}
-
-fn engine_from_graph(
-    _config: &PartialGraphConfig,
-    graph: &GraphFile,
-    _temp_name: &str,
-) -> Result<RouteEngine, (StatusCode, String)> {
-    // PERFORMANCE FIX: Create engine directly from GraphFile in memory
-    // instead of writing to disk (slow for large graphs with millions of waypoints)
-    // and reading it back. This eliminates multi-GB JSON serialization bottleneck.
-    RouteEngine::from_graph_file(graph.clone()).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to create engine: {}", e),
-        )
-    })
 }
 
 fn bbox_from_center(center: Coordinate, radius_km: f64) -> BoundingBox {

@@ -8,6 +8,33 @@ import Json.Decode as Decode exposing (Decoder)
 import Types exposing (..)
 
 
+-- GEOCODING (Nominatim)
+
+
+stringToFloat : String -> Decoder Float
+stringToFloat str =
+    case String.toFloat str of
+        Just f ->
+            Decode.succeed f
+
+        Nothing ->
+            Decode.fail ("Not a valid float: " ++ str)
+
+
+decodeGeoResult : Decoder GeoResult
+decodeGeoResult =
+    Decode.map3 GeoResult
+        (Decode.field "lat" Decode.string |> Decode.andThen stringToFloat)
+        (Decode.field "lon" Decode.string |> Decode.andThen stringToFloat)
+        (Decode.field "display_name" Decode.string)
+
+
+decodeGeoResults : Decoder (List GeoResult)
+decodeGeoResults =
+    Decode.list decodeGeoResult
+
+
+
 -- COORDINATE
 
 
@@ -26,7 +53,7 @@ decodeRouteResponse : Decoder RouteResponse
 decodeRouteResponse =
     Decode.map8
         (\path dist gpx meta elev snapped time diff ->
-            \surface ->
+            \surface segments ->
                 { path = path
                 , distanceKm = dist
                 , gpxBase64 = gpx
@@ -36,6 +63,7 @@ decodeRouteResponse =
                 , estimatedTimeMinutes = time
                 , difficulty = diff
                 , surfaceBreakdown = surface
+                , segments = segments
                 }
         )
         (Decode.field "path" (Decode.list decodeCoordinate))
@@ -48,9 +76,21 @@ decodeRouteResponse =
         (Decode.maybe (Decode.field "difficulty" Decode.string))
         |> Decode.andThen
             (\fn ->
-                Decode.map fn
+                Decode.map2 fn
                     (Decode.maybe (Decode.field "surface_breakdown" decodeSurfaceBreakdown))
+                    (Decode.maybe (Decode.field "segments" (Decode.list decodeSegmentStats)))
             )
+
+
+decodeSegmentStats : Decoder SegmentStats
+decodeSegmentStats =
+    Decode.map6 SegmentStats
+        (Decode.field "from_index" Decode.int)
+        (Decode.field "to_index" Decode.int)
+        (Decode.field "distance_km" Decode.float)
+        (Decode.field "ascent_m" Decode.float)
+        (Decode.field "descent_m" Decode.float)
+        (Decode.field "avg_slope_pct" Decode.float)
 
 
 decodeSurfaceBreakdown : Decoder (List ( String, Float ))

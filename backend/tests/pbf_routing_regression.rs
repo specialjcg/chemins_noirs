@@ -237,6 +237,149 @@ fn path_coordinates_stay_near_waypoints() {
     }
 }
 
+/// Test: close_loop route returns near start and is longer than open route
+#[test]
+fn close_loop_returns_to_start() {
+    let engine = engine();
+
+    // Use first 3 waypoints as a short multi-point route
+    let waypoints: Vec<Coordinate> = WAYPOINTS[0..3]
+        .iter()
+        .map(|&(lat, lon)| Coordinate { lat, lon })
+        .collect();
+
+    // Build open route (no close_loop)
+    let (path_open, _) = build_multi_point_route(engine, &waypoints, false);
+    // Build closed route (close_loop = true)
+    let (path_closed, _) = build_multi_point_route(engine, &waypoints, true);
+
+    let dist_open = approximate_distance_km(&path_open);
+    let dist_closed = approximate_distance_km(&path_closed);
+
+    eprintln!(
+        "Open route: {:.4} km, {} points",
+        dist_open,
+        path_open.len()
+    );
+    eprintln!(
+        "Closed route: {:.4} km, {} points",
+        dist_closed,
+        path_closed.len()
+    );
+
+    // Closed route must be longer (it has the return segment)
+    assert!(
+        dist_closed > dist_open,
+        "Closed loop ({:.4} km) should be longer than open ({:.4} km)",
+        dist_closed,
+        dist_open
+    );
+
+    // Last point of closed route must be near the first waypoint (<200m)
+    let last = path_closed.last().unwrap();
+    let first_wp = &waypoints[0];
+    let return_dist = haversine_m(last.lat, last.lon, first_wp.lat, first_wp.lon);
+
+    eprintln!("Return distance to start: {:.1}m", return_dist);
+
+    assert!(
+        return_dist < 200.0,
+        "Close-loop last point should be near start waypoint ({:.0}m away)",
+        return_dist
+    );
+}
+
+/// Test: snapped waypoints lie exactly on the route polyline
+#[test]
+fn snapped_waypoints_on_route_line() {
+    let engine = engine();
+
+    // Use first 4 waypoints
+    let waypoints: Vec<Coordinate> = WAYPOINTS[0..4]
+        .iter()
+        .map(|&(lat, lon)| Coordinate { lat, lon })
+        .collect();
+
+    let (full_path, snapped) = build_multi_point_route(engine, &waypoints, false);
+
+    assert_eq!(
+        snapped.len(),
+        waypoints.len(),
+        "Should have one snapped position per original waypoint"
+    );
+
+    // Each snapped waypoint must appear on the route path (within 1m)
+    for (i, swp) in snapped.iter().enumerate() {
+        let min_dist = full_path
+            .iter()
+            .map(|p| haversine_m(p.lat, p.lon, swp.lat, swp.lon))
+            .fold(f64::MAX, f64::min);
+
+        eprintln!(
+            "Snapped wp{}: ({:.6}, {:.6}) — min dist to path: {:.2}m",
+            i + 1,
+            swp.lat,
+            swp.lon,
+            min_dist
+        );
+
+        assert!(
+            min_dist < 1.0,
+            "Snapped waypoint {} should be on the route line (dist={:.2}m)",
+            i + 1,
+            min_dist
+        );
+    }
+}
+
+/// Helper: build a multi-point route chaining segments (mirrors multi_route_handler logic)
+fn build_multi_point_route(
+    engine: &RouteEngine,
+    waypoints: &[Coordinate],
+    close_loop: bool,
+) -> (Vec<Coordinate>, Vec<Coordinate>) {
+    let mut points = waypoints.to_vec();
+    if close_loop {
+        points.push(waypoints[0]);
+    }
+
+    let mut all_coords: Vec<Coordinate> = Vec::new();
+    let mut snapped: Vec<Coordinate> = Vec::new();
+
+    for i in 0..points.len() - 1 {
+        let path = engine
+            .find_path(&RouteRequest {
+                start: points[i],
+                end: points[i + 1],
+                w_pop: 1.0,
+                w_paved: 1.0,
+            })
+            .unwrap_or_else(|| panic!("No path for segment {} -> {}", i, i + 1));
+
+        // Collect snapped positions (first/last of each segment)
+        if i == 0 {
+            snapped.push(path[0]);
+        }
+        if let Some(&last) = path.last() {
+            snapped.push(last);
+        }
+
+        // Append to full path (dedup at segment boundaries)
+        for &coord in &path {
+            if all_coords.last().map_or(true, |last: &Coordinate| {
+                (last.lat - coord.lat).abs() > 1e-7 || (last.lon - coord.lon).abs() > 1e-7
+            }) {
+                all_coords.push(coord);
+            }
+        }
+    }
+
+    // Only keep snapped positions for original waypoints (exclude close_loop duplicate)
+    snapped.truncate(waypoints.len());
+
+    (all_coords, snapped)
+}
+
 fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let r = 6_371_000.0;
     let dlat = (lat2 - lat1).to_radians();

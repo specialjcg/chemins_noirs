@@ -11,7 +11,7 @@ cd "$ROOT_DIR"
 # Configuration
 PBF_PATH="${PBF_PATH:-data/rhone-alpes-251111.osm.pbf}"
 CACHE_DIR="${CACHE_DIR:-data/cache}"
-BACKEND_PORT="${BACKEND_PORT:-8080}"
+BACKEND_PORT="${BACKEND_PORT:-8090}"
 
 echo "🚀 Starting backend with partial graph generation"
 echo "📍 PBF file: $PBF_PATH"

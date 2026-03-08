@@ -67,6 +67,15 @@ port copyToClipboard : String -> Cmd msg
 port requestGeolocation : () -> Cmd msg
 
 
+port triggerGpxImport : () -> Cmd msg
+
+
+port setElevationHoverMarker : Maybe { lat : Float, lon : Float } -> Cmd msg
+
+
+port centerMapOn : { lat : Float, lon : Float } -> Cmd msg
+
+
 
 -- PORTS IN (JavaScript → Elm)
 
@@ -87,3 +96,15 @@ port gotGeolocation : ({ lat : Float, lon : Float } -> msg) -> Sub msg
 
 
 port elevationChartHover : ({ index : Int } -> msg) -> Sub msg
+
+
+port undoRedoReceived : ({ action : String } -> msg) -> Sub msg
+
+
+port gpxWaypointsReceived : (List { lat : Float, lon : Float } -> msg) -> Sub msg
+
+
+port mapRouteHover : ({ index : Int } -> msg) -> Sub msg
+
+
+port closeLoopRequested : (Bool -> msg) -> Sub msg

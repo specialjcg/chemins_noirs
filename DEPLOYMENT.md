@@ -17,13 +17,13 @@ Déploiement de Chemins Noirs sur un VPS via GitHub.
                      ┌───────────────┐              ┌───────────────┐
                      │ Static Files  │              │ API Proxy     │
                      │ /             │              │ /api/*        │
-                     │ (Elm + Vite)  │              │ → :8080       │
+                     │ (Elm + Vite)  │              │ → :8090       │
                      └───────────────┘              └───────┬───────┘
                                                            │ (localhost only)
                                                            ▼
                                                   ┌───────────────┐
                                                   │ Rust Backend  │
-                                                  │ (axum :8080)  │
+                                                  │ (axum :8090)  │
                                                   │ sandboxed     │
                                                   │ systemd       │
                                                   └───────────────┘
@@ -149,7 +149,7 @@ Le déploiement inclut les protections suivantes :
 ### Réseau (ufw firewall)
 
 - Seuls les ports SSH, 80, 443 sont ouverts
-- Le port 8080 (backend) est **interne uniquement** (localhost)
+- Le port 8090 (backend) est **interne uniquement** (localhost)
 - fail2ban protège contre le brute-force SSH et les abus nginx
 
 ### VPS
@@ -214,6 +214,6 @@ systemctl restart cheminsnoirs
 nginx -t && systemctl reload nginx
 ufw status                               # Firewall
 fail2ban-client status                   # Bans actifs
-ss -tlnp | grep -E ':(80|443|8080)'     # Ports
+ss -tlnp | grep -E ':(80|443|8090)'     # Ports
 certbot renew --dry-run                  # Test renouvellement HTTPS
 ```

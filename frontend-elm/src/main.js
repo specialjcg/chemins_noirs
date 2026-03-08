@@ -33,22 +33,10 @@ app.ports.updateRoute.subscribe((coords) => {
   MapLibreMap.updateRoute(coords);
 });
 
-// Mettre à jour les marqueurs de sélection (départ/arrivée)
-app.ports.updateSelectionMarkers.subscribe(({ start, end }) => {
-  console.log('[Elm→JS] updateSelectionMarkers', { start, end });
-  MapLibreMap.updateSelectionMarkers(start, end);
-});
-
-// Mettre à jour les marqueurs de waypoints (mode multi-point)
+// Mettre à jour les marqueurs de waypoints
 app.ports.updateWaypointMarkers.subscribe((waypoints) => {
   console.log('[Elm→JS] updateWaypointMarkers', waypoints.length, 'waypoints');
   MapLibreMap.updateWaypointMarkers(waypoints);
-});
-
-// Basculer vue satellite/standard (legacy)
-app.ports.toggleSatelliteView.subscribe((enabled) => {
-  console.log('[Elm→JS] toggleSatelliteView', enabled);
-  MapLibreMap.toggleSatelliteView(enabled);
 });
 
 // Switch map style: topo / satellite / hybrid
@@ -116,6 +104,12 @@ app.ports.loadRouteFromLocalStorage.subscribe(() => {
     console.error('❌ Erreur lors du chargement:', error);
     app.ports.routeLoadedFromLocalStorage.send(null);
   }
+});
+
+// Center map on a location (geocoding result)
+app.ports.centerMapOn.subscribe(({ lat, lon }) => {
+  console.log('[Elm→JS] centerMapOn', { lat, lon });
+  MapLibreMap.flyToBbox(lat, lon);
 });
 
 // ============================================================
@@ -190,6 +184,104 @@ app.ports.requestGeolocation.subscribe(() => {
       }
     );
   }
+});
+
+// ============================================================
+// UNDO / REDO keyboard shortcuts (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y)
+// ============================================================
+document.addEventListener('keydown', (e) => {
+  // Skip if focus is in an input/textarea
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+    e.preventDefault();
+    app.ports.undoRedoReceived.send({ action: 'undo' });
+  } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') {
+    e.preventDefault();
+    app.ports.undoRedoReceived.send({ action: 'redo' });
+  } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+    e.preventDefault();
+    app.ports.undoRedoReceived.send({ action: 'redo' });
+  }
+});
+
+// ============================================================
+// GPX IMPORT
+// ============================================================
+app.ports.triggerGpxImport.subscribe(() => {
+  console.log('[Elm→JS] triggerGpxImport');
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.gpx';
+  input.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(ev.target.result, 'text/xml');
+        // Extract track points, route points, or waypoints
+        let points = Array.from(doc.querySelectorAll('trkpt'));
+        if (points.length === 0) points = Array.from(doc.querySelectorAll('rtept'));
+        if (points.length === 0) points = Array.from(doc.querySelectorAll('wpt'));
+
+        const coords = points.map(pt => ({
+          lat: parseFloat(pt.getAttribute('lat')),
+          lon: parseFloat(pt.getAttribute('lon'))
+        })).filter(c => !isNaN(c.lat) && !isNaN(c.lon));
+
+        if (coords.length === 0) {
+          console.warn('[GPX] No valid points found in file');
+          return;
+        }
+
+        // Sample to ~15 waypoints max (first + last + evenly spaced)
+        const MAX_WAYPOINTS = 15;
+        let sampled;
+        if (coords.length <= MAX_WAYPOINTS) {
+          sampled = coords;
+        } else {
+          sampled = [coords[0]];
+          const step = (coords.length - 1) / (MAX_WAYPOINTS - 1);
+          for (let i = 1; i < MAX_WAYPOINTS - 1; i++) {
+            sampled.push(coords[Math.round(i * step)]);
+          }
+          sampled.push(coords[coords.length - 1]);
+        }
+
+        console.log(`[GPX] Imported ${coords.length} points, sampled to ${sampled.length}`);
+        app.ports.gpxWaypointsReceived.send(sampled);
+      } catch (err) {
+        console.error('[GPX] Parse error:', err);
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+});
+
+// ============================================================
+// ELEVATION HOVER MARKER on map
+// ============================================================
+app.ports.setElevationHoverMarker.subscribe((coord) => {
+  MapLibreMap.setElevationHoverMarker(coord);
+});
+
+// ============================================================
+// CLOSE LOOP → Elm
+// ============================================================
+window.addEventListener('close-loop-clicked', () => {
+  console.log('[JS→Elm] close-loop-clicked');
+  app.ports.closeLoopRequested.send(true);
+});
+
+// ============================================================
+// MAP ROUTE HOVER → Elm
+// ============================================================
+window.addEventListener('route-hover', (event) => {
+  app.ports.mapRouteHover.send({ index: event.detail.index });
 });
 
 // Parse URL hash for shared waypoints on page load

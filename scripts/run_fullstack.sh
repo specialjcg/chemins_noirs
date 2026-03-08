@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_DIR="$ROOT_DIR/target"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 FRONTEND_PORT="8081"
-BACKEND_PORT="8080"
+BACKEND_PORT="8090"
 
 # PBF data for routing graph
 DEFAULT_PBF="$ROOT_DIR/backend/data/rhone-alpes-251111.osm.pbf"

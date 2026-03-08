@@ -8,6 +8,7 @@ import Decoders exposing (..)
 import Encoders exposing (..)
 import Http
 import Types exposing (..)
+import Url
 
 
 -- API ROOTS
@@ -26,6 +27,21 @@ loopApiRoot =
 savedRoutesApiRoot : String
 savedRoutesApiRoot =
     "/api/routes"
+
+
+
+-- GEOCODING (Nominatim OSM)
+
+
+geocodeAddress : String -> (Result Http.Error (List GeoResult) -> msg) -> Cmd msg
+geocodeAddress query toMsg =
+    Http.get
+        { url =
+            "https://nominatim.openstreetmap.org/search?q="
+                ++ Url.percentEncode query
+                ++ "&format=json&limit=5&countrycodes=fr"
+        , expect = Http.expectJson toMsg decodeGeoResults
+        }
 
 
 

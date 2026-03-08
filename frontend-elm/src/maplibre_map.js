@@ -1,4 +1,5 @@
 import maplibregl from 'maplibre-gl';
+import mlcontour from 'maplibre-contour';
 
 let mapInstance;
 let routeSource;
@@ -244,6 +245,73 @@ function ensureMap() {
       layout: { visibility: 'visible' },
       paint: { 'hillshade-shadow-color': '#473B24' }
     }, 'osm-tiles');
+
+    // Generate contour lines on-the-fly from DEM tiles
+    const demSource = new mlcontour.DemSource({
+      url: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+      encoding: 'terrarium',
+      maxzoom: 13,
+      worker: true
+    });
+    demSource.setupMaplibre(maplibregl);
+
+    mapInstance.addSource('contours', {
+      type: 'vector',
+      tiles: [
+        demSource.contourProtocolUrl({
+          multiplier: 1,
+          overzoom: 1,
+          thresholds: {
+            11: [200],
+            12: [100],
+            13: [50],
+            14: [20]
+          },
+          elevationKey: 'ele',
+          levelKey: 'level',
+          contourLayer: 'contour'
+        })
+      ],
+      maxzoom: 15
+    });
+
+    // Contour lines — minor (level 0) thin, major (level 1) thicker
+    mapInstance.addLayer({
+      id: 'contour-lines',
+      type: 'line',
+      source: 'contours',
+      'source-layer': 'contour',
+      layout: { visibility: 'visible' },
+      paint: {
+        'line-color': 'rgba(120, 90, 50, 0.35)',
+        'line-width': ['match', ['get', 'level'], 1, 1.2, 0.5]
+      },
+      minzoom: 11
+    });
+
+    // Contour labels — elevation text on major lines
+    mapInstance.addLayer({
+      id: 'contour-labels',
+      type: 'symbol',
+      source: 'contours',
+      'source-layer': 'contour',
+      filter: ['>', ['get', 'level'], 0],
+      layout: {
+        visibility: 'visible',
+        'symbol-placement': 'line',
+        'text-field': ['concat', ['number-format', ['get', 'ele'], {}], ' m'],
+        'text-font': ['Noto Sans Regular'],
+        'text-size': 10,
+        'text-max-angle': 25,
+        'text-padding': 5
+      },
+      paint: {
+        'text-color': 'rgba(90, 65, 30, 0.7)',
+        'text-halo-color': 'rgba(255, 255, 255, 0.8)',
+        'text-halo-width': 1.5
+      },
+      minzoom: 13
+    });
 
     // Add route source (will be populated later)
     mapInstance.addSource('route', {
@@ -718,11 +786,12 @@ export function updateRoute(coords) {
   ensureMap();
   console.debug('[maplibre] updateRoute', coords);
 
+  const routeSource = mapInstance.getSource('route');
+
   if (!Array.isArray(coords) || coords.length === 0) {
-    mapInstance.getSource('route').setData({
-      type: 'FeatureCollection',
-      features: []
-    });
+    if (routeSource) {
+      routeSource.setData({ type: 'FeatureCollection', features: [] });
+    }
     currentRoute = null;
     // Clear km markers when route is cleared
     kmMarkers.forEach(m => m.remove());
@@ -743,10 +812,9 @@ export function updateRoute(coords) {
     properties: {}
   };
 
-  mapInstance.getSource('route').setData({
-    type: 'FeatureCollection',
-    features: [lineString]
-  });
+  if (routeSource) {
+    routeSource.setData({ type: 'FeatureCollection', features: [lineString] });
+  }
 
   updateRouteMetrics(coords);
   animationStartTimestamp = null;
@@ -838,6 +906,15 @@ export function switchMapStyle(style) {
   // Set hillshade visibility — hide in pure satellite, show in topo/hybrid
   if (mapInstance.getLayer('hills')) {
     mapInstance.setLayoutProperty('hills', 'visibility', style === 'satellite' ? 'none' : 'visible');
+  }
+
+  // Set contour lines visibility — show in topo and 3D, hide in pure satellite
+  const showContours = style !== 'satellite';
+  if (mapInstance.getLayer('contour-lines')) {
+    mapInstance.setLayoutProperty('contour-lines', 'visibility', showContours ? 'visible' : 'none');
+  }
+  if (mapInstance.getLayer('contour-labels')) {
+    mapInstance.setLayoutProperty('contour-labels', 'visibility', showContours ? 'visible' : 'none');
   }
 
   // Adjust terrain exaggeration for satellite mode (more dramatic relief)
@@ -1381,7 +1458,7 @@ function updateKmMarkers(coords) {
 
       const el = document.createElement('div');
       el.className = 'km-marker';
-      el.textContent = String(nextKm);
+      el.textContent = nextKm + 'km';
 
       const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
         .setLngLat([lon, lat])

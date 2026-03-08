@@ -108,7 +108,7 @@ jobs:
           server {
               listen 80;
               listen [::]:80;
-              server_name _;
+              server_name cheminsnoirs.mooo.com;
 
               add_header X-Content-Type-Options "nosniff" always;
               add_header X-Frame-Options "DENY" always;
@@ -152,7 +152,7 @@ jobs:
               location /api/ {
                   limit_req zone=api_limit burst=20 nodelay;
                   limit_req_status 429;
-                  proxy_pass http://127.0.0.1:8080/api/;
+                  proxy_pass http://127.0.0.1:8090/api/;
                   proxy_http_version 1.1;
                   proxy_set_header Host $host;
                   proxy_set_header X-Real-IP $remote_addr;
@@ -169,7 +169,7 @@ jobs:
           EOF
 
           ln -sf /etc/nginx/sites-available/cheminsnoirs /etc/nginx/sites-enabled/
-          rm -f /etc/nginx/sites-enabled/default
+          # Ne PAS supprimer default (Take It Easy cohabite sur le même VPS)
           grep -q "server_tokens off" /etc/nginx/nginx.conf || sed -i '/http {/a\    server_tokens off;' /etc/nginx/nginx.conf
           nginx -t && systemctl reload nginx
 

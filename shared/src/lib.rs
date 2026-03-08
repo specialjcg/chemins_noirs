@@ -111,6 +111,19 @@ pub struct RouteResponse {
     /// Surface type breakdown: vec of (surface_name, distance_km)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_breakdown: Option<Vec<(String, f64)>>,
+    /// Per-segment statistics for multi-point routes
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<Vec<SegmentStats>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SegmentStats {
+    pub from_index: usize,
+    pub to_index: usize,
+    pub distance_km: f64,
+    pub ascent_m: f64,
+    pub descent_m: f64,
+    pub avg_slope_pct: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

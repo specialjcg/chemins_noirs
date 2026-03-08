@@ -170,6 +170,7 @@ pub async fn generate_loops(
                 estimated_time_minutes,
                 difficulty,
                 surface_breakdown: None,
+                segments: None,
             };
 
             candidates.push(LoopCandidate {

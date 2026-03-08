@@ -17,7 +17,7 @@ VPS_PORT="9999"                              # Port du proxy
 VPS_APP_DIR="/opt/cheminsnoirs"              # Répertoire d'installation sur le VPS
 
 # Domaine (optionnel, pour la config nginx)
-DOMAIN=""                                    # ex: cheminsnoirs.example.com
+DOMAIN="cheminsnoirs.mooo.com"               # Domaine pour nginx
 
 # Répertoire du projet (détection automatique)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -184,7 +184,7 @@ limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
 server {
     listen 80;
     listen [::]:80;
-    server_name _;
+    server_name cheminsnoirs.mooo.com;
 
     # ── Security Headers ──
     add_header X-Content-Type-Options "nosniff" always;
@@ -236,13 +236,13 @@ server {
         limit_req zone=static_limit burst=20 nodelay;
     }
 
-    # API proxy → backend Rust sur port 8080
+    # API proxy → backend Rust sur port 8090
     location /api/ {
         # Rate limiting API (10 req/s par IP, burst de 20)
         limit_req zone=api_limit burst=20 nodelay;
         limit_req_status 429;
 
-        proxy_pass http://127.0.0.1:8080/api/;
+        proxy_pass http://127.0.0.1:8090/api/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -323,7 +323,7 @@ systemctl enable cheminsnoirs
 # ── Installer nginx config ──
 cp nginx-cheminsnoirs.conf /etc/nginx/sites-available/cheminsnoirs
 ln -sf /etc/nginx/sites-available/cheminsnoirs /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
+# Ne PAS supprimer default (Take It Easy cohabite sur le même VPS)
 
 # ── Hardening nginx global (si pas déjà fait) ──
 if ! grep -q "server_tokens off" /etc/nginx/nginx.conf; then
@@ -341,7 +341,7 @@ if command -v ufw >/dev/null 2>&1; then
     ufw allow ssh 2>/dev/null || true
     ufw allow 80/tcp 2>/dev/null || true
     ufw allow 443/tcp 2>/dev/null || true
-    # Ne PAS exposer le port 8080 (backend interne uniquement)
+    # Ne PAS exposer le port 8090 (backend interne uniquement)
     ufw --force enable 2>/dev/null || true
     echo "Firewall configuré (SSH + HTTP + HTTPS uniquement)"
 fi
@@ -386,7 +386,7 @@ echo ""
 echo "Sécurité:"
 echo "  - Sandbox systemd complet (NoNewPrivileges, ProtectSystem, MemoryDenyWriteExecute...)"
 echo "  - nginx: rate limiting, CSP, headers sécurité, version cachée"
-echo "  - Firewall: seuls SSH/HTTP/HTTPS ouverts (port 8080 interne)"
+echo "  - Firewall: seuls SSH/HTTP/HTTPS ouverts (port 8090 interne)"
 echo "  - Backend tourne en utilisateur dédié sans shell"
 echo ""
 echo "Prochaines étapes recommandées:"

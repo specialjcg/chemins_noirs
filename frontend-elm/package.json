@@ -10,11 +10,13 @@
     "test": "elm-test"
   },
   "dependencies": {
+    "maplibre-contour": "^0.1.0",
     "maplibre-gl": "^5.0.0"
   },
   "devDependencies": {
+    "elm": "^0.19.1-6",
+    "elm-test": "^0.19.1-revision12",
     "vite": "^5.0.0",
-    "vite-plugin-elm": "^3.0.0",
-    "elm-test": "^0.19.1-revision12"
+    "vite-plugin-elm": "^3.0.0"
   }
 }

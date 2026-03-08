@@ -32,12 +32,19 @@
     <!-- Elm + MapLibre GL JS -->
     <script type="module" src="/src/main.js"></script>
 
-    <!-- Service Worker registration -->
+    <!-- Service Worker: production only, auto-unregister in dev -->
     <script>
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js')
-          .then(() => console.log('[SW] Registered'))
-          .catch(err => console.warn('[SW] Registration failed:', err));
+        if (location.hostname === 'localhost' || location.port) {
+          // Dev mode: unregister any stale service worker
+          navigator.serviceWorker.getRegistrations().then(regs =>
+            regs.forEach(r => r.unregister())
+          );
+        } else {
+          navigator.serviceWorker.register('/sw.js')
+            .then(() => console.log('[SW] Registered'))
+            .catch(err => console.warn('[SW] Registration failed:', err));
+        }
       }
     </script>
   </body>

@@ -127,6 +127,7 @@ async fn route_handler(
         estimated_time_minutes: None,
         difficulty: None,
         surface_breakdown: None,
+        segments: None,
     };
 
     Ok(Json(response))
