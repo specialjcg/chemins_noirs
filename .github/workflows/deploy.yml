@@ -72,52 +72,28 @@ jobs:
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
           echo "StrictHostKeyChecking no" >> ~/.ssh/config
-          ssh-keyscan -p 9999 VPS-779132.ssh.vps1euro.fr >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -p 9368 VPS-423172.ssh.vps1euro.fr >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Deploy to VPS
         run: |
-          SSH="ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr"
-          SCP="scp -P 9999 -i ~/.ssh/id_deploy"
+          SSH="ssh -p 9368 -i ~/.ssh/id_deploy root@VPS-423172.ssh.vps1euro.fr"
+          SCP="scp -P 9368 -i ~/.ssh/id_deploy"
 
-          # 1. Setup swap + stop service + create dirs (single SSH)
+          # 1. Stop service + create dirs
           $SSH << 'PREPARE'
-          # Disable fail2ban
-          systemctl stop fail2ban 2>/dev/null; systemctl disable fail2ban 2>/dev/null || true
-
-          # Ensure 2GB swap
-          if [ ! -f /swapfile ]; then
-            echo "Creating 2GB swap..."
-            fallocate -l 2G /swapfile
-            chmod 600 /swapfile
-            mkswap /swapfile
-            swapon /swapfile
-            echo '/swapfile none swap sw 0 0' >> /etc/fstab
-          else
-            swapon /swapfile 2>/dev/null || true
-          fi
-          free -h
-
-          # Stop service and prepare dirs
           systemctl stop cheminsnoirs || true
           mkdir -p /opt/cheminsnoirs/{data/cache,frontend}
           PREPARE
 
           # 2. Copy files
-          $SCP target/release/backend_partial root@VPS-779132.ssh.vps1euro.fr:/opt/cheminsnoirs/backend_partial
-          $SCP -r frontend-elm/dist/* root@VPS-779132.ssh.vps1euro.fr:/opt/cheminsnoirs/frontend/
+          $SCP target/release/backend_partial root@VPS-423172.ssh.vps1euro.fr:/opt/cheminsnoirs/backend_partial
+          $SCP -r frontend-elm/dist/* root@VPS-423172.ssh.vps1euro.fr:/opt/cheminsnoirs/frontend/
 
-          # 3. Configure + start + diagnostics (single SSH)
+          # 3. Permissions + start + diagnostics
           $SSH << 'FINALIZE'
           set -e
 
-          # Update nginx CSP
-          sed -i "s|style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;|style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com;|" /etc/nginx/sites-enabled/cheminsnoirs
-          sed -i "s|connect-src 'self' https://\*\.tile\.openstreetmap\.org|connect-src 'self' https://tile.openstreetmap.org https://*.tile.openstreetmap.org|" /etc/nginx/sites-enabled/cheminsnoirs
-          sed -i "s|img-src 'self' data: blob: https://\*\.tile\.openstreetmap\.org|img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org|" /etc/nginx/sites-enabled/cheminsnoirs
-          nginx -t && systemctl reload nginx
-
           # Permissions
-          id cheminsnoirs &>/dev/null || useradd -r -s /usr/sbin/nologin -d /opt/cheminsnoirs -M cheminsnoirs
           chmod 750 /opt/cheminsnoirs/backend_partial
           chown -R cheminsnoirs:cheminsnoirs /opt/cheminsnoirs
           chmod 755 /opt/cheminsnoirs /opt/cheminsnoirs/frontend
@@ -136,9 +112,7 @@ jobs:
           echo "=== MEMORY ===" && free -h
           echo "=== DISK ===" && df -h /opt/cheminsnoirs
           echo "=== PBF ===" && ls -lh /opt/cheminsnoirs/data/*.pbf 2>/dev/null || echo "NO PBF"
-          echo "=== CACHE ===" && ls -lh /opt/cheminsnoirs/data/cache/ 2>/dev/null || echo "NO CACHE"
-          echo "=== RECENT LOGS ===" && journalctl -u cheminsnoirs --no-pager -n 20
-          echo "=== NGINX CSP ===" && grep -o 'connect-src[^;]*' /etc/nginx/sites-enabled/cheminsnoirs
+          echo "=== SERVICE ===" && systemctl status cheminsnoirs --no-pager | head -10
           FINALIZE
 
       - name: Cleanup SSH key
