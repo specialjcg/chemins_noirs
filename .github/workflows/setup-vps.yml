@@ -1,0 +1,206 @@
+name: Setup VPS (first time)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p 9999 VPS-779132.ssh.vps1euro.fr >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Install prerequisites on VPS
+        run: |
+          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'EOF'
+          set -e
+
+          # Paquets système
+          apt-get update -qq
+          apt-get install -y -qq nginx ufw fail2ban unattended-upgrades postgresql postgresql-contrib
+
+          # Utilisateur dédié
+          id cheminsnoirs &>/dev/null || useradd -r -s /usr/sbin/nologin -d /opt/cheminsnoirs -M cheminsnoirs
+
+          # Répertoires
+          mkdir -p /opt/cheminsnoirs/{data/cache,frontend}
+          chown -R cheminsnoirs:cheminsnoirs /opt/cheminsnoirs
+
+          # Firewall
+          ufw default deny incoming
+          ufw default allow outgoing
+          ufw allow ssh
+          ufw allow 80/tcp
+          ufw allow 443/tcp
+          ufw --force enable
+
+          echo "VPS prerequisites installed"
+          EOF
+
+      - name: Install systemd service
+        run: |
+          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'SYSTEMD_EOF'
+          cat > /etc/systemd/system/cheminsnoirs.service << 'EOF'
+          [Unit]
+          Description=Chemins Noirs - Générateur GPX anti-bitume
+          After=network.target postgresql.service
+          Wants=postgresql.service
+
+          [Service]
+          Type=simple
+          User=cheminsnoirs
+          Group=cheminsnoirs
+          WorkingDirectory=/opt/cheminsnoirs
+          ExecStart=/opt/cheminsnoirs/backend_partial
+          Restart=always
+          RestartSec=5
+          Environment=RUST_LOG=info
+          Environment=PBF_PATH=/opt/cheminsnoirs/data/rhone-alpes-251111.osm.pbf
+          Environment=CACHE_DIR=/opt/cheminsnoirs/data/cache
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ReadWritePaths=/opt/cheminsnoirs/data
+          PrivateTmp=true
+          PrivateDevices=true
+          ProtectKernelTunables=true
+          ProtectKernelModules=true
+          ProtectKernelLogs=true
+          ProtectControlGroups=true
+          ProtectClock=true
+          ProtectHostname=true
+          RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+          RestrictNamespaces=true
+          RestrictRealtime=true
+          RestrictSUIDSGID=true
+          LockPersonality=true
+          MemoryDenyWriteExecute=true
+          SystemCallArchitectures=native
+          SystemCallFilter=@system-service
+          SystemCallFilter=~@privileged @resources
+          CapabilityBoundingSet=
+          AmbientCapabilities=
+          LimitNOFILE=65536
+          LimitNPROC=512
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          systemctl daemon-reload
+          systemctl enable cheminsnoirs
+          SYSTEMD_EOF
+
+      - name: Install nginx config
+        run: |
+          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'NGINX_EOF'
+          cat > /etc/nginx/sites-available/cheminsnoirs << 'EOF'
+          limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+          limit_req_zone $binary_remote_addr zone=static_limit:10m rate=30r/s;
+          limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
+
+          server {
+              listen 80;
+              listen [::]:80;
+              server_name _;
+
+              add_header X-Content-Type-Options "nosniff" always;
+              add_header X-Frame-Options "DENY" always;
+              add_header X-XSS-Protection "1; mode=block" always;
+              add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+              add_header Permissions-Policy "camera=(), microphone=(), geolocation=(self), payment=()" always;
+              add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://*.arcgisonline.com https://server.arcgisonline.com; connect-src 'self' https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://api.maptiler.com https://demotiles.maplibre.org https://nominatim.openstreetmap.org https://*.arcgisonline.com; worker-src 'self' blob:;" always;
+
+              server_tokens off;
+              client_max_body_size 1m;
+              client_body_timeout 10s;
+              client_header_timeout 10s;
+              limit_conn conn_limit 20;
+
+              root /opt/cheminsnoirs/frontend;
+              index index.html;
+
+              gzip on;
+              gzip_vary on;
+              gzip_proxied any;
+              gzip_comp_level 6;
+              gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
+
+              location /assets/ {
+                  expires 1y;
+                  add_header Cache-Control "public, immutable";
+                  limit_req zone=static_limit burst=50 nodelay;
+              }
+
+              location ~* \.(css|js|json|ico|png|jpg|jpeg|gif|svg|woff2?)$ {
+                  expires 7d;
+                  add_header Cache-Control "public";
+                  limit_req zone=static_limit burst=50 nodelay;
+              }
+
+              location / {
+                  try_files $uri $uri/ /index.html;
+                  limit_req zone=static_limit burst=20 nodelay;
+              }
+
+              location /api/ {
+                  limit_req zone=api_limit burst=20 nodelay;
+                  limit_req_status 429;
+                  proxy_pass http://127.0.0.1:8080/api/;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_read_timeout 120s;
+                  proxy_send_timeout 30s;
+                  proxy_connect_timeout 5s;
+              }
+
+              location ~ /\. { deny all; return 404; }
+              location ~* \.(php|asp|aspx|jsp|cgi|pl|py|sh|bash|env|git|svn|htaccess|htpasswd|ini|log|sql|bak|swp|tmp)$ { deny all; return 404; }
+          }
+          EOF
+
+          ln -sf /etc/nginx/sites-available/cheminsnoirs /etc/nginx/sites-enabled/
+          rm -f /etc/nginx/sites-enabled/default
+          grep -q "server_tokens off" /etc/nginx/nginx.conf || sed -i '/http {/a\    server_tokens off;' /etc/nginx/nginx.conf
+          nginx -t && systemctl reload nginx
+
+          echo "nginx configured"
+          NGINX_EOF
+
+      - name: Install fail2ban rules
+        run: |
+          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'EOF'
+          cat > /etc/fail2ban/jail.d/cheminsnoirs.conf << 'F2B'
+          [nginx-limit-req]
+          enabled = true
+          port = http,https
+          logpath = /var/log/nginx/error.log
+          maxretry = 10
+          findtime = 60
+          bantime = 600
+
+          [nginx-botsearch]
+          enabled = true
+          port = http,https
+          logpath = /var/log/nginx/access.log
+          maxretry = 5
+          findtime = 60
+          bantime = 3600
+          F2B
+
+          systemctl restart fail2ban
+          echo "fail2ban configured"
+          EOF
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy

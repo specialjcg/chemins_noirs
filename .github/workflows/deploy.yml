@@ -1,0 +1,120 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.agents/**'
+      - '.claude/**'
+      - '.continue/**'
+      - '.junie/**'
+      - '.openhands/**'
+      - '.windsurf/**'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Cache Rust build ---
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Cache target dir
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-target-
+
+      # --- Install system deps ---
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pkg-config libproj-dev libsqlite3-dev
+
+      # --- Install Rust ---
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # --- Build Rust binary ---
+      - name: Build release binary
+        run: cargo build --release -p backend --bin backend_partial
+
+      # --- Build frontend (Elm + Vite) ---
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend-elm/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd frontend-elm
+          npm ci
+          npm run build
+
+      # --- Deploy to VPS ---
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p 9999 VPS-779132.ssh.vps1euro.fr >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Stop service on VPS
+        run: |
+          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr \
+            "systemctl stop cheminsnoirs || true"
+
+      - name: Deploy binary
+        run: |
+          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr \
+            "mkdir -p /opt/cheminsnoirs/{data/cache,frontend}"
+          scp -P 9999 -i ~/.ssh/id_deploy \
+            target/release/backend_partial \
+            root@VPS-779132.ssh.vps1euro.fr:/opt/cheminsnoirs/backend_partial
+
+      - name: Deploy frontend
+        run: |
+          scp -P 9999 -i ~/.ssh/id_deploy -r \
+            frontend-elm/dist/* \
+            root@VPS-779132.ssh.vps1euro.fr:/opt/cheminsnoirs/frontend/
+
+      - name: Set permissions and start service
+        run: |
+          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'EOF'
+          set -e
+
+          # Créer l'utilisateur si nécessaire
+          id cheminsnoirs &>/dev/null || useradd -r -s /usr/sbin/nologin -d /opt/cheminsnoirs -M cheminsnoirs
+
+          # Permissions
+          chmod 750 /opt/cheminsnoirs/backend_partial
+          chown -R cheminsnoirs:cheminsnoirs /opt/cheminsnoirs
+          chmod 755 /opt/cheminsnoirs /opt/cheminsnoirs/frontend
+          find /opt/cheminsnoirs/frontend -type f -exec chmod 644 {} \;
+
+          # Démarrer seulement si PBF présent
+          if [ -f /opt/cheminsnoirs/data/rhone-alpes-251111.osm.pbf ]; then
+            systemctl start cheminsnoirs
+            sleep 3
+            systemctl is-active cheminsnoirs
+          else
+            echo "PBF absent — service non démarré (deploy frontend/binary OK)"
+          fi
+          EOF
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy

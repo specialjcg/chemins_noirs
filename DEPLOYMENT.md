@@ -29,48 +29,71 @@ Déploiement de Chemins Noirs sur un VPS via GitHub.
                                                   └───────────────┘
 ```
 
-## Prérequis
+## CI/CD : Déploiement automatique via GitHub Actions
 
-| Composant | Version | Usage |
-|-----------|---------|-------|
-| Docker | 20+ | Cross-compilation pour glibc 2.35 |
-| VPS | Ubuntu 22.04 | Serveur production (2 GB RAM minimum) |
-| PBF | ~500 MB | Données OSM pour le routage |
+Chaque push sur `master` déclenche automatiquement :
+1. Build du backend Rust (release, Ubuntu 22.04)
+2. Build du frontend Elm + Vite
+3. Déploiement sur le VPS via SSH
 
-## Étape 1 : Configuration
+### Setup initial (une seule fois)
+
+**1. Ajouter la clé SSH dans GitHub Secrets :**
 
 ```bash
-# Modifier la config SSH dans deploy.sh (lignes 14-16) :
-VPS_USER="root"
-VPS_HOST="votre-vps.example.com"
-VPS_PORT="22"
+# Générer une clé SSH dédiée au déploiement
+ssh-keygen -t ed25519 -C "github-deploy" -f ~/.ssh/id_deploy_cheminsnoirs -N ""
+
+# Copier la clé publique sur le VPS
+ssh-copy-id -p 9999 -i ~/.ssh/id_deploy_cheminsnoirs.pub root@VPS-779132.ssh.vps1euro.fr
+
+# Copier la clé privée dans le presse-papier
+cat ~/.ssh/id_deploy_cheminsnoirs
 ```
 
-## Étape 2 : Premier déploiement
+Puis dans GitHub : **Settings → Secrets → Actions → New secret**
+- Nom : `VPS_SSH_KEY`
+- Valeur : le contenu de la clé privée
+
+**2. Lancer le setup VPS (workflow manuel) :**
+
+Dans GitHub : **Actions → "Setup VPS (first time)" → Run workflow**
+
+Cela installe nginx, firewall, fail2ban, systemd service sur le VPS.
+
+**3. Transférer le fichier PBF :**
 
 ```bash
-# Tout en une commande : prérequis VPS + build + deploy
-./deploy.sh full
-
-# Transférer le fichier PBF (~500 MB, peut prendre du temps)
 ./deploy.sh upload-pbf
-
-# Démarrer le service
-./deploy.sh restart
 ```
 
-## Étape 3 : HTTPS (Let's Encrypt)
+**4. HTTPS (sur le VPS) :**
 
 ```bash
-ssh user@votre-vps.example.com
-
+ssh -p 9999 root@VPS-779132.ssh.vps1euro.fr
 apt install certbot python3-certbot-nginx
 certbot --nginx -d votredomaine.example.com
 ```
 
-Certbot ajoute automatiquement HSTS et la redirection HTTP→HTTPS.
+### Ensuite : push → deploy automatique
 
-## Étape 4 : PostgreSQL (optionnel)
+```bash
+git push origin master
+# → GitHub Actions build + déploie automatiquement
+```
+
+## Déploiement manuel (alternative)
+
+Si vous préférez déployer depuis votre machine locale :
+
+```bash
+# Modifier la config SSH dans deploy.sh (lignes 14-16)
+./deploy.sh full         # Premier déploiement complet
+./deploy.sh upload-pbf   # Transférer le PBF
+./deploy.sh restart      # Démarrer
+```
+
+## PostgreSQL (optionnel)
 
 ```bash
 ssh user@votre-vps.example.com
