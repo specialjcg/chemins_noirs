@@ -1,0 +1,25 @@
+# Dockerfile pour cross-compilation vers Ubuntu 22.04
+FROM ubuntu:22.04
+
+# Éviter les prompts interactifs
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Installer les dépendances de build
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    libsqlite3-dev \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Installer Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Répertoire de travail
+WORKDIR /app
+
+# Commande par défaut
+CMD ["bash"]

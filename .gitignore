@@ -26,3 +26,8 @@ coverage/
 data/
 backend/data/
 **/cache/
+
+# Deployment artifacts
+deploy_package/
+target-docker/
+.docker-cargo/
