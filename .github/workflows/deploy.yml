@@ -131,6 +131,27 @@ jobs:
           fi
           EOF
 
+      - name: VPS diagnostics
+        run: |
+          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'DIAG'
+          echo "=== MEMORY ==="
+          free -h
+          echo "=== DISK ==="
+          df -h /opt/cheminsnoirs
+          echo "=== PBF FILE ==="
+          ls -lh /opt/cheminsnoirs/data/*.pbf 2>/dev/null || echo "NO PBF"
+          echo "=== CACHE ==="
+          ls -lh /opt/cheminsnoirs/data/cache/ 2>/dev/null || echo "NO CACHE"
+          echo "=== SERVICE STATUS ==="
+          systemctl status cheminsnoirs --no-pager | head -15
+          echo "=== RECENT LOGS ==="
+          journalctl -u cheminsnoirs --no-pager -n 30
+          echo "=== NGINX CSP ==="
+          grep -o 'connect-src[^;]*' /etc/nginx/sites-enabled/cheminsnoirs
+          echo "=== SYSTEMD LIMITS ==="
+          grep -i memory /etc/systemd/system/cheminsnoirs.service 2>/dev/null || echo "no memory limits in service"
+          DIAG
+
       - name: Cleanup SSH key
         if: always()
         run: rm -f ~/.ssh/id_deploy
