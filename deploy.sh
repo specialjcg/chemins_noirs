@@ -192,7 +192,7 @@ server {
     add_header X-XSS-Protection "1; mode=block" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(self), payment=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://*.arcgisonline.com https://server.arcgisonline.com; connect-src 'self' https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://api.maptiler.com https://demotiles.maplibre.org https://nominatim.openstreetmap.org https://*.arcgisonline.com; worker-src 'self' blob:;" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://*.arcgisonline.com https://server.arcgisonline.com https://s3.amazonaws.com; connect-src 'self' https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://api.maptiler.com https://demotiles.maplibre.org https://nominatim.openstreetmap.org https://*.arcgisonline.com https://s3.amazonaws.com; worker-src 'self' blob:;" always;
 
     # Masquer la version nginx
     server_tokens off;
