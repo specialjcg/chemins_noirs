@@ -92,6 +92,21 @@ jobs:
             frontend-elm/dist/* \
             root@VPS-779132.ssh.vps1euro.fr:/opt/cheminsnoirs/frontend/
 
+      - name: Update nginx config
+        run: |
+          scp -P 9999 -i ~/.ssh/id_deploy \
+            deploy.sh \
+            root@VPS-779132.ssh.vps1euro.fr:/tmp/deploy.sh
+          ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'NGINX_EOF'
+          # Extract and update nginx CSP from deploy.sh template
+          # Update CSP headers in nginx config
+          sed -i "s|style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;|style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com;|" /etc/nginx/sites-enabled/cheminsnoirs
+          sed -i "s|connect-src 'self' https://\*\.tile\.openstreetmap\.org|connect-src 'self' https://tile.openstreetmap.org https://*.tile.openstreetmap.org|" /etc/nginx/sites-enabled/cheminsnoirs
+          sed -i "s|img-src 'self' data: blob: https://\*\.tile\.openstreetmap\.org|img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org|" /etc/nginx/sites-enabled/cheminsnoirs
+          nginx -t && systemctl reload nginx
+          rm /tmp/deploy.sh
+          NGINX_EOF
+
       - name: Set permissions and start service
         run: |
           ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr << 'EOF'
