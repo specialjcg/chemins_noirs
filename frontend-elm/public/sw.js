@@ -40,8 +40,12 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // API calls: network-first
+  // API calls: skip service worker for POST requests (routing can take minutes)
+  // Only cache GET API responses
   if (url.pathname.startsWith('/api/')) {
+    if (event.request.method !== 'GET') {
+      return; // Let the browser handle POST requests directly
+    }
     event.respondWith(
       fetch(event.request)
         .then((response) => {
