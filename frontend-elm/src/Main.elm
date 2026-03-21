@@ -1484,34 +1484,67 @@ update msg model =
         GameKeyForward ->
             case model.appMode of
                 Orienteering gs ->
-                    if gs.gameStatus == GameRunning && not model.pending && gs.movePath == Nothing then
+                    if gs.gameStatus == GameRunning then
                         let
-                            bearingRad =
-                                gs.playerBearing * pi / 180
+                            -- Find the best next position by walking along roads
+                            nextPos =
+                                advanceAlongRoad gs.playerPosition gs.playerBearing 5.0 gs.roads
 
-                            distM =
-                                5
+                            -- Calculate bearing towards new position
+                            newBearing =
+                                bearingBetween gs.playerPosition nextPos
 
-                            dLat =
-                                cos bearingRad * distM / 111000
+                            -- Check proximity to control points
+                            currentCp =
+                                List.drop gs.currentPointIndex gs.controlPoints
+                                    |> List.head
 
-                            dLon =
-                                sin bearingRad * distM / (111000 * cos (gs.playerPosition.lat * pi / 180))
+                            ( updatedCps, nextIdx, finished ) =
+                                case currentCp of
+                                    Just cp ->
+                                        if haversineMeters nextPos cp.position < 30 then
+                                            let
+                                                cps =
+                                                    List.indexedMap
+                                                        (\i c ->
+                                                            if i == gs.currentPointIndex then
+                                                                { c | found = True }
 
-                            target =
-                                { lat = gs.playerPosition.lat + dLat
-                                , lon = gs.playerPosition.lon + dLon
-                                }
+                                                            else
+                                                                c
+                                                        )
+                                                        gs.controlPoints
 
-                            request =
-                                { start = gs.playerPosition
-                                , end = target
-                                , wPop = 5.0
-                                , wPaved = 8.0
+                                                newIdx2 =
+                                                    gs.currentPointIndex + 1
+                                            in
+                                            ( cps, newIdx2, newIdx2 >= List.length gs.controlPoints )
+
+                                        else
+                                            ( gs.controlPoints, gs.currentPointIndex, False )
+
+                                    Nothing ->
+                                        ( gs.controlPoints, gs.currentPointIndex, False )
+
+                            newStatus =
+                                if finished then
+                                    GameFinished
+
+                                else
+                                    gs.gameStatus
+
+                            newGs =
+                                { gs
+                                    | playerPosition = nextPos
+                                    , playerBearing = newBearing
+                                    , controlPoints = updatedCps
+                                    , currentPointIndex = nextIdx
+                                    , gameStatus = newStatus
+                                    , foundFlash = nextIdx > gs.currentPointIndex
                                 }
                         in
-                        ( { model | pending = True }
-                        , Api.fetchRoute request GameRouteFetched
+                        ( { model | appMode = Orienteering newGs }
+                        , Api.fetchRoads nextPos 0.005 RoadsFetched
                         )
 
                     else
@@ -1715,6 +1748,89 @@ subscriptions model =
 
 
 -- HELPERS
+
+
+{-| Advance player along the nearest road in the direction of bearing.
+Finds the closest road point ahead and moves there.
+-}
+advanceAlongRoad : Coordinate -> Float -> Float -> List (List Coordinate) -> Coordinate
+advanceAlongRoad pos bearing distM roads =
+    let
+        bearingRad =
+            bearing * pi / 180
+
+        -- All road points from all roads
+        allPoints =
+            List.concatMap identity roads
+
+        -- Filter points that are roughly in the direction we're facing
+        -- and within a reasonable distance
+        candidates =
+            List.filterMap
+                (\pt ->
+                    let
+                        dist =
+                            haversineMeters pos pt
+
+                        ptBearing =
+                            bearingBetween pos pt
+
+                        -- Angle difference between player bearing and direction to point
+                        angleDiff =
+                            abs (ptBearing - bearing)
+                                |> (\d ->
+                                        if d > 180 then
+                                            360 - d
+
+                                        else
+                                            d
+                                   )
+                    in
+                    -- Point must be: 2-20m away, within 90° of bearing direction
+                    if dist > 1 && dist < 20 && angleDiff < 90 then
+                        Just ( dist, angleDiff, pt )
+
+                    else
+                        Nothing
+                )
+                allPoints
+
+        -- Sort by angle difference first (prefer points in our direction), then distance
+        best =
+            candidates
+                |> List.sortBy (\( dist, angle, _ ) -> angle * 2 + dist)
+                |> List.head
+    in
+    case best of
+        Just ( _, _, pt ) ->
+            pt
+
+        Nothing ->
+            -- No road point found, fallback: move in bearing direction
+            { lat = pos.lat + cos bearingRad * distM / 111000
+            , lon = pos.lon + sin bearingRad * distM / (111000 * cos (pos.lat * pi / 180))
+            }
+
+
+bearingBetween : Coordinate -> Coordinate -> Float
+bearingBetween from to =
+    let
+        dLon =
+            (to.lon - from.lon) * pi / 180
+
+        lat1 =
+            from.lat * pi / 180
+
+        lat2 =
+            to.lat * pi / 180
+
+        y =
+            sin dLon * cos lat2
+
+        x =
+            cos lat1 * sin lat2 - sin lat1 * cos lat2 * cos dLon
+    in
+    toFloat (modBy 360 (round (atan2 y x * 180 / pi) + 360))
 
 
 handleMapClick : Float -> Float -> Model -> ( Model, Cmd Msg )
