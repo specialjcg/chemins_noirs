@@ -187,3 +187,13 @@ encodeMaybe encoder maybeValue =
 
         Nothing ->
             Encode.null
+
+
+encodeRoadsRequest : Coordinate -> Float -> Encode.Value
+encodeRoadsRequest center marginDeg =
+    Encode.object
+        [ ( "min_lat", Encode.float (center.lat - marginDeg) )
+        , ( "max_lat", Encode.float (center.lat + marginDeg) )
+        , ( "min_lon", Encode.float (center.lon - marginDeg) )
+        , ( "max_lon", Encode.float (center.lon + marginDeg) )
+        ]

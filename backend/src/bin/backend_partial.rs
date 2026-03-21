@@ -109,6 +109,31 @@ fn pad_bbox(bbox: &BoundingBox) -> BoundingBox {
     }
 }
 
+/// Handler for /api/roads - returns all road polylines in a bounding box
+async fn roads_handler(
+    State(config): State<Arc<PartialGraphConfig>>,
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let min_lat = req["min_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lat required".into()))?;
+    let max_lat = req["max_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lat required".into()))?;
+    let min_lon = req["min_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lon required".into()))?;
+    let max_lon = req["max_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lon required".into()))?;
+
+    let bbox = BoundingBox { min_lat, max_lat, min_lon, max_lon };
+    let engine = get_or_build_engine(&config, bbox).await?;
+
+    let roads = engine.get_roads_in_bbox(min_lat, max_lat, min_lon, max_lon);
+
+    let roads_json: Vec<Vec<serde_json::Value>> = roads.iter().map(|road| {
+        road.iter().map(|c| serde_json::json!({"lat": c.lat, "lon": c.lon})).collect()
+    }).collect();
+
+    Ok(Json(serde_json::json!({
+        "roads": roads_json,
+        "count": roads_json.len()
+    })))
+}
+
 /// Handler for /api/route - generates partial graph on-demand and finds route
 async fn route_handler(
     State(config): State<Arc<PartialGraphConfig>>,
@@ -574,6 +599,7 @@ async fn main() {
         .route("/api/loops", axum::routing::post(loop_route_handler))
         .route("/api/route", axum::routing::post(route_handler))
         .route("/api/route/multi", axum::routing::post(multi_route_handler))
+        .route("/api/roads", axum::routing::post(roads_handler))
         .route("/api/click_mode", axum::routing::get(click_mode_handler))
         .route("/api/pois", axum::routing::get(pois_handler))
         .layer(cors.clone())

@@ -84,6 +84,21 @@ fetchMultiPointRoute request toMsg =
 
 
 
+-- ROADS (for game 3D view)
+
+
+fetchRoads : Coordinate -> Float -> (Result Http.Error (List (List Coordinate)) -> msg) -> Cmd msg
+fetchRoads center marginDeg toMsg =
+    Http.post
+        { url = "/api/roads"
+        , body =
+            Http.jsonBody
+                (Encoders.encodeRoadsRequest center marginDeg)
+        , expect = Http.expectJson toMsg Decoders.decodeRoadsResponse
+        }
+
+
+
 -- SAVED ROUTES (PostgreSQL)
 
 

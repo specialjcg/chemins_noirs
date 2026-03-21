@@ -165,6 +165,16 @@ view model =
                     , onClick ImportGpxClicked
                     ]
                     [ text "Importer GPX" ]
+                , if List.length model.waypoints >= 2 then
+                    button
+                        [ type_ "button"
+                        , class "btn-game"
+                        , onClick EnterOrienteeringMode
+                        ]
+                        [ text "Course d'Orientation" ]
+
+                  else
+                    text ""
                 ]
 
           else

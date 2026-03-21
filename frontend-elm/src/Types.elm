@@ -38,6 +38,7 @@ type alias Model =
     , originalResponse : Maybe RouteResponse
     , freehandDrawing : Maybe FreehandDrawingState
     , freehandEnabled : Bool
+    , appMode : AppMode
     }
 
 
@@ -125,6 +126,7 @@ initialModel =
     , originalResponse = Nothing
     , freehandDrawing = Nothing
     , freehandEnabled = False
+    , appMode = Planning
     }
 
 
@@ -195,6 +197,30 @@ type Msg
     | CancelFreehandDrawing
     | ClearFreehandSegment Int
     | NoOp
+      -- Orienteering game
+    | EnterOrienteeringMode
+    | ExitOrienteeringMode
+    | StartGame
+    | GameTick Int
+    | PlayerClickedDestination Float Float
+    | PlayerPositionUpdate Float Float
+    | PlayerBearingChanged Float
+    | PlayerMovementFinished
+    | GameRouteFetched (Result Http.Error RouteResponse)
+    | ToggleTopoOverlay
+    | PauseGame
+    | ResumeGame
+    | GameSpeedUp
+    | GameSpeedDown
+    | SetTargetBearing Float
+    | ClearTargetBearing
+    | GameKeyLeft
+    | GameKeyRight
+    | GameKeyForward
+    | RoadsFetched (Result Http.Error (List (List Coordinate)))
+    | GameMouseDrag Float
+    | GameMouseDown Float
+    | GameMouseUp
 
 
 
@@ -222,6 +248,46 @@ type AnimationState
     = Stopped
     | Playing
     | Paused
+
+
+type AppMode
+    = Planning
+    | Orienteering GameState
+
+
+type alias GameState =
+    { controlPoints : List ControlPoint
+    , currentPointIndex : Int
+    , playerPosition : Coordinate
+    , playerBearing : Float
+    , elapsedMs : Int
+    , gameStatus : GameStatus
+    , movePath : Maybe (List Coordinate)
+    , moveProgress : Float
+    , totalDistanceM : Float
+    , showTopoOverlay : Bool
+    , nearestCpDistance : Maybe Float
+    , foundFlash : Bool
+    , paused : Bool
+    , speedMultiplier : Float
+    , targetBearing : Maybe Float
+    , roads : List (List Coordinate)
+    , isDragging : Bool
+    , lastMouseX : Float
+    }
+
+
+type alias ControlPoint =
+    { position : Coordinate
+    , label : String
+    , found : Bool
+    }
+
+
+type GameStatus
+    = GameSetup
+    | GameRunning
+    | GameFinished
 
 
 
@@ -396,6 +462,84 @@ httpErrorToString error =
 
         Http.BadBody body ->
             "Réponse invalide: " ++ body
+
+
+haversineMeters : Coordinate -> Coordinate -> Float
+haversineMeters a b =
+    let
+        r =
+            6371000
+
+        dLat =
+            degrees (b.lat - a.lat)
+
+        dLon =
+            degrees (b.lon - a.lon)
+
+        lat1 =
+            degrees a.lat
+
+        lat2 =
+            degrees b.lat
+
+        sinDLat =
+            sin (dLat / 2)
+
+        sinDLon =
+            sin (dLon / 2)
+
+        h =
+            sinDLat * sinDLat + cos lat1 * cos lat2 * sinDLon * sinDLon
+    in
+    2 * r * asin (sqrt h)
+
+
+isNearControlPoint : Coordinate -> ControlPoint -> Bool
+isNearControlPoint playerPos cp =
+    haversineMeters playerPos cp.position < 30
+
+
+initialGameState : List Coordinate -> GameState
+initialGameState waypoints =
+    let
+        -- First waypoint is start (not a control point to find)
+        -- Remaining waypoints are control points
+        cps =
+            List.drop 1 waypoints
+
+        controlPoints =
+            List.indexedMap
+                (\i coord ->
+                    { position = coord
+                    , label = String.fromInt (i + 1)
+                    , found = False
+                    }
+                )
+                cps
+
+        startPos =
+            List.head waypoints
+                |> Maybe.withDefault { lat = 0, lon = 0 }
+    in
+    { controlPoints = controlPoints
+    , currentPointIndex = 0
+    , playerPosition = startPos
+    , playerBearing = 0
+    , elapsedMs = 0
+    , gameStatus = GameSetup
+    , movePath = Nothing
+    , moveProgress = 0
+    , totalDistanceM = 0
+    , showTopoOverlay = False
+    , nearestCpDistance = Nothing
+    , foundFlash = False
+    , paused = False
+    , speedMultiplier = 1.0
+    , targetBearing = Nothing
+    , roads = []
+    , isDragging = False
+    , lastMouseX = 0
+    }
 
 
 routeBounds : RouteResponse -> RouteBounds

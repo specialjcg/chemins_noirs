@@ -1243,6 +1243,22 @@ small {
   color: white;
 }
 
+.btn-game {
+  background: rgba(255, 152, 0, 0.1);
+  color: #ff9800;
+  border: 1px solid #ff9800;
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+.btn-game:hover {
+  background: #ff9800;
+  color: white;
+}
+
 /* ─── KM Markers (distance labels, NOT interactive) ─── */
 .km-marker {
   width: auto;
@@ -1650,3 +1666,518 @@ small {
     overflow-y: auto;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   ORIENTEERING GAME HUD
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 3D terrain container */
+#terrain3d {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2;
+  display: none;
+}
+
+#terrain3d canvas {
+  display: block;
+}
+
+
+/* Game mode: fullscreen, transparent, no blur */
+.app-container.game-mode {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  max-width: none !important;
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+  z-index: 10 !important;
+}
+
+.game-hud {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  pointer-events: none;
+  z-index: 100000 !important;
+  background: transparent !important;
+}
+
+.game-hud > * { pointer-events: auto; }
+
+/* Compass — military style, top left */
+.game-compass {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 100000;
+  pointer-events: auto;
+}
+
+.compass-body {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #2a2a20 0%, #1a1a14 70%, #0e0e0a 100%);
+  border: 3px solid #555545;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.7), inset 0 1px 3px rgba(255,255,255,0.05);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Outer fixed ring with degree markings */
+.compass-outer-ring {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+}
+
+.compass-deg {
+  position: absolute;
+  font-family: 'Courier New', monospace;
+  font-size: 9px;
+  color: #888870;
+  font-weight: bold;
+}
+.compass-deg-0 { top: 4px; left: 50%; transform: translateX(-50%); }
+.compass-deg-90 { right: 4px; top: 50%; transform: translateY(-50%); }
+.compass-deg-180 { bottom: 4px; left: 50%; transform: translateX(-50%); }
+.compass-deg-270 { left: 4px; top: 50%; transform: translateY(-50%); }
+
+/* Rotating inner dial */
+.compass-dial {
+  position: absolute;
+  top: 14px; left: 14px; right: 14px; bottom: 14px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #333328 0%, #252520 100%);
+  border: 1px solid #444438;
+  transition: transform 0.12s ease-out;
+}
+
+/* Cardinal points on rotating dial */
+.compass-cardinal {
+  position: absolute;
+  font-family: 'Courier New', monospace;
+  font-weight: bold;
+  font-size: 13px;
+  color: #aaa898;
+}
+
+.compass-cardinal.compass-n { top: 3px; left: 50%; transform: translateX(-50%); color: #ff4444; font-size: 16px; }
+.compass-cardinal.compass-s { bottom: 3px; left: 50%; transform: translateX(-50%); color: #ccc; }
+.compass-cardinal.compass-e { right: 5px; top: 50%; transform: translateY(-50%); }
+.compass-cardinal.compass-w { left: 5px; top: 50%; transform: translateY(-50%); }
+
+/* North needle (red) */
+.compass-needle-n {
+  position: absolute;
+  top: 22px;
+  left: 50%;
+  width: 4px;
+  height: 34px;
+  margin-left: -2px;
+  background: linear-gradient(to top, #cc3333, #ff4444);
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+}
+
+/* South needle (white) */
+.compass-needle-s {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  width: 4px;
+  height: 34px;
+  margin-left: -2px;
+  background: linear-gradient(to bottom, #ddd, #999);
+  clip-path: polygon(50% 100%, 100% 0%, 0% 0%);
+}
+
+/* Center pivot */
+.compass-pivot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: #888;
+  border: 1px solid #aaa;
+}
+
+/* Fixed lubber line (reading mark at top) */
+.compass-lubber {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  width: 2px;
+  height: 12px;
+  margin-left: -1px;
+  background: #ff9800;
+  z-index: 5;
+}
+
+/* Target bearing marker (fixed on outer ring) */
+.compass-target-marker {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 0;
+  height: 0;
+  transform-origin: 0 70px;
+  z-index: 6;
+}
+.compass-target-marker::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: -5px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 10px solid #00ff88;
+}
+
+/* Digital readout below compass */
+.compass-readout {
+  margin-top: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  font-weight: bold;
+  color: #ff9800;
+  background: rgba(12, 16, 13, 0.9);
+  padding: 2px 10px;
+  border-radius: 3px;
+  border: 1px solid #555545;
+  letter-spacing: 1px;
+}
+
+/* Timer — top center */
+.game-timer {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Courier New', monospace;
+  font-size: 36px;
+  font-weight: bold;
+  color: #fff;
+  background: rgba(12, 16, 13, 0.9);
+  padding: 10px 28px;
+  border: 2px solid var(--accent, #c8a96e);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  letter-spacing: 4px;
+  z-index: 100000;
+  pointer-events: auto;
+}
+
+/* Control point list — top right */
+.game-cp-list {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: rgba(12, 16, 13, 0.9);
+  border: 1px solid var(--border, #3a362e);
+  border-radius: 6px;
+  padding: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  z-index: 100000;
+  pointer-events: auto;
+}
+
+.game-cp-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: var(--text-secondary, #a09880);
+}
+
+.game-cp-item.found {
+  color: #4caf50;
+  text-decoration: line-through;
+}
+
+.game-cp-item.current {
+  color: #ff9800;
+  font-weight: bold;
+}
+
+.cp-number {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 11px;
+}
+
+.cp-status { font-size: 11px; }
+
+/* Game overlays */
+.game-start-overlay,
+.game-finish-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(12, 16, 13, 0.95);
+  border: 2px solid var(--accent, #c8a96e);
+  border-radius: 8px;
+  padding: 32px;
+  text-align: center;
+  color: #fff;
+  min-width: 300px;
+  z-index: 100000;
+  pointer-events: auto;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+}
+
+.game-start-overlay h2,
+.game-finish-overlay h2 {
+  font-family: 'Courier New', monospace;
+  margin: 0 0 12px;
+  color: var(--accent, #c8a96e);
+}
+
+.final-time {
+  font-family: 'Courier New', monospace;
+  font-size: 48px;
+  font-weight: bold;
+  color: var(--accent, #c8a96e);
+  margin: 16px 0;
+}
+
+.game-btn {
+  padding: 10px 24px;
+  border: 1px solid var(--accent, #c8a96e);
+  background: transparent;
+  color: var(--accent, #c8a96e);
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  cursor: pointer;
+  margin: 8px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.game-btn:hover {
+  background: rgba(200, 169, 110, 0.2);
+}
+
+.start-btn {
+  background: rgba(200, 169, 110, 0.15);
+  font-size: 18px;
+  padding: 12px 32px;
+}
+
+.game-controls {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(12, 16, 13, 0.9);
+  padding: 12px 20px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #3a362e);
+  z-index: 100000;
+  pointer-events: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+
+.game-status {
+  color: var(--text-secondary, #a09880);
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.abandon-btn {
+  border-color: #ff4444;
+  color: #ff4444;
+  font-size: 12px;
+  padding: 6px 12px;
+}
+
+/* Player marker */
+.game-player-marker {
+  cursor: default;
+}
+
+/* Control point markers on map */
+.game-control-point {
+  cursor: default;
+}
+
+.game-control-point .cp-circle {
+  width: 28px;
+  height: 28px;
+  background: rgba(255, 152, 0, 0.9);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.game-control-point.found .cp-circle {
+  background: rgba(76, 175, 80, 0.9);
+}
+
+/* Found flash animation */
+.game-found-flash {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: 'Courier New', monospace;
+  font-size: 48px;
+  font-weight: bold;
+  color: #4caf50;
+  text-shadow: 0 0 20px rgba(76, 175, 80, 0.8), 0 2px 4px rgba(0,0,0,0.8);
+  z-index: 100001;
+  pointer-events: none;
+  animation: flashPulse 1.5s ease-out forwards;
+}
+
+@keyframes flashPulse {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+  20% { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.5); }
+}
+
+/* Proximity indicator */
+.game-proximity {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Courier New', monospace;
+  font-size: 18px;
+  font-weight: bold;
+  color: #ff9800;
+  background: rgba(12, 16, 13, 0.9);
+  padding: 8px 20px;
+  border: 1px solid #ff9800;
+  border-radius: 4px;
+  z-index: 100000;
+  pointer-events: none;
+  animation: proximityPulse 1s ease-in-out infinite;
+}
+
+@keyframes proximityPulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; border-color: #ffcc00; color: #ffcc00; }
+}
+
+/* Map button */
+.map-btn {
+  border-color: #2196f3 !important;
+  color: #2196f3 !important;
+}
+
+.map-btn:hover {
+  background: rgba(33, 150, 243, 0.2) !important;
+}
+
+/* Game rules text */
+.game-rules {
+  font-size: 13px;
+  color: var(--text-secondary, #a09880);
+  line-height: 1.5;
+  margin: 12px 0;
+}
+
+/* Target bearing text */
+.compass-target-text {
+  color: #00ff88;
+  margin-left: 4px;
+}
+
+/* Compass adjustment buttons */
+.compass-adjust {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.compass-adj-btn {
+  background: rgba(12, 16, 13, 0.9);
+  border: 1px solid #555545;
+  color: #aaa898;
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.compass-adj-btn:hover {
+  background: #333328;
+  color: #fff;
+}
+.compass-clear {
+  color: #ff4444;
+  border-color: #ff4444;
+}
+
+/* Speed controls */
+.game-speed-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.speed-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0 !important;
+  font-size: 16px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.speed-label {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: var(--accent, #c8a96e);
+  min-width: 32px;
+  text-align: center;
+}
+
+.pause-btn {
+  border-color: #ff9800 !important;
+  color: #ff9800 !important;
+}
+
+.play-btn {
+  border-color: #4caf50 !important;
+  color: #4caf50 !important;
+}
+

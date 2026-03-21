@@ -6,16 +6,21 @@ Approche fonctionnelle pure : pas de mutations, fonctions pures, gestion explici
 
 import Api
 import Browser
+import Browser.Events
+import Time
 import Decoders
 import Encoders
 import Html exposing (..)
-import Html.Attributes exposing (class)
+import Html.Attributes exposing (class, style)
+import Html.Events
 import Json.Decode
 import Ports
 import Dict exposing (Dict)
 import Types exposing (..)
 import View.Form as Form
+import View.Game as Game
 import View.Preview as Preview
+import View.World3D as World3D
 
 
 
@@ -339,93 +344,12 @@ update msg model =
                     ( model, Cmd.none )
 
         MapClicked lat lon ->
-            let
-                coord =
-                    { lat = lat, lon = lon }
+            case model.appMode of
+                Orienteering _ ->
+                    update (PlayerClickedDestination lat lon) model
 
-                maxWp =
-                    case model.routeMode of
-                        PointToPoint ->
-                            2
-
-                        Loop ->
-                            1
-
-                        MultiPoint ->
-                            999
-
-                wpCount =
-                    List.length model.waypoints
-            in
-            if model.freehandEnabled && model.routeMode == MultiPoint && model.lastResponse /= Nothing then
-                -- Freehand drawing mode
-                case model.freehandDrawing of
-                    Nothing ->
-                        -- Start drawing: find nearest waypoint (not the last one)
-                        case findNearestWaypoint coord model.waypoints of
-                            Just ( idx, dist ) ->
-                                if dist < 0.1 && idx < List.length model.waypoints - 1 then
-                                    let
-                                        newModel =
-                                            { model | freehandDrawing = Just { fromIdx = idx, points = [] } }
-                                    in
-                                    rebuildAndDisplayRoute newModel
-
-                                else
-                                    ( model, Cmd.none )
-
-                            Nothing ->
-                                ( model, Cmd.none )
-
-                    Just state ->
-                        -- Drawing in progress: check if finishing or adding point
-                        let
-                            targetIdx =
-                                state.fromIdx + 1
-
-                            targetWp =
-                                getAt targetIdx model.waypoints
-                        in
-                        case targetWp of
-                            Just target ->
-                                if haversineKm coord target < 0.1 then
-                                    -- Finish: store segment
-                                    let
-                                        newModel =
-                                            { model
-                                                | freehandSegments = Dict.insert state.fromIdx state.points model.freehandSegments
-                                                , freehandDrawing = Nothing
-                                            }
-                                    in
-                                    rebuildAndDisplayRoute newModel
-
-                                else
-                                    -- Add intermediate point
-                                    let
-                                        newState =
-                                            { state | points = state.points ++ [ coord ] }
-
-                                        newModel =
-                                            { model | freehandDrawing = Just newState }
-                                    in
-                                    rebuildAndDisplayRoute newModel
-
-                            Nothing ->
-                                ( model, Cmd.none )
-
-            else if wpCount >= 2 && model.lastResponse /= Nothing && model.routeMode == MultiPoint then
-                -- Insert between the two nearest waypoints
-                let
-                    idx =
-                        findInsertionIndex coord model.waypoints
-                in
-                update (InsertWaypoint idx coord) model
-
-            else if wpCount < maxWp then
-                update (AddWaypoint coord) model
-
-            else
-                ( model, Cmd.none )
+                Planning ->
+                    handleMapClick lat lon model
 
         AddWaypoint coord ->
             let
@@ -1134,6 +1058,509 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
+        -- Orienteering game messages
+        EnterOrienteeringMode ->
+            if List.length model.waypoints >= 2 then
+                ( { model | appMode = Orienteering (initialGameState model.waypoints) }
+                , Cmd.none
+                )
+
+            else
+                ( { model | error = Just "Placez au moins 2 balises sur la carte" }
+                , Cmd.none
+                )
+
+        ExitOrienteeringMode ->
+            ( { model | appMode = Planning }
+            , Ports.setMapVisible True
+            )
+
+        StartGame ->
+            case model.appMode of
+                Orienteering gs ->
+                    let
+                        initialRoads =
+                            case model.lastResponse of
+                                Just r ->
+                                    [ r.path ]
+
+                                Nothing ->
+                                    []
+
+                        -- Snap player to nearest road point (first point of route)
+                        startPos =
+                            case model.lastResponse of
+                                Just r ->
+                                    List.head r.path
+                                        |> Maybe.withDefault gs.playerPosition
+
+                                Nothing ->
+                                    gs.playerPosition
+
+                        newGs =
+                            { gs
+                                | gameStatus = GameRunning
+                                , roads = initialRoads
+                                , playerPosition = startPos
+                            }
+
+                        routeCoords =
+                            case model.lastResponse of
+                                Just r ->
+                                    List.map (\c -> { lat = c.lat, lon = c.lon }) r.path
+
+                                Nothing ->
+                                    []
+
+                        cpData =
+                            List.map
+                                (\cp ->
+                                    { lat = cp.position.lat
+                                    , lon = cp.position.lon
+                                    , label = cp.label
+                                    }
+                                )
+                                gs.controlPoints
+                    in
+                    ( { model | appMode = Orienteering newGs }
+                    , Cmd.batch
+                        [ Ports.setMapVisible False
+                        , Api.fetchRoads startPos 0.005 RoadsFetched
+                        ]
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GameTick elapsed ->
+            case model.appMode of
+                Orienteering gs ->
+                    if gs.gameStatus == GameRunning then
+                        ( { model | appMode = Orienteering { gs | elapsedMs = gs.elapsedMs + elapsed } }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        PlayerClickedDestination lat lon ->
+            case model.appMode of
+                Orienteering gs ->
+                    if gs.gameStatus == GameRunning && not model.pending && gs.movePath == Nothing then
+                        let
+                            request =
+                                { start = gs.playerPosition
+                                , end = { lat = lat, lon = lon }
+                                , wPop = 5.0
+                                , wPaved = 8.0
+                                }
+                        in
+                        ( { model | pending = True }
+                        , Api.fetchRoute request GameRouteFetched
+                        )
+
+                    else
+                        ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GameRouteFetched result ->
+            case ( model.appMode, result ) of
+                ( Orienteering gs, Ok route ) ->
+                    let
+                        endPos =
+                            List.reverse route.path
+                                |> List.head
+                                |> Maybe.withDefault gs.playerPosition
+
+                        -- Calculate bearing towards next point on route (immediate direction)
+                        newBearing =
+                            case List.drop 1 route.path |> List.head of
+                                Just dest ->
+                                    let
+                                        dLon =
+                                            (dest.lon - gs.playerPosition.lon) * pi / 180
+
+                                        lat1 =
+                                            gs.playerPosition.lat * pi / 180
+
+                                        lat2 =
+                                            dest.lat * pi / 180
+
+                                        y =
+                                            sin dLon * cos lat2
+
+                                        x =
+                                            cos lat1 * sin lat2 - sin lat1 * cos lat2 * cos dLon
+                                    in
+                                    toFloat (modBy 360 (round (atan2 y x * 180 / pi) + 360))
+
+                                Nothing ->
+                                    gs.playerBearing
+
+                        -- Check proximity to control points at new position
+                        currentCp =
+                            List.drop gs.currentPointIndex gs.controlPoints
+                                |> List.head
+
+                        ( updatedCps, nextIdx, finished ) =
+                            case currentCp of
+                                Just cp ->
+                                    if haversineMeters endPos cp.position < 30 then
+                                        let
+                                            cps =
+                                                List.indexedMap
+                                                    (\i c ->
+                                                        if i == gs.currentPointIndex then
+                                                            { c | found = True }
+
+                                                        else
+                                                            c
+                                                    )
+                                                    gs.controlPoints
+
+                                            newIdx =
+                                                gs.currentPointIndex + 1
+                                        in
+                                        ( cps, newIdx, newIdx >= List.length gs.controlPoints )
+
+                                    else
+                                        ( gs.controlPoints, gs.currentPointIndex, False )
+
+                                Nothing ->
+                                    ( gs.controlPoints, gs.currentPointIndex, False )
+
+                        newStatus =
+                            if finished then
+                                GameFinished
+
+                            else
+                                gs.gameStatus
+
+                        newGs =
+                            { gs
+                                | playerPosition = endPos
+                                , playerBearing = newBearing
+                                , controlPoints = updatedCps
+                                , currentPointIndex = nextIdx
+                                , gameStatus = newStatus
+                                , foundFlash = finished || (nextIdx > gs.currentPointIndex)
+                            }
+                    in
+                    ( { model | appMode = Orienteering newGs, pending = False }
+                    , Api.fetchRoads endPos 0.005 RoadsFetched
+                    )
+
+                ( _, Err httpError ) ->
+                    ( { model | pending = False, error = Just (httpErrorToString httpError) }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( { model | pending = False }, Cmd.none )
+
+        PlayerPositionUpdate lat lon ->
+            case model.appMode of
+                Orienteering gs ->
+                    let
+                        newPos =
+                            { lat = lat, lon = lon }
+
+                        -- Find distance to current target control point
+                        currentCp =
+                            List.drop gs.currentPointIndex gs.controlPoints
+                                |> List.head
+
+                        distToCurrent =
+                            case currentCp of
+                                Just cp ->
+                                    Just (haversineMeters newPos cp.position)
+
+                                Nothing ->
+                                    Nothing
+
+                        -- Check if within 10m = found!
+                        justFound =
+                            case distToCurrent of
+                                Just d ->
+                                    d < 10
+
+                                Nothing ->
+                                    False
+
+                        ( updatedCps, nextIdx, finished ) =
+                            if justFound then
+                                let
+                                    cps =
+                                        List.indexedMap
+                                            (\i c ->
+                                                if i == gs.currentPointIndex then
+                                                    { c | found = True }
+
+                                                else
+                                                    c
+                                            )
+                                            gs.controlPoints
+
+                                    newIdx =
+                                        gs.currentPointIndex + 1
+                                in
+                                ( cps, newIdx, newIdx >= List.length gs.controlPoints )
+
+                            else
+                                ( gs.controlPoints, gs.currentPointIndex, False )
+
+                        newStatus =
+                            if finished then
+                                GameFinished
+
+                            else
+                                gs.gameStatus
+
+                        newGs =
+                            { gs
+                                | playerPosition = newPos
+                                , controlPoints = updatedCps
+                                , currentPointIndex = nextIdx
+                                , gameStatus = newStatus
+                                , nearestCpDistance = distToCurrent
+                                , foundFlash = justFound
+                            }
+                    in
+                    ( { model | appMode = Orienteering newGs }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        PlayerBearingChanged bearing ->
+            case model.appMode of
+                Orienteering gs ->
+                    ( { model | appMode = Orienteering { gs | playerBearing = bearing } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        PlayerMovementFinished ->
+            case model.appMode of
+                Orienteering gs ->
+                    ( { model | appMode = Orienteering { gs | movePath = Nothing, moveProgress = 0 } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        ToggleTopoOverlay ->
+            case model.appMode of
+                Orienteering gs ->
+                    let
+                        newShow =
+                            not gs.showTopoOverlay
+
+                        newGs =
+                            { gs | showTopoOverlay = newShow }
+                    in
+                    ( { model | appMode = Orienteering newGs }
+                    , Ports.setMapVisible newShow
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        PauseGame ->
+            case model.appMode of
+                Orienteering gs ->
+                    ( { model | appMode = Orienteering { gs | paused = True } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        ResumeGame ->
+            case model.appMode of
+                Orienteering gs ->
+                    ( { model | appMode = Orienteering { gs | paused = False } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GameSpeedUp ->
+            case model.appMode of
+                Orienteering gs ->
+                    let
+                        newSpeed =
+                            Basics.min 5.0 (gs.speedMultiplier * 2)
+                    in
+                    ( { model | appMode = Orienteering { gs | speedMultiplier = newSpeed } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GameSpeedDown ->
+            case model.appMode of
+                Orienteering gs ->
+                    let
+                        newSpeed =
+                            Basics.max 0.5 (gs.speedMultiplier / 2)
+                    in
+                    ( { model | appMode = Orienteering { gs | speedMultiplier = newSpeed } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SetTargetBearing tb ->
+            case model.appMode of
+                Orienteering gs ->
+                    ( { model | appMode = Orienteering { gs | targetBearing = Just tb } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        ClearTargetBearing ->
+            case model.appMode of
+                Orienteering gs ->
+                    ( { model | appMode = Orienteering { gs | targetBearing = Nothing } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GameKeyLeft ->
+            case model.appMode of
+                Orienteering gs ->
+                    let
+                        newBearing =
+                            toFloat (modBy 360 (round gs.playerBearing - 10 + 360))
+                    in
+                    ( { model | appMode = Orienteering { gs | playerBearing = newBearing } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GameKeyRight ->
+            case model.appMode of
+                Orienteering gs ->
+                    let
+                        newBearing =
+                            toFloat (modBy 360 (round gs.playerBearing + 10))
+                    in
+                    ( { model | appMode = Orienteering { gs | playerBearing = newBearing } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        RoadsFetched result ->
+            case ( model.appMode, result ) of
+                ( Orienteering gs, Ok roads ) ->
+                    ( { model | appMode = Orienteering { gs | roads = roads } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GameKeyForward ->
+            case model.appMode of
+                Orienteering gs ->
+                    if gs.gameStatus == GameRunning && not model.pending && gs.movePath == Nothing then
+                        let
+                            bearingRad =
+                                gs.playerBearing * pi / 180
+
+                            distM =
+                                5
+
+                            dLat =
+                                cos bearingRad * distM / 111000
+
+                            dLon =
+                                sin bearingRad * distM / (111000 * cos (gs.playerPosition.lat * pi / 180))
+
+                            target =
+                                { lat = gs.playerPosition.lat + dLat
+                                , lon = gs.playerPosition.lon + dLon
+                                }
+
+                            request =
+                                { start = gs.playerPosition
+                                , end = target
+                                , wPop = 5.0
+                                , wPaved = 8.0
+                                }
+                        in
+                        ( { model | pending = True }
+                        , Api.fetchRoute request GameRouteFetched
+                        )
+
+                    else
+                        ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GameMouseDown mouseX ->
+            case model.appMode of
+                Orienteering gs ->
+                    ( { model | appMode = Orienteering { gs | isDragging = True, lastMouseX = mouseX } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GameMouseUp ->
+            case model.appMode of
+                Orienteering gs ->
+                    ( { model | appMode = Orienteering { gs | isDragging = False } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GameMouseDrag mouseX ->
+            case model.appMode of
+                Orienteering gs ->
+                    if gs.isDragging then
+                        let
+                            deltaX =
+                                mouseX - gs.lastMouseX
+
+                            newBearing =
+                                toFloat (modBy 360 (round (gs.playerBearing + deltaX * 0.4) + 360))
+                        in
+                        ( { model | appMode = Orienteering { gs | playerBearing = newBearing, lastMouseX = mouseX } }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
 
 
 -- VIEW
@@ -1141,14 +1568,36 @@ update msg model =
 
 view : Model -> Html Msg
 view model =
-    div [ class "app-container" ]
-        [ header [ class "app-header" ]
-            [ h1 [] [ text "Chemins Noirs" ]
-            , p [ class "app-subtitle" ] [ text "Générateur GPX anti-bitume" ]
-            ]
-        , Form.view model
-        , Preview.view model
-        ]
+    case model.appMode of
+        Orienteering gs ->
+            div [ class "app-container game-mode" ]
+                [ if gs.gameStatus == GameRunning && not gs.showTopoOverlay then
+                    div
+                        [ style "position" "fixed"
+                        , style "top" "0"
+                        , style "left" "0"
+                        , style "width" "100vw"
+                        , style "height" "100vh"
+                        , style "z-index" "2"
+                        , style "overflow" "hidden"
+                        ]
+                        [ World3D.view gs gs.roads 1600 900
+                        ]
+
+                  else
+                    text ""
+                , Game.view model gs
+                ]
+
+        Planning ->
+            div [ class "app-container" ]
+                [ header [ class "app-header" ]
+                    [ h1 [] [ text "Chemins Noirs" ]
+                    , p [ class "app-subtitle" ] [ text "Générateur GPX anti-bitume" ]
+                    ]
+                , Form.view model
+                , Preview.view model
+                ]
 
 
 
@@ -1191,11 +1640,166 @@ subscriptions model =
                     MapRouteHoverIndex index
             )
         , Ports.closeLoopRequested (\_ -> ToggleCloseLoop)
+        , case model.appMode of
+            Orienteering gs ->
+                if gs.gameStatus == GameRunning then
+                    Time.every 1000 (\_ -> GameTick 1000)
+
+                else
+                    Sub.none
+
+            Planning ->
+                Sub.none
+        , Browser.Events.onMouseDown
+            (Json.Decode.map GameMouseDown
+                (Json.Decode.field "clientX" Json.Decode.float)
+            )
+        , Browser.Events.onMouseMove
+            (Json.Decode.map GameMouseDrag
+                (Json.Decode.field "clientX" Json.Decode.float)
+            )
+        , Browser.Events.onMouseUp
+            (Json.Decode.succeed GameMouseUp)
+        , Ports.gameWheelReceived
+            (\deltaY ->
+                if deltaY > 0 then
+                    GameKeyForward
+
+                else
+                    NoOp
+            )
+        , Browser.Events.onKeyDown
+            (Json.Decode.field "key" Json.Decode.string
+                |> Json.Decode.map
+                    (\key ->
+                        case key of
+                            "ArrowLeft" ->
+                                GameKeyLeft
+
+                            "q" ->
+                                GameKeyLeft
+
+                            "Q" ->
+                                GameKeyLeft
+
+                            "ArrowRight" ->
+                                GameKeyRight
+
+                            "d" ->
+                                GameKeyRight
+
+                            "D" ->
+                                GameKeyRight
+
+                            "ArrowUp" ->
+                                GameKeyForward
+
+                            "z" ->
+                                GameKeyForward
+
+                            "Z" ->
+                                GameKeyForward
+
+                            "w" ->
+                                GameKeyForward
+
+                            "W" ->
+                                GameKeyForward
+
+                            _ ->
+                                NoOp
+                    )
+            )
         ]
 
 
 
 -- HELPERS
+
+
+handleMapClick : Float -> Float -> Model -> ( Model, Cmd Msg )
+handleMapClick lat lon model =
+    let
+        coord =
+            { lat = lat, lon = lon }
+
+        maxWp =
+            case model.routeMode of
+                PointToPoint ->
+                    2
+
+                Loop ->
+                    1
+
+                MultiPoint ->
+                    999
+
+        wpCount =
+            List.length model.waypoints
+    in
+    if model.freehandEnabled && model.routeMode == MultiPoint && model.lastResponse /= Nothing then
+        case model.freehandDrawing of
+            Nothing ->
+                case findNearestWaypoint coord model.waypoints of
+                    Just ( idx, dist ) ->
+                        if dist < 0.1 && idx < List.length model.waypoints - 1 then
+                            let
+                                newModel =
+                                    { model | freehandDrawing = Just { fromIdx = idx, points = [] } }
+                            in
+                            rebuildAndDisplayRoute newModel
+
+                        else
+                            ( model, Cmd.none )
+
+                    Nothing ->
+                        ( model, Cmd.none )
+
+            Just state ->
+                let
+                    targetIdx =
+                        state.fromIdx + 1
+
+                    targetWp =
+                        getAt targetIdx model.waypoints
+                in
+                case targetWp of
+                    Just target ->
+                        if haversineKm coord target < 0.1 then
+                            let
+                                newModel =
+                                    { model
+                                        | freehandSegments = Dict.insert state.fromIdx state.points model.freehandSegments
+                                        , freehandDrawing = Nothing
+                                    }
+                            in
+                            rebuildAndDisplayRoute newModel
+
+                        else
+                            let
+                                newState =
+                                    { state | points = state.points ++ [ coord ] }
+
+                                newModel =
+                                    { model | freehandDrawing = Just newState }
+                            in
+                            rebuildAndDisplayRoute newModel
+
+                    Nothing ->
+                        ( model, Cmd.none )
+
+    else if wpCount >= 2 && model.lastResponse /= Nothing && model.routeMode == MultiPoint then
+        let
+            idx =
+                findInsertionIndex coord model.waypoints
+        in
+        update (InsertWaypoint idx coord) model
+
+    else if wpCount < maxWp then
+        update (AddWaypoint coord) model
+
+    else
+        ( model, Cmd.none )
 
 
 applyFreehandOverrides : Dict Int (List Coordinate) -> Maybe FreehandDrawingState -> List Coordinate -> RouteResponse -> RouteResponse

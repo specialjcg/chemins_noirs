@@ -197,3 +197,16 @@ decodeSavedRoute =
 decodeSavedRoutesList : Decoder (List SavedRoute)
 decodeSavedRoutesList =
     Decode.list decodeSavedRoute
+
+
+decodeRoadsResponse : Decoder (List (List Coordinate))
+decodeRoadsResponse =
+    Decode.field "roads"
+        (Decode.list
+            (Decode.list
+                (Decode.map2 Coordinate
+                    (Decode.field "lat" Decode.float)
+                    (Decode.field "lon" Decode.float)
+                )
+            )
+        )

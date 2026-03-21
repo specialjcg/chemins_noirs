@@ -29,6 +29,7 @@ let lastPoiBbox = null; // Last fetched POI bbox to avoid re-fetching
 // Terrain configuration - Using Terrarium format tiles from AWS
 const TERRAIN_EXAGGERATION = 1.5; // Amplify terrain for better visibility
 const EARTH_RADIUS_M = 6371000;
+const DRONE_PITCH = 60; // Default pitch for 3D drone view
 
 // Camera mode presets - SIGNIFICANTLY DIFFERENT for visibility
 const CAMERA_MODES = {
@@ -96,6 +97,23 @@ const CAMERA_MODES = {
     bankingAmount: 0,
     adaptiveSpeed: false, // Constant speed
     minSpeed: 8,
+    turnThreshold: 60,
+    lateralOffset: 0,
+    bearingOffset: 0
+  },
+  WALKING: {
+    name: 'Marche',
+    icon: '🥾',
+    pitch: 70,
+    altitude: 3,
+    zoom: 17,
+    lookahead: 30,
+    speed: 3, // m/s ~10 km/h (accelerated walking)
+    smoothing: 0.3,
+    banking: false,
+    bankingAmount: 0,
+    adaptiveSpeed: false,
+    minSpeed: 3,
     turnThreshold: 60,
     lateralOffset: 0,
     bearingOffset: 0
@@ -185,6 +203,7 @@ function ensureMap() {
     return;
   }
 
+  window.__mapInstance = null; // Debug: expose map instance globally
   mapInstance = new maplibregl.Map({
     container: 'map',
     style: {
@@ -227,6 +246,7 @@ function ensureMap() {
   // Add terrain source
   mapInstance.on('load', () => {
     console.log('[maplibre] Map loaded - MapLibre GL v5.x with advanced camera controls');
+    window.__mapInstance = mapInstance;
 
     // Using Terrarium format terrain tiles from AWS (free, global coverage)
     mapInstance.addSource('terrainSource', {
@@ -744,6 +764,7 @@ export function initMap() {
   ensureMap();
   if (!clickHandlerSet) {
     mapInstance.on('click', (event) => {
+      if (gameMode) return; // Game mode handles clicks separately
       const { lng, lat } = event.lngLat;
       console.debug('[maplibre] click', { lat, lon: lng });
       window.dispatchEvent(
@@ -918,7 +939,8 @@ export function switchMapStyle(style) {
   }
 
   // Adjust terrain exaggeration for satellite mode (more dramatic relief)
-  if (terrainEnabled || mapInstance.getTerrain()) {
+  // Skip terrain in game mode (causes blurry tiles in 2D view)
+  if (!gameMode && (terrainEnabled || mapInstance.getTerrain())) {
     const exag = style === 'satellite' ? 1.8 : TERRAIN_EXAGGERATION;
     mapInstance.setTerrain({ source: 'terrainSource', exaggeration: exag });
   }
@@ -1495,3 +1517,429 @@ function queryElevation(point) {
   );
   return Number.isFinite(elevation) ? elevation : 0;
 }
+
+// ============================================================
+// ORIENTEERING GAME - First-person camera & movement
+// ============================================================
+
+let gameMode = false;
+let savedCameraState = null;
+let playerMarker = null;
+let controlPointMarkers = [];
+let moveAnimationId = null;
+let gameTimerInterval = null;
+
+export function enterFirstPersonMode(lat, lon, bearing) {
+  if (!mapInstance || !currentRoute || currentRoute.length < 2) {
+    console.warn('[game] No route to simulate');
+    return;
+  }
+  console.log('[game] Starting route simulation at', lat, lon);
+
+  gameMode = true;
+
+  // Add game-mode class to body
+  document.body.classList.add('game-mode');
+
+  // Force Elm HUD above map
+  setTimeout(() => {
+    let el = document.querySelector('.game-hud');
+    while (el && el !== document.body) {
+      el.style.position = el.classList.contains('game-hud') ? 'fixed' : 'fixed';
+      el.style.zIndex = '999999';
+      el.style.pointerEvents = 'none';
+      el.style.background = 'transparent';
+      el.style.top = '0';
+      el.style.left = '0';
+      el.style.width = '100vw';
+      el.style.height = '100vh';
+      el = el.parentElement;
+    }
+    const map = document.getElementById('map');
+    if (map) map.style.zIndex = '1';
+  }, 50);
+
+  // Save camera state for restoring later
+  savedCameraState = {
+    center: mapInstance.getCenter(),
+    zoom: mapInstance.getZoom(),
+    pitch: mapInstance.getPitch(),
+    bearing: mapInstance.getBearing()
+  };
+
+  // Hide route line and waypoints
+  if (mapInstance.getLayer('route-line')) {
+    mapInstance.setLayoutProperty('route-line', 'visibility', 'none');
+  }
+  if (mapInstance.getLayer('route-line-outline')) {
+    mapInstance.setLayoutProperty('route-line-outline', 'visibility', 'none');
+  }
+  waypointMarkers.forEach(m => m.getElement().style.display = 'none');
+
+  // Stop any existing animation
+  stopAnimation();
+
+  // Start game timer only — Three.js handles all rendering and clicks
+  gameTimerInterval = setInterval(() => {
+    window.dispatchEvent(new CustomEvent('game-tick', { detail: { elapsed: 100 } }));
+  }, 100);
+}
+
+let gameClickEnabled = false;
+let gameMoving = false;
+
+function gameClickHandler(e) {
+  if (!gameMode || gameMoving || !gameClickEnabled) return;
+  console.log('[game] Click at', e.lngLat.lat.toFixed(5), e.lngLat.lng.toFixed(5));
+  window.dispatchEvent(new CustomEvent('game-click', {
+    detail: { lat: e.lngLat.lat, lon: e.lngLat.lng }
+  }));
+}
+
+let savedCameraMode = null;
+let gamePaused = false;
+let gameSpeedMultiplier = 1.0;
+let gamePausedAt = null; // timestamp when paused
+let gamePausedTotal = 0; // total ms spent paused
+
+function gameAnimateCamera(timestamp) {
+  if (!currentRoute || currentRoute.length < 2 || !gameMode) {
+    stopAnimation();
+    return;
+  }
+
+  if (animationStartTimestamp === null) {
+    animationStartTimestamp = timestamp;
+  }
+
+  const mode = currentCameraMode;
+  const duration = animationDurationMs;
+  const elapsed = timestamp - animationStartTimestamp - gamePausedTotal;
+  const progress = Math.min(elapsed / duration, 1.0);
+  const targetDistance = routeLengthMeters * progress;
+  const cameraPoint = coordinateAtDistance(targetDistance);
+  const lookAheadDistance = Math.min(targetDistance + mode.lookahead, routeLengthMeters);
+  const lookAtPoint = coordinateAtDistance(lookAheadDistance);
+
+  const pathBearing = calculateBearing(
+    [cameraPoint.lon, cameraPoint.lat],
+    [lookAtPoint.lon, lookAtPoint.lat]
+  );
+
+  const smoothedBearing = smoothAngle(lastBearing, pathBearing, mode.smoothing);
+  lastBearing = smoothedBearing;
+
+  mapInstance.jumpTo({
+    center: [cameraPoint.lon, cameraPoint.lat],
+    bearing: smoothedBearing,
+    pitch: mode.pitch,
+    zoom: mode.zoom
+  });
+
+  // Update player marker position and rotation
+  if (playerMarker) {
+    playerMarker.setLngLat([cameraPoint.lon, cameraPoint.lat]);
+    playerMarker.setRotation(smoothedBearing);
+  }
+
+  // Send position to Elm for control point detection
+  window.dispatchEvent(new CustomEvent('player-position', {
+    detail: { lat: cameraPoint.lat, lon: cameraPoint.lon }
+  }));
+
+  // Send bearing for compass
+  window.dispatchEvent(new CustomEvent('game-bearing', {
+    detail: { bearing: smoothedBearing }
+  }));
+
+  if (progress < 1.0) {
+    animationFrameId = requestAnimationFrame(gameAnimateCamera);
+  } else {
+    // Route finished
+    animationFrameId = null;
+    window.dispatchEvent(new CustomEvent('player-movement-done'));
+  }
+}
+
+export function exitFirstPersonMode() {
+  if (!mapInstance) return;
+  console.log('[game] Exiting first-person mode');
+
+  gameMode = false;
+
+  // Remove game-mode class from body
+  document.body.classList.remove('game-mode');
+
+  // Restore z-index chain
+  let el = document.querySelector('.app-container');
+  while (el && el !== document.body) {
+    el.style.zIndex = '';
+    el.style.position = '';
+    el = el.parentElement;
+  }
+
+  // Stop movement animation
+  if (moveAnimationId) {
+    cancelAnimationFrame(moveAnimationId);
+    moveAnimationId = null;
+  }
+
+  // Stop timer
+  if (gameTimerInterval) {
+    clearInterval(gameTimerInterval);
+    gameTimerInterval = null;
+  }
+
+  // Remove player marker
+  if (playerMarker) {
+    playerMarker.remove();
+    playerMarker = null;
+  }
+
+  // Remove control point markers
+  controlPointMarkers.forEach(m => m.remove());
+  controlPointMarkers = [];
+
+  // Remove game click handler
+  mapInstance.off('click', gameClickHandler);
+  gameMoving = false;
+
+  // Restore camera mode
+  if (savedCameraMode) {
+    currentCameraMode = savedCameraMode;
+    savedCameraMode = null;
+  }
+
+  // Re-enable map interactions
+  mapInstance.dragPan.enable();
+  mapInstance.scrollZoom.enable();
+  mapInstance.doubleClickZoom.enable();
+
+  // Restore topo style and resize back
+  switchMapStyle('topo');
+  setTimeout(() => mapInstance.resize(), 100);
+
+  // Restore route and waypoint visibility
+  if (mapInstance.getLayer('route-line')) {
+    mapInstance.setLayoutProperty('route-line', 'visibility', 'visible');
+  }
+  if (mapInstance.getLayer('route-line-outline')) {
+    mapInstance.setLayoutProperty('route-line-outline', 'visibility', 'visible');
+  }
+  waypointMarkers.forEach(m => m.getElement().style.display = '');
+
+  // Restore camera
+  if (savedCameraState) {
+    mapInstance.flyTo({ ...savedCameraState, duration: 1000 });
+    savedCameraState = null;
+  }
+}
+
+
+export function movePlayerAlongPath(coords) {
+  if (!mapInstance || coords.length < 2) return;
+  console.log('[game] Walking to destination,', coords.length, 'points');
+
+  gameMoving = true;
+
+  // Calculate segment distances
+  const segments = [];
+  let totalDist = 0;
+  for (let i = 1; i < coords.length; i++) {
+    const dlat = (coords[i].lat - coords[i-1].lat) * Math.PI / 180;
+    const dlon = (coords[i].lon - coords[i-1].lon) * Math.PI / 180;
+    const lat1 = coords[i-1].lat * Math.PI / 180;
+    const lat2 = coords[i].lat * Math.PI / 180;
+    const a = Math.sin(dlat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dlon/2)**2;
+    const d = 2 * 6371000 * Math.asin(Math.sqrt(a));
+    segments.push(d);
+    totalDist += d;
+  }
+
+  const speed = 3.0 * gameSpeedMultiplier; // m/s
+  const durationMs = (totalDist / speed) * 1000;
+  const startTime = performance.now();
+
+  function animate(now) {
+    if (gamePaused) {
+      moveAnimationId = requestAnimationFrame(animate);
+      return;
+    }
+
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / durationMs, 1.0);
+    const targetDist = progress * totalDist;
+
+    // Find position along path
+    let accumulated = 0;
+    let segIdx = 0;
+    for (let i = 0; i < segments.length; i++) {
+      if (accumulated + segments[i] >= targetDist) {
+        segIdx = i;
+        break;
+      }
+      accumulated += segments[i];
+      segIdx = i;
+    }
+
+    const segProgress = segments[segIdx] > 0
+      ? (targetDist - accumulated) / segments[segIdx] : 0;
+
+    const from = coords[segIdx];
+    const to = coords[Math.min(segIdx + 1, coords.length - 1)];
+    const lat = from.lat + (to.lat - from.lat) * segProgress;
+    const lon = from.lon + (to.lon - from.lon) * segProgress;
+
+    // Bearing towards next point
+    const dLon = (to.lon - from.lon) * Math.PI / 180;
+    const y = Math.sin(dLon) * Math.cos(to.lat * Math.PI / 180);
+    const x = Math.cos(from.lat * Math.PI / 180) * Math.sin(to.lat * Math.PI / 180)
+            - Math.sin(from.lat * Math.PI / 180) * Math.cos(to.lat * Math.PI / 180) * Math.cos(dLon);
+    const bearing = ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+
+    // Update player marker
+    if (playerMarker) {
+      playerMarker.setLngLat([lon, lat]);
+      playerMarker.setRotation(bearing);
+    }
+
+    // Camera follows player — immersive 3D view
+    mapInstance.jumpTo({
+      center: [lon, lat],
+      bearing: bearing,
+      pitch: 65,
+      zoom: 17.5
+    });
+
+    // Send position to Elm
+    window.dispatchEvent(new CustomEvent('player-position', {
+      detail: { lat, lon }
+    }));
+    window.dispatchEvent(new CustomEvent('game-bearing', {
+      detail: { bearing }
+    }));
+
+    if (progress < 1.0) {
+      moveAnimationId = requestAnimationFrame(animate);
+    } else {
+      // Send final exact position (last point of route)
+      const finalPos = coords[coords.length - 1];
+      if (playerMarker) playerMarker.setLngLat([finalPos.lon, finalPos.lat]);
+      window.dispatchEvent(new CustomEvent('player-position', {
+        detail: { lat: finalPos.lat, lon: finalPos.lon }
+      }));
+
+      moveAnimationId = null;
+      gameMoving = false;
+      window.dispatchEvent(new CustomEvent('player-movement-done'));
+    }
+  }
+
+  if (moveAnimationId) cancelAnimationFrame(moveAnimationId);
+  moveAnimationId = requestAnimationFrame(animate);
+}
+
+export function pauseGame() {
+  gamePaused = true;
+  gamePausedAt = performance.now();
+  if (animationFrameId !== null) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
+  console.log('[game] Paused');
+}
+
+export function resumeGame() {
+  if (gamePausedAt !== null) {
+    gamePausedTotal += performance.now() - gamePausedAt;
+    gamePausedAt = null;
+  }
+  gamePaused = false;
+  animationFrameId = requestAnimationFrame(gameAnimateCamera);
+  console.log('[game] Resumed');
+}
+
+export function setGameSpeedMultiplier(speed) {
+  gameSpeedMultiplier = speed;
+  // Recalculate animation duration
+  if (routeLengthMeters > 0) {
+    animationDurationMs = (routeLengthMeters / (CAMERA_MODES.WALKING.speed * gameSpeedMultiplier)) * 1000;
+  }
+  console.log('[game] Speed:', speed, 'x, duration:', (animationDurationMs / 1000).toFixed(0), 's');
+}
+
+// Show/hide topo map overlay (overhead view with balises, no player position)
+export function showTopoOverlayMode(show) {
+  if (!mapInstance) return;
+  console.log('[game] Topo overlay:', show);
+
+  if (show) {
+    // Switch to topo IGN style, overhead view with balises, no player position
+    switchMapStyle('topo');
+    mapInstance.setTerrain(null);
+    mapInstance.jumpTo({
+      pitch: 0,
+      zoom: 14,
+      bearing: 0
+    });
+    // Hide player marker (no GPS in CO!)
+    if (playerMarker) playerMarker.getElement().style.display = 'none';
+  } else {
+    // Back to hybrid 3D walking view (satellite + roads visible)
+    switchMapStyle('hybrid');
+    mapInstance.setTerrain({ source: 'terrainSource', exaggeration: 1.5 });
+    terrainEnabled = true;
+    // Show player marker
+    if (playerMarker) playerMarker.getElement().style.display = '';
+  }
+}
+
+// Reveal a single control point marker (when player is within 10m)
+let revealedCpMarker = null;
+export function revealNearbyCP(data) {
+  if (!mapInstance) return;
+  console.log('[game] Revealing control point:', data.label);
+
+  // Remove previous revealed marker
+  if (revealedCpMarker) {
+    revealedCpMarker.remove();
+    revealedCpMarker = null;
+  }
+
+  const el = document.createElement('div');
+  el.className = 'game-control-point found';
+  el.innerHTML = `<div class="cp-circle">${data.label}</div>`;
+  revealedCpMarker = new maplibregl.Marker({ element: el })
+    .setLngLat([data.lon, data.lat])
+    .addTo(mapInstance);
+}
+
+// Hide all control point markers (back to 3D walking view)
+export function hideAllCPs() {
+  controlPointMarkers.forEach(m => m.remove());
+  controlPointMarkers = [];
+  if (revealedCpMarker) {
+    revealedCpMarker.remove();
+    revealedCpMarker = null;
+  }
+}
+
+export function updateGameControlPoints(points) {
+  if (!mapInstance) return;
+
+  // Remove existing markers
+  controlPointMarkers.forEach(m => m.remove());
+  controlPointMarkers = [];
+
+  points.forEach((cp) => {
+    const el = document.createElement('div');
+    el.className = `game-control-point ${cp.found ? 'found' : ''}`;
+    el.innerHTML = `<div class="cp-circle">${cp.label}</div>`;
+
+    const marker = new maplibregl.Marker({ element: el })
+      .setLngLat([cp.lon, cp.lat])
+      .addTo(mapInstance);
+    controlPointMarkers.push(marker);
+  });
+}
+

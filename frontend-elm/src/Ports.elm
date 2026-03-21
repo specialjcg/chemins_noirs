@@ -1,14 +1,14 @@
 port module Ports exposing (..)
 
-{-| Module de ports pour la communication Elm ↔ JavaScript (MapLibre).
-Approche fonctionnelle pure : les ports sont des effets contrôlés.
+{-| Module de ports pour la communication Elm <-> JavaScript (MapLibre).
+Approche fonctionnelle pure : les ports sont des effets controles.
 -}
 
 import Json.Encode as Encode
 import Types exposing (Coordinate, RouteBounds)
 
 
--- PORTS OUT (Elm → JavaScript)
+-- PORTS OUT (Elm -> JavaScript) — MapLibre map
 
 
 port initMap : () -> Cmd msg
@@ -76,8 +76,14 @@ port setElevationHoverMarker : Maybe { lat : Float, lon : Float } -> Cmd msg
 port centerMapOn : { lat : Float, lon : Float } -> Cmd msg
 
 
+-- Game ports (Elm -> JavaScript) — minimal
 
--- PORTS IN (JavaScript → Elm)
+
+port setMapVisible : Bool -> Cmd msg
+
+
+
+-- PORTS IN (JavaScript -> Elm) — MapLibre events
 
 
 port mapClickReceived : ({ lat : Float, lon : Float } -> msg) -> Sub msg
@@ -108,3 +114,9 @@ port mapRouteHover : ({ index : Int } -> msg) -> Sub msg
 
 
 port closeLoopRequested : (Bool -> msg) -> Sub msg
+
+
+-- Game ports (JavaScript -> Elm) — minimal
+
+
+port gameWheelReceived : (Float -> msg) -> Sub msg

@@ -306,4 +306,40 @@ window.addEventListener('route-hover', (event) => {
   }
 })();
 
+// ============================================================
+// ORIENTEERING GAME PORTS (minimal — most logic is in Elm)
+// ============================================================
+
+// Show/hide MapLibre map
+app.ports.setMapVisible.subscribe((visible) => {
+  const mapEl = document.getElementById('map');
+  if (mapEl) {
+    mapEl.style.display = visible ? '' : 'none';
+    // When showing map for topo overlay, make it fullscreen and resize
+    if (visible) {
+      mapEl.style.position = 'fixed';
+      mapEl.style.top = '0';
+      mapEl.style.left = '0';
+      mapEl.style.width = '100vw';
+      mapEl.style.height = '100vh';
+      mapEl.style.zIndex = '5';
+      mapEl.style.maxWidth = 'none';
+      mapEl.style.borderRadius = '0';
+      mapEl.style.border = 'none';
+      mapEl.style.margin = '0';
+      setTimeout(() => {
+        window.dispatchEvent(new Event('resize'));
+      }, 150);
+    } else {
+      // Reset to default styles
+      mapEl.style.cssText = 'display: none;';
+    }
+  }
+});
+
+// Game scroll wheel → Elm
+document.addEventListener('wheel', (e) => {
+  app.ports.gameWheelReceived.send(e.deltaY);
+}, { passive: true });
+
 console.log('✅ Elm application initialized with MapLibre ports');

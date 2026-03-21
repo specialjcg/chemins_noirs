@@ -737,6 +737,31 @@ impl RouteEngine {
         Some(RoadSnap { node: snap_node, road_prefix })
     }
 
+    /// Extract all road polylines within a bounding box
+    pub fn get_roads_in_bbox(&self, min_lat: f64, max_lat: f64, min_lon: f64, max_lon: f64) -> Vec<Vec<Coordinate>> {
+        let mut roads = Vec::new();
+        for edge in self.graph.edge_indices() {
+            let (from, to) = self.graph.edge_endpoints(edge).unwrap();
+            let from_coord = self.nodes[from.index()].coord;
+            let to_coord = self.nodes[to.index()].coord;
+            let edge_data = &self.graph[edge];
+
+            // Check if any part of the edge is within the bbox
+            let in_bbox = |c: &Coordinate| {
+                c.lat >= min_lat && c.lat <= max_lat && c.lon >= min_lon && c.lon <= max_lon
+            };
+
+            if in_bbox(&from_coord) || in_bbox(&to_coord) || edge_data.waypoints.iter().any(|w| in_bbox(w)) {
+                let mut polyline = Vec::with_capacity(2 + edge_data.waypoints.len());
+                polyline.push(from_coord);
+                polyline.extend_from_slice(&edge_data.waypoints);
+                polyline.push(to_coord);
+                roads.push(polyline);
+            }
+        }
+        roads
+    }
+
     fn edge_cost(&self, edge: &EdgeData, weights: WeightConfig) -> f64 {
         let paved_penalty = match edge.surface {
             SurfaceType::Paved => 1.0,
