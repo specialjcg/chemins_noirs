@@ -199,14 +199,79 @@ decodeSavedRoutesList =
     Decode.list decodeSavedRoute
 
 
-decodeRoadsResponse : Decoder (List (List Coordinate))
+decodeRoadsResponse : Decoder (List StyledRoad)
 decodeRoadsResponse =
     Decode.field "roads"
         (Decode.list
-            (Decode.list
-                (Decode.map2 Coordinate
-                    (Decode.field "lat" Decode.float)
-                    (Decode.field "lon" Decode.float)
+            (Decode.map2 StyledRoad
+                (Decode.field "nature" Decode.string)
+                (Decode.field "coords"
+                    (Decode.list
+                        (Decode.map2 Coordinate
+                            (Decode.field "lat" Decode.float)
+                            (Decode.field "lon" Decode.float)
+                        )
+                    )
+                )
+            )
+        )
+
+
+decodeVegetationResponse : Decoder (List VegetationZone)
+decodeVegetationResponse =
+    Decode.field "zones"
+        (Decode.list
+            (Decode.map2 VegetationZone
+                (Decode.field "nature" Decode.string)
+                (Decode.field "coords"
+                    (Decode.list
+                        (Decode.map2 Coordinate
+                            (Decode.field "lat" Decode.float)
+                            (Decode.field "lon" Decode.float)
+                        )
+                    )
+                )
+            )
+        )
+
+
+decodeIgnBuildingsResponse : Decoder (List IgnBuilding)
+decodeIgnBuildingsResponse =
+    Decode.field "buildings"
+        (Decode.list
+            (Decode.map3 IgnBuilding
+                (Decode.field "nature" Decode.string)
+                (Decode.field "hauteur" Decode.float)
+                (Decode.field "coords"
+                    (Decode.list
+                        (Decode.map2 Coordinate
+                            (Decode.field "lat" Decode.float)
+                            (Decode.field "lon" Decode.float)
+                        )
+                    )
+                )
+            )
+        )
+
+
+decodeBuildingsResponse : Decoder (List { center : Coordinate, polygon : List Coordinate })
+decodeBuildingsResponse =
+    Decode.field "buildings"
+        (Decode.list
+            (Decode.map2 (\c p -> { center = c, polygon = p })
+                (Decode.field "center"
+                    (Decode.map2 Coordinate
+                        (Decode.field "lat" Decode.float)
+                        (Decode.field "lon" Decode.float)
+                    )
+                )
+                (Decode.field "polygon"
+                    (Decode.list
+                        (Decode.map2 Coordinate
+                            (Decode.field "lat" Decode.float)
+                            (Decode.field "lon" Decode.float)
+                        )
+                    )
                 )
             )
         )

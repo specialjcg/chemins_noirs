@@ -196,12 +196,8 @@ async fn ign_roads_handler(
     // IGN WFS endpoint for BD TOPO road segments
     // BBOX format for WFS 2.0: min_lat,min_lon,max_lat,max_lon,CRS
     let url = format!(
-        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature\
-         &TYPENAMES=BDTOPO_V3:troncon_de_route\
-         &BBOX={},{},{},{},EPSG:4326\
-         &OUTPUTFORMAT=application/json\
-         &COUNT=500",
-        min_lat, min_lon, max_lat, max_lon
+        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3:troncon_de_route&BBOX={},{},{},{},EPSG:4326&OUTPUTFORMAT=application/json&COUNT=500",
+        min_lon, min_lat, max_lon, max_lat
     );
 
     tracing::info!("IGN WFS request: bbox=[{},{},{},{}]", min_lat, min_lon, max_lat, max_lon);
@@ -225,13 +221,17 @@ async fn ign_roads_handler(
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN WFS parse error: {}", e)))?;
 
-    // Parse GeoJSON features → road polylines
-    let mut roads: Vec<Vec<serde_json::Value>> = Vec::new();
+    // Parse GeoJSON features → road polylines with nature (road type)
+    let mut roads: Vec<serde_json::Value> = Vec::new();
 
     if let Some(features) = geojson["features"].as_array() {
         for feature in features {
             let geom = &feature["geometry"];
             let geom_type = geom["type"].as_str().unwrap_or("");
+            let nature = feature["properties"]["nature"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
 
             let coord_arrays = match geom_type {
                 "LineString" => {
@@ -259,7 +259,10 @@ async fn ign_roads_handler(
                         .collect();
 
                     if polyline.len() >= 2 {
-                        roads.push(polyline);
+                        roads.push(serde_json::json!({
+                            "nature": nature,
+                            "coords": polyline
+                        }));
                     }
                 }
             }
@@ -272,6 +275,195 @@ async fn ign_roads_handler(
         "roads": roads,
         "count": roads.len()
     })))
+}
+
+/// Generic IGN WFS polygon fetcher. Returns polygons with nature property.
+async fn fetch_ign_polygons(
+    min_lat: f64, max_lat: f64, min_lon: f64, max_lon: f64,
+    type_name: &str,
+    nature_field: &str,
+) -> Result<Vec<serde_json::Value>, (StatusCode, String)> {
+    let url = format!(
+        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES={}&BBOX={},{},{},{},EPSG:4326&OUTPUTFORMAT=application/json&COUNT=500",
+        type_name, min_lon, min_lat, max_lon, max_lat
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN WFS request failed: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err((StatusCode::BAD_GATEWAY, format!("IGN WFS error: {}", response.status())));
+    }
+
+    let geojson: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN WFS parse error: {}", e)))?;
+
+    let mut results = Vec::new();
+
+    if let Some(features) = geojson["features"].as_array() {
+        for feature in features {
+            let nature = feature["properties"][nature_field]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
+
+            let geom = &feature["geometry"];
+            let geom_type = geom["type"].as_str().unwrap_or("");
+
+            // Extract polygon rings (outer ring only)
+            let rings: Vec<Option<&Vec<serde_json::Value>>> = match geom_type {
+                "Polygon" => {
+                    vec![geom["coordinates"].as_array().and_then(|a| a.first()).and_then(|r| r.as_array())]
+                }
+                "MultiPolygon" => {
+                    geom["coordinates"]
+                        .as_array()
+                        .map(|polys| {
+                            polys.iter()
+                                .map(|poly| poly.as_array().and_then(|a| a.first()).and_then(|r| r.as_array()))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                }
+                _ => vec![],
+            };
+
+            for maybe_ring in rings {
+                if let Some(ring) = maybe_ring {
+                    let coords: Vec<serde_json::Value> = ring
+                        .iter()
+                        .filter_map(|c| {
+                            let arr = c.as_array()?;
+                            let lon = arr.first()?.as_f64()?;
+                            let lat = arr.get(1)?.as_f64()?;
+                            Some(serde_json::json!({"lat": lat, "lon": lon}))
+                        })
+                        .collect();
+
+                    if coords.len() >= 3 {
+                        results.push(serde_json::json!({
+                            "nature": nature,
+                            "coords": coords
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+/// Handler for /api/ign-vegetation - zone_de_vegetation polygons
+async fn ign_vegetation_handler(
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let min_lat = req["min_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lat required".into()))?;
+    let max_lat = req["max_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lat required".into()))?;
+    let min_lon = req["min_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lon required".into()))?;
+    let max_lon = req["max_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lon required".into()))?;
+
+    tracing::info!("IGN vegetation request: bbox=[{},{},{},{}]", min_lat, min_lon, max_lat, max_lon);
+    let zones = fetch_ign_polygons(min_lat, max_lat, min_lon, max_lon, "BDTOPO_V3:zone_de_vegetation", "nature").await?;
+    tracing::info!("IGN vegetation: {} zones", zones.len());
+
+    Ok(Json(serde_json::json!({ "zones": zones, "count": zones.len() })))
+}
+
+/// Handler for /api/ign-buildings - batiment polygons with height
+async fn ign_buildings_handler(
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let min_lat = req["min_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lat required".into()))?;
+    let max_lat = req["max_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lat required".into()))?;
+    let min_lon = req["min_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lon required".into()))?;
+    let max_lon = req["max_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lon required".into()))?;
+
+    let url = format!(
+        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3:batiment&BBOX={},{},{},{},EPSG:4326&OUTPUTFORMAT=application/json&COUNT=500",
+        min_lon, min_lat, max_lon, max_lat
+    );
+
+    tracing::info!("IGN buildings request: bbox=[{},{},{},{}]", min_lat, min_lon, max_lat, max_lon);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN WFS request failed: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err((StatusCode::BAD_GATEWAY, format!("IGN WFS error: {}", response.status())));
+    }
+
+    let geojson: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN WFS parse error: {}", e)))?;
+
+    let mut buildings = Vec::new();
+
+    if let Some(features) = geojson["features"].as_array() {
+        for feature in features {
+            let props = &feature["properties"];
+            let nature = props["nature"].as_str().unwrap_or("unknown").to_string();
+            let hauteur = props["hauteur"].as_f64().unwrap_or(6.0); // default 6m
+
+            let geom = &feature["geometry"];
+            let geom_type = geom["type"].as_str().unwrap_or("");
+
+            let rings: Vec<Option<&Vec<serde_json::Value>>> = match geom_type {
+                "Polygon" => {
+                    vec![geom["coordinates"].as_array().and_then(|a| a.first()).and_then(|r| r.as_array())]
+                }
+                "MultiPolygon" => {
+                    geom["coordinates"]
+                        .as_array()
+                        .map(|polys| {
+                            polys.iter()
+                                .map(|poly| poly.as_array().and_then(|a| a.first()).and_then(|r| r.as_array()))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                }
+                _ => vec![],
+            };
+
+            for maybe_ring in rings {
+                if let Some(ring) = maybe_ring {
+                    let coords: Vec<serde_json::Value> = ring
+                        .iter()
+                        .filter_map(|c| {
+                            let arr = c.as_array()?;
+                            let lon = arr.first()?.as_f64()?;
+                            let lat = arr.get(1)?.as_f64()?;
+                            Some(serde_json::json!({"lat": lat, "lon": lon}))
+                        })
+                        .collect();
+
+                    if coords.len() >= 3 {
+                        buildings.push(serde_json::json!({
+                            "nature": nature,
+                            "hauteur": hauteur,
+                            "coords": coords
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::info!("IGN buildings: {} buildings", buildings.len());
+    Ok(Json(serde_json::json!({ "buildings": buildings, "count": buildings.len() })))
 }
 
 /// Handler for /api/route - generates partial graph on-demand and finds route
@@ -741,6 +933,8 @@ async fn main() {
         .route("/api/route/multi", axum::routing::post(multi_route_handler))
         .route("/api/roads", axum::routing::post(roads_handler))
         .route("/api/ign-roads", axum::routing::post(ign_roads_handler))
+        .route("/api/ign-vegetation", axum::routing::post(ign_vegetation_handler))
+        .route("/api/ign-buildings", axum::routing::post(ign_buildings_handler))
         .route("/api/buildings", axum::routing::post(buildings_handler))
         .route("/api/log", axum::routing::post(frontend_log_handler))
         .route("/api/click_mode", axum::routing::get(click_mode_handler))

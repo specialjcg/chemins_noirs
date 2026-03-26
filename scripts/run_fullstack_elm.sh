@@ -170,6 +170,8 @@ fi
 export PATH="$FRONTEND_DIR/node_modules/.bin:$PATH"
 
 # Start backend with on-demand graph generation (release mode for performance)
+# Touch source to force recompilation (ensures code changes are always picked up)
+touch "$BACKEND_DIR/src/bin/backend_partial.rs"
 echo "Starting backend with on-demand graph generation (release mode)..."
 env \
   CARGO_TARGET_DIR="$TARGET_DIR" \

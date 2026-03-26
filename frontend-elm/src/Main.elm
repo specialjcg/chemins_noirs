@@ -12,7 +12,6 @@ import Time
 import Decoders
 import Encoders
 import GameEngine
-import TopoTile
 import Html exposing (..)
 import Html.Attributes exposing (class, style)
 import Html.Events
@@ -1085,7 +1084,7 @@ update msg model =
                         initialRoads =
                             case model.lastResponse of
                                 Just r ->
-                                    [ r.path ]
+                                    [ { nature = "Chemin", coords = r.path } ]
 
                                 Nothing ->
                                     []
@@ -1143,7 +1142,8 @@ update msg model =
                             , bearing = gs.playerBearing
                             }
                         , Api.fetchIgnRoads startPos 0.01 RoadsFetched
-                        , TopoTile.loadTopoGrid startPos.lat startPos.lon TopoTileLoaded
+                        , Api.fetchIgnVegetation startPos 0.005 VegetationFetched
+                        , Api.fetchIgnBuildings startPos 0.005 IgnBuildingsFetched
                         , logCmd ("START pos=" ++ String.fromFloat startPos.lat ++ "," ++ String.fromFloat startPos.lon)
                         ]
                     )
@@ -1508,12 +1508,15 @@ update msg model =
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok roads ) ->
                     let
-                        segCount =
-                            List.sum (List.map (\r -> List.length r - 1) roads)
+                        plainRoads =
+                            List.map .coords roads
 
-                        -- Snap player to nearest road SEGMENT (not just nearest point)
+                        segCount =
+                            List.sum (List.map (\r -> List.length r.coords - 1) roads)
+
+                        -- Snap player to nearest road SEGMENT
                         snapResult =
-                            GameEngine.findNearestSegment gs.playerPosition roads
+                            GameEngine.findNearestSegment gs.playerPosition plainRoads
 
                         ( snappedPos, snapDist ) =
                             case snapResult of
@@ -1523,7 +1526,6 @@ update msg model =
                                 Nothing ->
                                     ( gs.playerPosition, 0 )
 
-                        -- Only snap if close enough (< 30m), otherwise keep position
                         finalPos =
                             if snapDist < 30 then
                                 snappedPos
@@ -1533,38 +1535,39 @@ update msg model =
                     in
                     ( { model | appMode = Orienteering { gs | roads = roads, playerPosition = finalPos } }
                     , Cmd.batch
-                        [ logCmd ("ROADS " ++ String.fromInt (List.length roads) ++ "r " ++ String.fromInt segCount ++ "s snap=" ++ String.fromInt (round snapDist) ++ "m to " ++ String.fromFloat finalPos.lat ++ "," ++ String.fromFloat finalPos.lon)
-                        , Ports.updateGameCamera { lat = snappedPos.lat, lon = snappedPos.lon, bearing = gs.playerBearing }
+                        [ logCmd ("ROADS " ++ String.fromInt (List.length roads) ++ "r " ++ String.fromInt segCount ++ "s snap=" ++ String.fromInt (round snapDist) ++ "m natures=" ++ String.join "," (List.take 5 (List.map .nature roads)))
+                        , Ports.updateGameCamera { lat = finalPos.lat, lon = finalPos.lon, bearing = gs.playerBearing }
                         ]
                     )
+
+                ( _, Err err ) ->
+                    ( model, logCmd ("ROADS FAILED: " ++ httpErrorToString err) )
 
                 _ ->
                     ( model, Cmd.none )
 
-        TopoTileLoaded bounds result ->
+        VegetationFetched result ->
             case ( model.appMode, result ) of
-                ( Orienteering gs, Ok texture ) ->
-                    let
-                        newTile =
-                            { texture = texture, bounds = bounds }
-
-                        -- Replace tile if same bounds already exists, otherwise add
-                        existingFiltered =
-                            List.filter
-                                (\t ->
-                                    not (t.bounds.minLat == bounds.minLat && t.bounds.minLon == bounds.minLon)
-                                )
-                                gs.topoTiles
-
-                        newTiles =
-                            newTile :: existingFiltered
-
-                        newCenter =
-                            Just gs.playerPosition
-                    in
-                    ( { model | appMode = Orienteering { gs | topoTiles = newTiles, topoTileCenter = newCenter } }
-                    , Cmd.none
+                ( Orienteering gs, Ok zones ) ->
+                    ( { model | appMode = Orienteering { gs | vegetation = zones } }
+                    , logCmd ("VEGETATION " ++ String.fromInt (List.length zones) ++ " zones")
                     )
+
+                ( _, Err err ) ->
+                    ( model, logCmd ("VEGETATION FAILED: " ++ httpErrorToString err) )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        IgnBuildingsFetched result ->
+            case ( model.appMode, result ) of
+                ( Orienteering gs, Ok blds ) ->
+                    ( { model | appMode = Orienteering { gs | ign_buildings = blds } }
+                    , logCmd ("BUILDINGS " ++ String.fromInt (List.length blds) ++ " buildings")
+                    )
+
+                ( _, Err err ) ->
+                    ( model, logCmd ("BUILDINGS FAILED: " ++ httpErrorToString err) )
 
                 _ ->
                     ( model, Cmd.none )
@@ -1586,7 +1589,7 @@ update msg model =
                         let
                             -- Manual forward = boost 10m along road
                             result =
-                                GameEngine.advanceOnSegments gs.playerPosition gs.playerBearing 10.0 gs.roads
+                                GameEngine.advanceOnSegments gs.playerPosition gs.playerBearing 10.0 (List.map .coords gs.roads)
 
                             nextPos =
                                 result.position
@@ -1648,19 +1651,20 @@ update msg model =
                                     , foundFlash = nextIdx > gs.currentPointIndex
                                     , totalDistanceM = gs.totalDistanceM + haversineMeters gs.playerPosition nextPos
                                 }
-                            -- Check if we need to reload tiles (moved > 80m from last tile center)
-                            needReload =
-                                case gs.topoTileCenter of
-                                    Just tc ->
-                                        haversineMeters nextPos tc > 80
+                            -- Reload roads when moved > 300m from road center
+                            roadCenter =
+                                case List.head (List.concatMap .coords gs.roads) of
+                                    Just c -> c
+                                    Nothing -> nextPos
 
-                                    Nothing ->
-                                        True
+                            needReload =
+                                haversineMeters nextPos roadCenter > 300
 
                             reloadCmds =
                                 if needReload then
                                     [ Api.fetchIgnRoads nextPos 0.01 RoadsFetched
-                                    , TopoTile.loadTopoGrid nextPos.lat nextPos.lon TopoTileLoaded
+                                    , Api.fetchIgnVegetation nextPos 0.005 VegetationFetched
+                                    , Api.fetchIgnBuildings nextPos 0.005 IgnBuildingsFetched
                                     ]
 
                                 else
@@ -1673,7 +1677,9 @@ update msg model =
                                 , lon = nextPos.lon
                                 , bearing = newBearing
                                 }
-                             , logCmd ("FWD bear=" ++ String.fromInt (round newBearing) ++ " moved=" ++ String.fromInt (round (haversineMeters gs.playerPosition nextPos)) ++ "m snapped=" ++ (if result.snapped then "Y" else "N"))
+                             , logCmd ("FWD bear=" ++ String.fromInt (round newBearing) ++ " moved=" ++ String.fromInt (round (haversineMeters gs.playerPosition nextPos)) ++ "m snapped=" ++ (if result.snapped then "Y" else "N") ++ " cpDist=" ++ (case currentCp of
+                                Just cp -> String.fromInt (round (haversineMeters nextPos cp.position)) ++ "m cpIdx=" ++ String.fromInt gs.currentPointIndex
+                                Nothing -> "none"))
                              ]
                                 ++ reloadCmds
                             )
@@ -1752,7 +1758,7 @@ update msg model =
 
                             -- Snap click to nearest road segment
                             allSegments =
-                                List.concatMap GameEngine.roadToSegments gs.roads
+                                List.concatMap (\r -> GameEngine.roadToSegments r.coords) gs.roads
 
                             snappedPoint =
                                 allSegments

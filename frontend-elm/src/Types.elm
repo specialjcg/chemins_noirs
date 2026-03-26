@@ -5,8 +5,6 @@ import Color
 import Http
 import Json.Decode
 import Dict exposing (Dict)
-import Scene3d.Material
-import WebGL.Texture
 
 
 -- MODEL
@@ -221,13 +219,14 @@ type Msg
     | GameKeyLeft
     | GameKeyRight
     | GameKeyForward
-    | RoadsFetched (Result Http.Error (List (List Coordinate)))
+    | RoadsFetched (Result Http.Error (List StyledRoad))
+    | VegetationFetched (Result Http.Error (List VegetationZone))
+    | IgnBuildingsFetched (Result Http.Error (List IgnBuilding))
     | BuildingsFetched (Result Http.Error (List { center : Coordinate, polygon : List Coordinate }))
     | GameMouseDrag Float
     | GameMouseDown Float
     | GameMouseUp Float
     | GameMapClicked { lat : Float, lon : Float }
-    | TopoTileLoaded { minLat : Float, maxLat : Float, minLon : Float, maxLon : Float } (Result WebGL.Texture.Error (Scene3d.Material.Texture Color.Color))
 
 
 
@@ -278,7 +277,9 @@ type alias GameState =
     , paused : Bool
     , speedMultiplier : Float
     , targetBearing : Maybe Float
-    , roads : List (List Coordinate)
+    , roads : List StyledRoad
+    , vegetation : List VegetationZone
+    , ign_buildings : List IgnBuilding
     , buildings : List { center : Coordinate, polygon : List Coordinate }
     , routePath : Array.Array Coordinate
     , routeIndex : Int
@@ -286,8 +287,6 @@ type alias GameState =
     , lastMouseX : Float
     , dragStartX : Float
     , debugLog : List String
-    , topoTiles : List { texture : Scene3d.Material.Texture Color.Color, bounds : { minLat : Float, maxLat : Float, minLon : Float, maxLon : Float } }
-    , topoTileCenter : Maybe Coordinate
     }
 
 
@@ -311,6 +310,25 @@ type GameStatus
 type alias Coordinate =
     { lat : Float
     , lon : Float
+    }
+
+
+type alias StyledRoad =
+    { nature : String
+    , coords : List Coordinate
+    }
+
+
+type alias VegetationZone =
+    { nature : String
+    , coords : List Coordinate
+    }
+
+
+type alias IgnBuilding =
+    { nature : String
+    , hauteur : Float
+    , coords : List Coordinate
     }
 
 
@@ -551,6 +569,8 @@ initialGameState waypoints =
     , speedMultiplier = 1.0
     , targetBearing = Nothing
     , roads = []
+    , vegetation = []
+    , ign_buildings = []
     , buildings = []
     , routePath = Array.empty
     , routeIndex = 0
@@ -558,8 +578,6 @@ initialGameState waypoints =
     , lastMouseX = 0
     , dragStartX = 0
     , debugLog = []
-    , topoTiles = []
-    , topoTileCenter = Nothing
     }
 
 

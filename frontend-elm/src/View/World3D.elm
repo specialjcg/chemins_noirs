@@ -1,14 +1,14 @@
 module View.World3D exposing (view)
 
 {-| 3D World renderer for the orienteering game.
-Uses elm-3d-scene with IGN topo tile as ground texture.
-
-Camera is always behind the player, looking in the direction of the road.
-The road goes toward the top of the screen (third-person running view).
+First-person view with simulated ground:
+- Green grass ground
+- Roads colored by type (asphalt=dark gray, chemin=golden, sentier=brown)
+- Control point markers (poles with spheres)
+- Scattered trees
 -}
 
 import Angle
-import Array
 import Camera3d
 import Color
 import Cylinder3d
@@ -19,11 +19,8 @@ import Pixels
 import Point3d exposing (Point3d)
 import Scene3d
 import Scene3d.Material as Material
-import Scene3d.Mesh as Mesh
 import Sphere3d
-import TriangularMesh
 import Types exposing (..)
-import Vector3d
 
 
 type WorldCoordinates
@@ -33,12 +30,11 @@ type WorldCoordinates
 view : GameState -> Int -> Int -> Html Msg
 view gs width height =
     let
-        -- Center the scene on the PLAYER (not first control point)
+        -- Center the scene on the PLAYER
         center =
             gs.playerPosition
 
-        -- Camera above and behind the player, looking ahead and down at the map
-        -- Direction3d.xy uses 0°=+X=East, but compass bearing uses 0°=North=+Y
+        -- Direction3d.xy uses 0°=+X=East, compass bearing uses 0°=North=+Y
         -- Conversion: elm_angle = 90 - compass_bearing
         playerPoint =
             latLonToPoint gs.playerPosition center
@@ -49,52 +45,56 @@ view gs width height =
         lookDirection =
             Direction3d.xy elmAngle
 
-        behindDirection =
-            Direction3d.xy (Angle.degrees (90 - gs.playerBearing + 180))
-
-        -- Eye point: 20m high, 15m behind the player
+        -- First-person camera: 1.7m eye height, looking 30m ahead
         eyePoint =
-            playerPoint
-                |> Point3d.translateIn Direction3d.z (Length.meters 20)
-                |> Point3d.translateIn behindDirection (Length.meters 15)
+            Point3d.translateIn Direction3d.z (Length.meters 1.7) playerPoint
 
-        -- Look at a point 20m ahead of the player, on the ground
         focalPoint =
-            Point3d.translateIn lookDirection (Length.meters 20) playerPoint
+            playerPoint
+                |> Point3d.translateIn lookDirection (Length.meters 30)
+                |> Point3d.translateIn Direction3d.z (Length.meters 0.5)
 
         camera =
             Camera3d.lookAt
                 { eyePoint = eyePoint
                 , focalPoint = focalPoint
                 , upDirection = Direction3d.z
-                , fov = Camera3d.angle (Angle.degrees 70)
+                , fov = Camera3d.angle (Angle.degrees 75)
                 , projection = Camera3d.Perspective
                 }
 
-        -- Ground: topo tile grid if available, else green fallback
+        -- Green grass ground
         groundEntities =
-            if List.isEmpty gs.topoTiles then
-                [ Scene3d.quad (Material.matte (Color.rgb255 90 120 60))
-                    (Point3d.meters -500 -500 0)
-                    (Point3d.meters 500 -500 0)
-                    (Point3d.meters 500 500 0)
-                    (Point3d.meters -500 500 0)
-                ]
+            [ Scene3d.quad (Material.matte (Color.rgb255 75 135 45))
+                (Point3d.meters -500 -500 0)
+                (Point3d.meters 500 -500 0)
+                (Point3d.meters 500 500 0)
+                (Point3d.meters -500 500 0)
+            ]
 
-            else
-                List.map (\tile -> topoGroundQuad tile.texture tile.bounds center) gs.topoTiles
+        -- Vegetation zones (colored ground patches)
+        vegetationEntities =
+            List.concatMap (vegetationToEntity center) gs.vegetation
 
-        -- Player position marker on ground (red circle + direction arrow)
-        playerMarkerEntities =
-            playerMarker center gs.playerBearing
+        -- IGN Buildings (3D extruded blocks)
+        buildingEntities =
+            List.concatMap (buildingToEntity center) gs.ign_buildings
+
+        -- Roads colored by nature
+        roadEntities =
+            List.concatMap (styledRoadToEntities center) gs.roads
 
         -- Control point markers
         cpEntities =
             List.concatMap (controlPointToEntity center) gs.controlPoints
 
-        -- Trees scattered around the player (relative to player position)
+        -- Trees (only if no real vegetation data)
         treeEntities =
-            List.concatMap treeEntity (scatteredTrees 60)
+            if List.isEmpty gs.vegetation then
+                List.concatMap treeEntity (scatteredTrees 80)
+
+            else
+                []
 
         -- Sky
         skyColor =
@@ -102,65 +102,14 @@ view gs width height =
     in
     Scene3d.sunny
         { camera = camera
-        , clipDepth = Length.meters 0.5
+        , clipDepth = Length.meters 0.1
         , dimensions = ( Pixels.int width, Pixels.int height )
         , background = Scene3d.backgroundColor skyColor
-        , entities = groundEntities ++ playerMarkerEntities ++ cpEntities ++ treeEntities
+        , entities = groundEntities ++ vegetationEntities ++ buildingEntities ++ roadEntities ++ cpEntities ++ treeEntities
         , shadows = False
         , upDirection = Direction3d.z
         , sunlightDirection = Direction3d.negativeZ
         }
-
-
-
--- TOPO GROUND WITH TEXTURE
-
-
-{-| Create a textured ground quad from the IGN topo tile.
-Maps the tile's geographic bounds to 3D coordinates.
--}
-topoGroundQuad : Material.Texture Color.Color -> { minLat : Float, maxLat : Float, minLon : Float, maxLon : Float } -> Coordinate -> Scene3d.Entity WorldCoordinates
-topoGroundQuad texture bounds center =
-    let
-        -- Convert tile bounds to 3D coordinates relative to center
-        sw =
-            latLonToPoint { lat = bounds.minLat, lon = bounds.minLon } center
-
-        se =
-            latLonToPoint { lat = bounds.minLat, lon = bounds.maxLon } center
-
-        ne =
-            latLonToPoint { lat = bounds.maxLat, lon = bounds.maxLon } center
-
-        nw =
-            latLonToPoint { lat = bounds.maxLat, lon = bounds.minLon } center
-
-        -- Vertices with UV coordinates and normals
-        upNormal =
-            Vector3d.unitless 0 0 1
-
-        v0 =
-            { position = sw, normal = upNormal, uv = ( 0, 0 ) }
-
-        v1 =
-            { position = se, normal = upNormal, uv = ( 1, 0 ) }
-
-        v2 =
-            { position = ne, normal = upNormal, uv = ( 1, 1 ) }
-
-        v3 =
-            { position = nw, normal = upNormal, uv = ( 0, 1 ) }
-
-        -- Create mesh with two triangles
-        mesh =
-            TriangularMesh.indexed
-                (Array.fromList [ v0, v1, v2, v3 ])
-                [ ( 0, 1, 2 ), ( 0, 2, 3 ) ]
-
-        sceneMesh =
-            Mesh.texturedFaces mesh
-    in
-    Scene3d.mesh (Material.texturedMatte texture) sceneMesh
 
 
 
@@ -192,14 +141,46 @@ latLonToPoint coord center =
 
 
 
--- ROADS (3D paths above the topo ground)
+-- STYLED ROADS
 
 
-roadToEntities : Coordinate -> List Coordinate -> List (Scene3d.Entity WorldCoordinates)
-roadToEntities center coords =
+{-| Get color and half-width based on road nature from IGN BD TOPO.
+-}
+roadStyle : String -> { color : Color.Color, halfWidth : Float, z : Float }
+roadStyle nature =
+    if String.contains "1 chauss" nature || String.contains "2 chauss" nature || String.contains "Rond-point" nature then
+        -- Paved road: dark asphalt
+        { color = Color.rgb255 55 55 55, halfWidth = 2.0, z = 0.12 }
+
+    else if String.contains "Chemin" nature then
+        -- Dirt path: golden/sandy
+        { color = Color.rgb255 194 160 80, halfWidth = 1.2, z = 0.10 }
+
+    else if String.contains "Sentier" nature then
+        -- Trail: light brown, narrow
+        { color = Color.rgb255 165 125 75, halfWidth = 0.5, z = 0.08 }
+
+    else if String.contains "cyclable" nature then
+        -- Bike path: light gray
+        { color = Color.rgb255 160 160 160, halfWidth = 1.0, z = 0.11 }
+
+    else if String.contains "Escalier" nature then
+        -- Stairs: gray
+        { color = Color.rgb255 140 140 140, halfWidth = 0.8, z = 0.12 }
+
+    else
+        -- Default: brown path
+        { color = Color.rgb255 150 110 60, halfWidth = 1.0, z = 0.10 }
+
+
+styledRoadToEntities : Coordinate -> StyledRoad -> List (Scene3d.Entity WorldCoordinates)
+styledRoadToEntities center road =
     let
+        style =
+            roadStyle road.nature
+
         points =
-            List.map (\c -> latLonToPoint c center) coords
+            List.map (\c -> latLonToPoint c center) road.coords
 
         pairs =
             List.map2 Tuple.pair points (List.drop 1 points)
@@ -233,75 +214,182 @@ roadToEntities center coords =
 
             else
                 let
-                    -- Road width: 1.5m each side = 3m wide (more visible)
                     nx =
-                        -dy / segLen * 1.5
+                        -dy / segLen * style.halfWidth
 
                     ny =
-                        dx / segLen * 1.5
-
-                    z =
-                        0.15
+                        dx / segLen * style.halfWidth
                 in
                 Just
-                    (Scene3d.quad (Material.matte (Color.rgb255 180 140 90))
-                        (Point3d.meters (fx + nx) (fy + ny) z)
-                        (Point3d.meters (fx - nx) (fy - ny) z)
-                        (Point3d.meters (tx - nx) (ty - ny) z)
-                        (Point3d.meters (tx + nx) (ty + ny) z)
+                    (Scene3d.quad (Material.matte style.color)
+                        (Point3d.meters (fx + nx) (fy + ny) style.z)
+                        (Point3d.meters (fx - nx) (fy - ny) style.z)
+                        (Point3d.meters (tx - nx) (ty - ny) style.z)
+                        (Point3d.meters (tx + nx) (ty + ny) style.z)
                     )
         )
         pairs
 
 
 
--- PLAYER MARKER (red dot + direction arrow on ground)
+-- VEGETATION ZONES (colored ground polygons)
 
 
-playerMarker : Coordinate -> Float -> List (Scene3d.Entity WorldCoordinates)
-playerMarker center bearing =
+vegetationColor : String -> Color.Color
+vegetationColor nature =
+    if String.contains "feuillus" nature then
+        Color.rgb255 30 100 30
+
+    else if String.contains "conif" nature then
+        Color.rgb255 20 80 40
+
+    else if String.contains "mixte" nature then
+        Color.rgb255 25 90 35
+
+    else if String.contains "Bois" nature then
+        Color.rgb255 35 105 35
+
+    else if String.contains "Vigne" nature then
+        Color.rgb255 120 90 160
+
+    else if String.contains "Verger" nature then
+        Color.rgb255 100 150 60
+
+    else if String.contains "Lande" nature then
+        Color.rgb255 140 160 80
+
+    else if String.contains "Haie" nature then
+        Color.rgb255 40 110 40
+
+    else
+        Color.rgb255 60 120 50
+
+
+{-| Render a vegetation zone as a flat colored polygon on the ground.
+Uses triangle fan from centroid for simple polygon filling.
+-}
+vegetationToEntity : Coordinate -> VegetationZone -> List (Scene3d.Entity WorldCoordinates)
+vegetationToEntity center zone =
     let
-        -- Player is at center (0,0) since scene is centered on player
+        color =
+            vegetationColor zone.nature
+
+        points =
+            List.map (\c -> latLonToPoint c center) zone.coords
+
         z =
-            0.2
+            0.05
 
-        -- Direction arrow: a thin triangle pointing in bearing direction
-        bearRad =
-            bearing * pi / 180
+        -- Use triangle fan from centroid
+        xs =
+            List.map (\p -> Length.inMeters (Point3d.xCoordinate p)) points
 
-        -- Arrow tip: 3m ahead
-        tipX =
-            sin bearRad * 3.0
+        ys =
+            List.map (\p -> Length.inMeters (Point3d.yCoordinate p)) points
 
-        tipY =
-            cos bearRad * 3.0
+        n =
+            toFloat (List.length xs)
 
-        -- Arrow base: 0.8m to each side, 0.5m behind
-        perpX =
-            cos bearRad * 0.8
+        cx =
+            List.sum xs / max 1 n
 
-        perpY =
-            -(sin bearRad) * 0.8
+        cy =
+            List.sum ys / max 1 n
 
-        baseX =
-            -(sin bearRad) * 0.5
+        centroid =
+            Point3d.meters cx cy z
 
-        baseY =
-            -(cos bearRad) * 0.5
+        meterPoints =
+            List.map2 (\x y -> ( x, y )) xs ys
+
+        pairs =
+            List.map2 Tuple.pair meterPoints (List.drop 1 meterPoints)
     in
-    [ -- Red dot at player feet
-      Scene3d.sphere (Material.matte Color.red)
-        (Sphere3d.atPoint
-            (Point3d.meters 0 0 z)
-            (Length.meters 0.4)
+    List.map
+        (\( ( x1, y1 ), ( x2, y2 ) ) ->
+            Scene3d.quad (Material.matte color)
+                centroid
+                (Point3d.meters x1 y1 z)
+                (Point3d.meters x2 y2 z)
+                centroid
         )
-    , -- Direction arrow (yellow triangle on ground)
-      Scene3d.quad (Material.matte (Color.rgb255 255 220 0))
-        (Point3d.meters tipX tipY z)
-        (Point3d.meters (baseX + perpX) (baseY + perpY) z)
-        (Point3d.meters baseX baseY z)
-        (Point3d.meters (baseX - perpX) (baseY - perpY) z)
-    ]
+        pairs
+
+
+
+-- IGN BUILDINGS (3D extruded blocks)
+
+
+buildingColor : String -> Color.Color
+buildingColor nature =
+    if String.contains "Industriel" nature || String.contains "agricole" nature then
+        Color.rgb255 160 150 140
+
+    else
+        Color.rgb255 200 185 170
+
+
+{-| Render a building as extruded walls + roof.
+Uses pairs of consecutive polygon points to create wall quads.
+-}
+buildingToEntity : Coordinate -> IgnBuilding -> List (Scene3d.Entity WorldCoordinates)
+buildingToEntity center building =
+    let
+        color =
+            buildingColor building.nature
+
+        roofColor =
+            Color.rgb255 140 60 50
+
+        h =
+            max 3.0 building.hauteur
+
+        points =
+            List.map (\c -> latLonToPoint c center) building.coords
+
+        meterPoints =
+            List.map (\p -> ( Length.inMeters (Point3d.xCoordinate p), Length.inMeters (Point3d.yCoordinate p) )) points
+
+        pairs =
+            List.map2 Tuple.pair meterPoints (List.drop 1 meterPoints)
+
+        -- Walls
+        walls =
+            List.map
+                (\( ( x1, y1 ), ( x2, y2 ) ) ->
+                    Scene3d.quad (Material.matte color)
+                        (Point3d.meters x1 y1 0)
+                        (Point3d.meters x2 y2 0)
+                        (Point3d.meters x2 y2 h)
+                        (Point3d.meters x1 y1 h)
+                )
+                pairs
+
+        -- Roof (triangle fan from centroid)
+        n =
+            toFloat (List.length meterPoints)
+
+        cx =
+            List.sum (List.map Tuple.first meterPoints) / max 1 n
+
+        cy =
+            List.sum (List.map Tuple.second meterPoints) / max 1 n
+
+        roofCenter =
+            Point3d.meters cx cy h
+
+        roof =
+            List.map
+                (\( ( x1, y1 ), ( x2, y2 ) ) ->
+                    Scene3d.quad (Material.matte roofColor)
+                        roofCenter
+                        (Point3d.meters x1 y1 h)
+                        (Point3d.meters x2 y2 h)
+                        roofCenter
+                )
+                pairs
+    in
+    walls ++ roof
 
 
 
@@ -336,7 +424,7 @@ controlPointToEntity center cp =
             , length = Length.meters 2.0
             }
         )
-    , -- Marker sphere (bigger for visibility)
+    , -- Marker sphere
       Scene3d.sphere (Material.matte color)
         (Sphere3d.atPoint
             (Point3d.meters x y 2.2)

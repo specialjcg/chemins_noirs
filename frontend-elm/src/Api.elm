@@ -88,7 +88,7 @@ fetchMultiPointRoute request toMsg =
 -- ROADS (for game 3D view)
 
 
-fetchRoads : Coordinate -> Float -> (Result Http.Error (List (List Coordinate)) -> msg) -> Cmd msg
+fetchRoads : Coordinate -> Float -> (Result Http.Error (List StyledRoad) -> msg) -> Cmd msg
 fetchRoads center marginDeg toMsg =
     Http.post
         { url = "/api/roads"
@@ -102,7 +102,7 @@ fetchRoads center marginDeg toMsg =
 {-| Fetch IGN BD TOPO road geometries (matches IGN topo tiles perfectly).
 Used in game mode for movement that follows the visible map.
 -}
-fetchIgnRoads : Coordinate -> Float -> (Result Http.Error (List (List Coordinate)) -> msg) -> Cmd msg
+fetchIgnRoads : Coordinate -> Float -> (Result Http.Error (List StyledRoad) -> msg) -> Cmd msg
 fetchIgnRoads center marginDeg toMsg =
     Http.post
         { url = "/api/ign-roads"
@@ -112,6 +112,28 @@ fetchIgnRoads center marginDeg toMsg =
         , expect = Http.expectJson toMsg Decoders.decodeRoadsResponse
         }
 
+
+
+fetchIgnVegetation : Coordinate -> Float -> (Result Http.Error (List VegetationZone) -> msg) -> Cmd msg
+fetchIgnVegetation center marginDeg toMsg =
+    Http.post
+        { url = "/api/ign-vegetation"
+        , body =
+            Http.jsonBody
+                (Encoders.encodeRoadsRequest center marginDeg)
+        , expect = Http.expectJson toMsg Decoders.decodeVegetationResponse
+        }
+
+
+fetchIgnBuildings : Coordinate -> Float -> (Result Http.Error (List IgnBuilding) -> msg) -> Cmd msg
+fetchIgnBuildings center marginDeg toMsg =
+    Http.post
+        { url = "/api/ign-buildings"
+        , body =
+            Http.jsonBody
+                (Encoders.encodeRoadsRequest center marginDeg)
+        , expect = Http.expectJson toMsg Decoders.decodeIgnBuildingsResponse
+        }
 
 
 fetchBuildings : Coordinate -> Float -> (Result Http.Error (List { center : Coordinate, polygon : List Coordinate }) -> msg) -> Cmd msg
