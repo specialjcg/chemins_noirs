@@ -254,7 +254,8 @@ async fn ign_roads_handler(
                             let arr = c.as_array()?;
                             let lon = arr.first()?.as_f64()?;
                             let lat = arr.get(1)?.as_f64()?;
-                            Some(serde_json::json!({"lat": lat, "lon": lon}))
+                            let alt = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            Some(serde_json::json!({"lat": lat, "lon": lon, "alt": alt}))
                         })
                         .collect();
 
@@ -343,7 +344,8 @@ async fn fetch_ign_polygons(
                             let arr = c.as_array()?;
                             let lon = arr.first()?.as_f64()?;
                             let lat = arr.get(1)?.as_f64()?;
-                            Some(serde_json::json!({"lat": lat, "lon": lon}))
+                            let alt = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            Some(serde_json::json!({"lat": lat, "lon": lon, "alt": alt}))
                         })
                         .collect();
 
@@ -446,7 +448,8 @@ async fn ign_buildings_handler(
                             let arr = c.as_array()?;
                             let lon = arr.first()?.as_f64()?;
                             let lat = arr.get(1)?.as_f64()?;
-                            Some(serde_json::json!({"lat": lat, "lon": lon}))
+                            let alt = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            Some(serde_json::json!({"lat": lat, "lon": lon, "alt": alt}))
                         })
                         .collect();
 
@@ -464,6 +467,102 @@ async fn ign_buildings_handler(
 
     tracing::info!("IGN buildings: {} buildings", buildings.len());
     Ok(Json(serde_json::json!({ "buildings": buildings, "count": buildings.len() })))
+}
+
+/// Handler for /api/elevation-grid - returns a grid of elevation points from IGN
+async fn elevation_grid_handler(
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let center_lat = req["center_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "center_lat required".into()))?;
+    let center_lon = req["center_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "center_lon required".into()))?;
+    let size_m = req["size_m"].as_f64().unwrap_or(500.0);
+    let resolution = req["resolution"].as_u64().unwrap_or(20) as usize;
+
+    tracing::info!("Elevation grid request: center=({},{}), size={}m, res={}", center_lat, center_lon, size_m, resolution);
+
+    // Generate grid points
+    let half_size_deg_lat = size_m / 111000.0 / 2.0;
+    let half_size_deg_lon = size_m / (111000.0 * center_lat.to_radians().cos()) / 2.0;
+    let cell_size_m = size_m / (resolution as f64 - 1.0);
+
+    let mut lats = Vec::new();
+    let mut lons = Vec::new();
+    for row in 0..resolution {
+        for col in 0..resolution {
+            let lat = center_lat - half_size_deg_lat + (row as f64 / (resolution as f64 - 1.0)) * 2.0 * half_size_deg_lat;
+            let lon = center_lon - half_size_deg_lon + (col as f64 / (resolution as f64 - 1.0)) * 2.0 * half_size_deg_lon;
+            lats.push(format!("{:.6}", lat));
+            lons.push(format!("{:.6}", lon));
+        }
+    }
+
+    // Batch query IGN elevation API (pipe-separated)
+    let url = format!(
+        "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json?lon={}&lat={}&resource=ign_rge_alti_wld&zonly=true",
+        lons.join("|"), lats.join("|")
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN elevation request failed: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err((StatusCode::BAD_GATEWAY, format!("IGN elevation error: {}", response.status())));
+    }
+
+    let data: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN elevation parse error: {}", e)))?;
+
+    // Parse elevations from response
+    let elevations: Vec<f64> = data["elevations"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect())
+        .unwrap_or_default();
+
+    if elevations.len() != resolution * resolution {
+        return Err((StatusCode::BAD_GATEWAY, format!(
+            "IGN elevation returned {} values, expected {}", elevations.len(), resolution * resolution
+        )));
+    }
+
+    // Build 2D grid
+    let mut grid: Vec<Vec<f64>> = Vec::new();
+    let mut min_alt = f64::MAX;
+    let mut max_alt = f64::MIN;
+    for row in 0..resolution {
+        let mut row_data = Vec::new();
+        for col in 0..resolution {
+            let alt = elevations[row * resolution + col];
+            if alt > -1000.0 {
+                min_alt = min_alt.min(alt);
+                max_alt = max_alt.max(alt);
+            }
+            row_data.push(alt);
+        }
+        grid.push(row_data);
+    }
+
+    let origin_lat = center_lat - half_size_deg_lat;
+    let origin_lon = center_lon - half_size_deg_lon;
+
+    tracing::info!("Elevation grid: {}x{}, alt range {:.0}-{:.0}m", resolution, resolution, min_alt, max_alt);
+
+    Ok(Json(serde_json::json!({
+        "grid": grid,
+        "min_alt": min_alt,
+        "max_alt": max_alt,
+        "origin_lat": origin_lat,
+        "origin_lon": origin_lon,
+        "cell_size_m": cell_size_m,
+        "rows": resolution,
+        "cols": resolution
+    })))
 }
 
 /// Handler for /api/route - generates partial graph on-demand and finds route
@@ -935,6 +1034,7 @@ async fn main() {
         .route("/api/ign-roads", axum::routing::post(ign_roads_handler))
         .route("/api/ign-vegetation", axum::routing::post(ign_vegetation_handler))
         .route("/api/ign-buildings", axum::routing::post(ign_buildings_handler))
+        .route("/api/elevation-grid", axum::routing::post(elevation_grid_handler))
         .route("/api/buildings", axum::routing::post(buildings_handler))
         .route("/api/log", axum::routing::post(frontend_log_handler))
         .route("/api/click_mode", axum::routing::get(click_mode_handler))

@@ -136,6 +136,23 @@ fetchIgnBuildings center marginDeg toMsg =
         }
 
 
+fetchElevationGrid : Coordinate -> Float -> Int -> (Result Http.Error ElevationGrid -> msg) -> Cmd msg
+fetchElevationGrid center sizeM resolution toMsg =
+    Http.post
+        { url = "/api/elevation-grid"
+        , body =
+            Http.jsonBody
+                (Json.Encode.object
+                    [ ( "center_lat", Json.Encode.float center.lat )
+                    , ( "center_lon", Json.Encode.float center.lon )
+                    , ( "size_m", Json.Encode.float sizeM )
+                    , ( "resolution", Json.Encode.int resolution )
+                    ]
+                )
+        , expect = Http.expectJson toMsg Decoders.decodeElevationGrid
+        }
+
+
 fetchBuildings : Coordinate -> Float -> (Result Http.Error (List { center : Coordinate, polygon : List Coordinate }) -> msg) -> Cmd msg
 fetchBuildings center marginDeg toMsg =
     Http.post

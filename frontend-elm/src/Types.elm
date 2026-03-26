@@ -222,6 +222,7 @@ type Msg
     | RoadsFetched (Result Http.Error (List StyledRoad))
     | VegetationFetched (Result Http.Error (List VegetationZone))
     | IgnBuildingsFetched (Result Http.Error (List IgnBuilding))
+    | ElevationGridFetched (Result Http.Error ElevationGrid)
     | BuildingsFetched (Result Http.Error (List { center : Coordinate, polygon : List Coordinate }))
     | GameMouseDrag Float
     | GameMouseDown Float
@@ -280,6 +281,7 @@ type alias GameState =
     , roads : List StyledRoad
     , vegetation : List VegetationZone
     , ign_buildings : List IgnBuilding
+    , elevationGrid : Maybe ElevationGrid
     , buildings : List { center : Coordinate, polygon : List Coordinate }
     , routePath : Array.Array Coordinate
     , routeIndex : Int
@@ -313,22 +315,41 @@ type alias Coordinate =
     }
 
 
+type alias Coord3D =
+    { lat : Float
+    , lon : Float
+    , alt : Float
+    }
+
+
+type alias ElevationGrid =
+    { grid : List (List Float)
+    , minAlt : Float
+    , maxAlt : Float
+    , originLat : Float
+    , originLon : Float
+    , cellSizeM : Float
+    , rows : Int
+    , cols : Int
+    }
+
+
 type alias StyledRoad =
     { nature : String
-    , coords : List Coordinate
+    , coords : List Coord3D
     }
 
 
 type alias VegetationZone =
     { nature : String
-    , coords : List Coordinate
+    , coords : List Coord3D
     }
 
 
 type alias IgnBuilding =
     { nature : String
     , hauteur : Float
-    , coords : List Coordinate
+    , coords : List Coord3D
     }
 
 
@@ -571,6 +592,7 @@ initialGameState waypoints =
     , roads = []
     , vegetation = []
     , ign_buildings = []
+    , elevationGrid = Nothing
     , buildings = []
     , routePath = Array.empty
     , routeIndex = 0

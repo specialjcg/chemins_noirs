@@ -199,20 +199,21 @@ decodeSavedRoutesList =
     Decode.list decodeSavedRoute
 
 
+decodeCoord3D : Decoder Coord3D
+decodeCoord3D =
+    Decode.map3 Coord3D
+        (Decode.field "lat" Decode.float)
+        (Decode.field "lon" Decode.float)
+        (Decode.oneOf [ Decode.field "alt" Decode.float, Decode.succeed 0 ])
+
+
 decodeRoadsResponse : Decoder (List StyledRoad)
 decodeRoadsResponse =
     Decode.field "roads"
         (Decode.list
             (Decode.map2 StyledRoad
                 (Decode.field "nature" Decode.string)
-                (Decode.field "coords"
-                    (Decode.list
-                        (Decode.map2 Coordinate
-                            (Decode.field "lat" Decode.float)
-                            (Decode.field "lon" Decode.float)
-                        )
-                    )
-                )
+                (Decode.field "coords" (Decode.list decodeCoord3D))
             )
         )
 
@@ -223,16 +224,22 @@ decodeVegetationResponse =
         (Decode.list
             (Decode.map2 VegetationZone
                 (Decode.field "nature" Decode.string)
-                (Decode.field "coords"
-                    (Decode.list
-                        (Decode.map2 Coordinate
-                            (Decode.field "lat" Decode.float)
-                            (Decode.field "lon" Decode.float)
-                        )
-                    )
-                )
+                (Decode.field "coords" (Decode.list decodeCoord3D))
             )
         )
+
+
+decodeElevationGrid : Decoder ElevationGrid
+decodeElevationGrid =
+    Decode.map8 ElevationGrid
+        (Decode.field "grid" (Decode.list (Decode.list Decode.float)))
+        (Decode.field "min_alt" Decode.float)
+        (Decode.field "max_alt" Decode.float)
+        (Decode.field "origin_lat" Decode.float)
+        (Decode.field "origin_lon" Decode.float)
+        (Decode.field "cell_size_m" Decode.float)
+        (Decode.field "rows" Decode.int)
+        (Decode.field "cols" Decode.int)
 
 
 decodeIgnBuildingsResponse : Decoder (List IgnBuilding)
@@ -242,14 +249,7 @@ decodeIgnBuildingsResponse =
             (Decode.map3 IgnBuilding
                 (Decode.field "nature" Decode.string)
                 (Decode.field "hauteur" Decode.float)
-                (Decode.field "coords"
-                    (Decode.list
-                        (Decode.map2 Coordinate
-                            (Decode.field "lat" Decode.float)
-                            (Decode.field "lon" Decode.float)
-                        )
-                    )
-                )
+                (Decode.field "coords" (Decode.list decodeCoord3D))
             )
         )
 

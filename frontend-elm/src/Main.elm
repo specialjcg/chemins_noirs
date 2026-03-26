@@ -1084,7 +1084,7 @@ update msg model =
                         initialRoads =
                             case model.lastResponse of
                                 Just r ->
-                                    [ { nature = "Chemin", coords = r.path } ]
+                                    [ { nature = "Chemin", coords = List.map (\c -> { lat = c.lat, lon = c.lon, alt = 0 }) r.path } ]
 
                                 Nothing ->
                                     []
@@ -1144,6 +1144,7 @@ update msg model =
                         , Api.fetchIgnRoads startPos 0.01 RoadsFetched
                         , Api.fetchIgnVegetation startPos 0.005 VegetationFetched
                         , Api.fetchIgnBuildings startPos 0.005 IgnBuildingsFetched
+                        , Api.fetchElevationGrid startPos 400 10 ElevationGridFetched
                         , logCmd ("START pos=" ++ String.fromFloat startPos.lat ++ "," ++ String.fromFloat startPos.lon)
                         ]
                     )
@@ -1508,15 +1509,15 @@ update msg model =
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok roads ) ->
                     let
-                        plainRoads =
-                            List.map .coords roads
+                        flatRoads =
+                            plainRoads roads
 
                         segCount =
                             List.sum (List.map (\r -> List.length r.coords - 1) roads)
 
                         -- Snap player to nearest road SEGMENT
                         snapResult =
-                            GameEngine.findNearestSegment gs.playerPosition plainRoads
+                            GameEngine.findNearestSegment gs.playerPosition flatRoads
 
                         ( snappedPos, snapDist ) =
                             case snapResult of
@@ -1572,6 +1573,19 @@ update msg model =
                 _ ->
                     ( model, Cmd.none )
 
+        ElevationGridFetched result ->
+            case ( model.appMode, result ) of
+                ( Orienteering gs, Ok grid ) ->
+                    ( { model | appMode = Orienteering { gs | elevationGrid = Just grid } }
+                    , logCmd ("ELEVATION " ++ String.fromInt grid.rows ++ "x" ++ String.fromInt grid.cols ++ " alt=" ++ String.fromInt (round grid.minAlt) ++ "-" ++ String.fromInt (round grid.maxAlt) ++ "m")
+                    )
+
+                ( _, Err err ) ->
+                    ( model, logCmd ("ELEVATION FAILED: " ++ httpErrorToString err) )
+
+                _ ->
+                    ( model, Cmd.none )
+
         BuildingsFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok buildings ) ->
@@ -1589,7 +1603,7 @@ update msg model =
                         let
                             -- Manual forward = boost 10m along road
                             result =
-                                GameEngine.advanceOnSegments gs.playerPosition gs.playerBearing 10.0 (List.map .coords gs.roads)
+                                GameEngine.advanceOnSegments gs.playerPosition gs.playerBearing 10.0 (plainRoads gs.roads)
 
                             nextPos =
                                 result.position
@@ -1651,24 +1665,9 @@ update msg model =
                                     , foundFlash = nextIdx > gs.currentPointIndex
                                     , totalDistanceM = gs.totalDistanceM + haversineMeters gs.playerPosition nextPos
                                 }
-                            -- Reload roads when moved > 300m from road center
-                            roadCenter =
-                                case List.head (List.concatMap .coords gs.roads) of
-                                    Just c -> c
-                                    Nothing -> nextPos
-
-                            needReload =
-                                haversineMeters nextPos roadCenter > 300
-
+                            -- No reload on FWD — data covers 1km+ around start point
                             reloadCmds =
-                                if needReload then
-                                    [ Api.fetchIgnRoads nextPos 0.01 RoadsFetched
-                                    , Api.fetchIgnVegetation nextPos 0.005 VegetationFetched
-                                    , Api.fetchIgnBuildings nextPos 0.005 IgnBuildingsFetched
-                                    ]
-
-                                else
-                                    []
+                                []
                         in
                         ( { model | appMode = Orienteering newGs }
                         , Cmd.batch
@@ -1758,7 +1757,7 @@ update msg model =
 
                             -- Snap click to nearest road segment
                             allSegments =
-                                List.concatMap (\r -> GameEngine.roadToSegments r.coords) gs.roads
+                                List.concatMap GameEngine.roadToSegments (plainRoads gs.roads)
 
                             snappedPoint =
                                 allSegments
@@ -1871,9 +1870,18 @@ update msg model =
 
 
 
-{-| Smoothly interpolate between two bearings (0-360), handling the 360/0 wrap.
-Factor 0.0 = keep current, 1.0 = jump to target.
+{-| Convert Coord3D list to Coordinate list (drop altitude for GameEngine).
 -}
+coord3dToPlain : List Coord3D -> List Coordinate
+coord3dToPlain =
+    List.map (\c -> { lat = c.lat, lon = c.lon })
+
+
+plainRoads : List StyledRoad -> List (List Coordinate)
+plainRoads roads =
+    List.map (\r -> coord3dToPlain r.coords) roads
+
+
 smoothBearing : Float -> Float -> Float -> Float
 smoothBearing current target factor =
     let
