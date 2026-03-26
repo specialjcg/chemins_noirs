@@ -5,11 +5,14 @@ Approche fonctionnelle pure : pas de mutations, fonctions pures, gestion explici
 -}
 
 import Api
+import Array
 import Browser
 import Browser.Events
 import Time
 import Decoders
 import Encoders
+import GameEngine
+import TopoTile
 import Html exposing (..)
 import Html.Attributes exposing (class, style)
 import Html.Events
@@ -1072,7 +1075,7 @@ update msg model =
 
         ExitOrienteeringMode ->
             ( { model | appMode = Planning }
-            , Ports.setMapVisible True
+            , Ports.exitGameView ()
             )
 
         StartGame ->
@@ -1097,10 +1100,20 @@ update msg model =
                                 Nothing ->
                                     gs.playerPosition
 
+                        routeArray =
+                            case model.lastResponse of
+                                Just r ->
+                                    Array.fromList r.path
+
+                                Nothing ->
+                                    Array.empty
+
                         newGs =
                             { gs
                                 | gameStatus = GameRunning
                                 , roads = initialRoads
+                                , routePath = routeArray
+                                , routeIndex = 0
                                 , playerPosition = startPos
                             }
 
@@ -1124,8 +1137,14 @@ update msg model =
                     in
                     ( { model | appMode = Orienteering newGs }
                     , Cmd.batch
-                        [ Ports.setMapVisible False
-                        , Api.fetchRoads startPos 0.005 RoadsFetched
+                        [ Ports.enterGameView
+                            { lat = startPos.lat
+                            , lon = startPos.lon
+                            , bearing = gs.playerBearing
+                            }
+                        , Api.fetchIgnRoads startPos 0.01 RoadsFetched
+                        , TopoTile.loadTopoGrid startPos.lat startPos.lon TopoTileLoaded
+                        , logCmd ("START pos=" ++ String.fromFloat startPos.lat ++ "," ++ String.fromFloat startPos.lon)
                         ]
                     )
 
@@ -1252,7 +1271,7 @@ update msg model =
                             }
                     in
                     ( { model | appMode = Orienteering newGs, pending = False }
-                    , Api.fetchRoads endPos 0.005 RoadsFetched
+                    , Api.fetchIgnRoads endPos 0.005 RoadsFetched
                     )
 
                 ( _, Err httpError ) ->
@@ -1367,9 +1386,23 @@ update msg model =
 
                         newGs =
                             { gs | showTopoOverlay = newShow }
+
                     in
                     ( { model | appMode = Orienteering newGs }
-                    , Ports.setMapVisible newShow
+                    , if newShow then
+                        Ports.showTopoOverlay
+                            { show = True
+                            , lat = gs.playerPosition.lat
+                            , lon = gs.playerPosition.lon
+                            }
+
+                      else
+                        -- Retour en mode walk
+                        Ports.updateGameCamera
+                            { lat = gs.playerPosition.lat
+                            , lon = gs.playerPosition.lon
+                            , bearing = gs.playerBearing
+                            }
                     )
 
                 _ ->
@@ -1451,7 +1484,7 @@ update msg model =
                             toFloat (modBy 360 (round gs.playerBearing - 10 + 360))
                     in
                     ( { model | appMode = Orienteering { gs | playerBearing = newBearing } }
-                    , Cmd.none
+                    , Ports.updateGameCamera { lat = gs.playerPosition.lat, lon = gs.playerPosition.lon, bearing = newBearing }
                     )
 
                 _ ->
@@ -1465,7 +1498,7 @@ update msg model =
                             toFloat (modBy 360 (round gs.playerBearing + 10))
                     in
                     ( { model | appMode = Orienteering { gs | playerBearing = newBearing } }
-                    , Cmd.none
+                    , Ports.updateGameCamera { lat = gs.playerPosition.lat, lon = gs.playerPosition.lon, bearing = newBearing }
                     )
 
                 _ ->
@@ -1474,7 +1507,72 @@ update msg model =
         RoadsFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok roads ) ->
-                    ( { model | appMode = Orienteering { gs | roads = roads } }
+                    let
+                        segCount =
+                            List.sum (List.map (\r -> List.length r - 1) roads)
+
+                        -- Snap player to nearest road SEGMENT (not just nearest point)
+                        snapResult =
+                            GameEngine.findNearestSegment gs.playerPosition roads
+
+                        ( snappedPos, snapDist ) =
+                            case snapResult of
+                                Just nearest ->
+                                    ( nearest.proj, nearest.dist )
+
+                                Nothing ->
+                                    ( gs.playerPosition, 0 )
+
+                        -- Only snap if close enough (< 30m), otherwise keep position
+                        finalPos =
+                            if snapDist < 30 then
+                                snappedPos
+
+                            else
+                                gs.playerPosition
+                    in
+                    ( { model | appMode = Orienteering { gs | roads = roads, playerPosition = finalPos } }
+                    , Cmd.batch
+                        [ logCmd ("ROADS " ++ String.fromInt (List.length roads) ++ "r " ++ String.fromInt segCount ++ "s snap=" ++ String.fromInt (round snapDist) ++ "m to " ++ String.fromFloat finalPos.lat ++ "," ++ String.fromFloat finalPos.lon)
+                        , Ports.updateGameCamera { lat = snappedPos.lat, lon = snappedPos.lon, bearing = gs.playerBearing }
+                        ]
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        TopoTileLoaded bounds result ->
+            case ( model.appMode, result ) of
+                ( Orienteering gs, Ok texture ) ->
+                    let
+                        newTile =
+                            { texture = texture, bounds = bounds }
+
+                        -- Replace tile if same bounds already exists, otherwise add
+                        existingFiltered =
+                            List.filter
+                                (\t ->
+                                    not (t.bounds.minLat == bounds.minLat && t.bounds.minLon == bounds.minLon)
+                                )
+                                gs.topoTiles
+
+                        newTiles =
+                            newTile :: existingFiltered
+
+                        newCenter =
+                            Just gs.playerPosition
+                    in
+                    ( { model | appMode = Orienteering { gs | topoTiles = newTiles, topoTileCenter = newCenter } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        BuildingsFetched result ->
+            case ( model.appMode, result ) of
+                ( Orienteering gs, Ok buildings ) ->
+                    ( { model | appMode = Orienteering { gs | buildings = buildings } }
                     , Cmd.none
                     )
 
@@ -1486,15 +1584,22 @@ update msg model =
                 Orienteering gs ->
                     if gs.gameStatus == GameRunning then
                         let
-                            -- Find the best next position by walking along roads
+                            -- Manual forward = boost 10m along road
+                            result =
+                                GameEngine.advanceOnSegments gs.playerPosition gs.playerBearing 10.0 gs.roads
+
                             nextPos =
-                                advanceAlongRoad gs.playerPosition gs.playerBearing 5.0 gs.roads
+                                result.position
 
-                            -- Calculate bearing towards new position
+                            -- After moving, snap bearing to road direction
                             newBearing =
-                                bearingBetween gs.playerPosition nextPos
+                                if result.snapped then
+                                    result.roadBearing
 
-                            -- Check proximity to control points
+                                else
+                                    gs.playerBearing
+
+                            -- Check control points
                             currentCp =
                                 List.drop gs.currentPointIndex gs.controlPoints
                                     |> List.head
@@ -1541,10 +1646,37 @@ update msg model =
                                     , currentPointIndex = nextIdx
                                     , gameStatus = newStatus
                                     , foundFlash = nextIdx > gs.currentPointIndex
+                                    , totalDistanceM = gs.totalDistanceM + haversineMeters gs.playerPosition nextPos
                                 }
+                            -- Check if we need to reload tiles (moved > 80m from last tile center)
+                            needReload =
+                                case gs.topoTileCenter of
+                                    Just tc ->
+                                        haversineMeters nextPos tc > 80
+
+                                    Nothing ->
+                                        True
+
+                            reloadCmds =
+                                if needReload then
+                                    [ Api.fetchIgnRoads nextPos 0.01 RoadsFetched
+                                    , TopoTile.loadTopoGrid nextPos.lat nextPos.lon TopoTileLoaded
+                                    ]
+
+                                else
+                                    []
                         in
                         ( { model | appMode = Orienteering newGs }
-                        , Api.fetchRoads nextPos 0.005 RoadsFetched
+                        , Cmd.batch
+                            ([ Ports.updateGameCamera
+                                { lat = nextPos.lat
+                                , lon = nextPos.lon
+                                , bearing = newBearing
+                                }
+                             , logCmd ("FWD bear=" ++ String.fromInt (round newBearing) ++ " moved=" ++ String.fromInt (round (haversineMeters gs.playerPosition nextPos)) ++ "m snapped=" ++ (if result.snapped then "Y" else "N"))
+                             ]
+                                ++ reloadCmds
+                            )
                         )
 
                     else
@@ -1556,19 +1688,35 @@ update msg model =
         GameMouseDown mouseX ->
             case model.appMode of
                 Orienteering gs ->
-                    ( { model | appMode = Orienteering { gs | isDragging = True, lastMouseX = mouseX } }
+                    ( { model | appMode = Orienteering { gs | isDragging = True, lastMouseX = mouseX, dragStartX = mouseX } }
                     , Cmd.none
                     )
 
                 _ ->
                     ( model, Cmd.none )
 
-        GameMouseUp ->
+        GameMouseUp mouseX ->
             case model.appMode of
                 Orienteering gs ->
-                    ( { model | appMode = Orienteering { gs | isDragging = False } }
-                    , Cmd.none
-                    )
+                    let
+                        wasDrag =
+                            abs (mouseX - gs.dragStartX) > 5
+
+                        newGs =
+                            { gs | isDragging = False }
+                    in
+                    if wasDrag || gs.gameStatus /= GameRunning then
+                        ( { model | appMode = Orienteering (addLog ("DRAG dx=" ++ String.fromInt (round (mouseX - gs.dragStartX))) newGs) }
+                        , logCmd ("MOUSEUP drag dx=" ++ String.fromInt (round (mouseX - gs.dragStartX)))
+                        )
+
+                    else
+                        -- Click (pas de drag) → avancer
+                        let
+                            ( newModel, cmd ) =
+                                update GameKeyForward { model | appMode = Orienteering (addLog "MOUSEUP→FWD" newGs) }
+                        in
+                        ( newModel, Cmd.batch [ cmd, logCmd "MOUSEUP click→FWD" ] )
 
                 _ ->
                     ( model, Cmd.none )
@@ -1585,7 +1733,7 @@ update msg model =
                                 toFloat (modBy 360 (round (gs.playerBearing + deltaX * 0.4) + 360))
                         in
                         ( { model | appMode = Orienteering { gs | playerBearing = newBearing, lastMouseX = mouseX } }
-                        , Cmd.none
+                        , Ports.updateGameCamera { lat = gs.playerPosition.lat, lon = gs.playerPosition.lon, bearing = newBearing }
                         )
 
                     else
@@ -1593,6 +1741,170 @@ update msg model =
 
                 _ ->
                     ( model, Cmd.none )
+
+        GameMapClicked target ->
+            case model.appMode of
+                Orienteering gs ->
+                    if gs.gameStatus == GameRunning then
+                        let
+                            clickCoord =
+                                { lat = target.lat, lon = target.lon }
+
+                            -- Snap click to nearest road segment
+                            allSegments =
+                                List.concatMap GameEngine.roadToSegments gs.roads
+
+                            snappedPoint =
+                                allSegments
+                                    |> List.map (\( a, b ) -> GameEngine.projectOntoSegment clickCoord a b)
+                                    |> List.sortBy (\proj -> haversineMeters clickCoord proj)
+                                    |> List.head
+                                    |> Maybe.withDefault clickCoord
+
+                            -- Only move if the click is near a road (< 50m)
+                            snapDist =
+                                haversineMeters clickCoord snappedPoint
+
+                            moveTarget =
+                                if snapDist < 50 then
+                                    snappedPoint
+
+                                else
+                                    clickCoord
+
+                            -- Limit movement to 100m max per click
+                            distToTarget =
+                                haversineMeters gs.playerPosition moveTarget
+
+                            finalTarget =
+                                if distToTarget > 100 then
+                                    let
+                                        ratio =
+                                            100 / distToTarget
+                                    in
+                                    { lat = gs.playerPosition.lat + (moveTarget.lat - gs.playerPosition.lat) * ratio
+                                    , lon = gs.playerPosition.lon + (moveTarget.lon - gs.playerPosition.lon) * ratio
+                                    }
+
+                                else
+                                    moveTarget
+
+                            -- Update bearing towards target
+                            newBearing =
+                                GameEngine.bearingBetween gs.playerPosition finalTarget
+
+                            -- Check control points
+                            currentCp =
+                                List.drop gs.currentPointIndex gs.controlPoints
+                                    |> List.head
+
+                            ( updatedCps, nextIdx, finished ) =
+                                case currentCp of
+                                    Just cp ->
+                                        if haversineMeters finalTarget cp.position < 30 then
+                                            let
+                                                cps =
+                                                    List.indexedMap
+                                                        (\i c ->
+                                                            if i == gs.currentPointIndex then
+                                                                { c | found = True }
+
+                                                            else
+                                                                c
+                                                        )
+                                                        gs.controlPoints
+
+                                                newIdx =
+                                                    gs.currentPointIndex + 1
+                                            in
+                                            ( cps, newIdx, newIdx >= List.length gs.controlPoints )
+
+                                        else
+                                            ( gs.controlPoints, gs.currentPointIndex, False )
+
+                                    Nothing ->
+                                        ( gs.controlPoints, gs.currentPointIndex, False )
+
+                            newStatus =
+                                if finished then
+                                    GameFinished
+
+                                else
+                                    gs.gameStatus
+
+                            logMsg =
+                                "CLICK (" ++ String.fromFloat (toFloat (round (target.lat * 100000)) / 100000) ++ "," ++ String.fromFloat (toFloat (round (target.lon * 100000)) / 100000) ++ ") snap=" ++ String.fromInt (round snapDist) ++ "m dist=" ++ String.fromInt (round (haversineMeters gs.playerPosition finalTarget)) ++ "m roads=" ++ String.fromInt (List.length gs.roads)
+
+                            newGs =
+                                addLog logMsg
+                                    { gs
+                                        | playerPosition = finalTarget
+                                        , playerBearing = newBearing
+                                        , controlPoints = updatedCps
+                                        , currentPointIndex = nextIdx
+                                        , gameStatus = newStatus
+                                        , foundFlash = nextIdx > gs.currentPointIndex
+                                    }
+                        in
+                        ( { model | appMode = Orienteering newGs }
+                        , Cmd.batch
+                            [ Ports.updateGameCamera
+                                { lat = finalTarget.lat
+                                , lon = finalTarget.lon
+                                , bearing = newBearing
+                                }
+                            , logCmd ("MAPCLICK target=" ++ String.fromFloat target.lat ++ "," ++ String.fromFloat target.lon ++ " snap=" ++ String.fromInt (round snapDist) ++ "m moved=" ++ String.fromInt (round (haversineMeters gs.playerPosition finalTarget)) ++ "m")
+                            ]
+                        )
+
+                    else
+                        ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+
+
+{-| Smoothly interpolate between two bearings (0-360), handling the 360/0 wrap.
+Factor 0.0 = keep current, 1.0 = jump to target.
+-}
+smoothBearing : Float -> Float -> Float -> Float
+smoothBearing current target factor =
+    let
+        diff =
+            target - current
+
+        wrappedDiff =
+            if diff > 180 then
+                diff - 360
+
+            else if diff < -180 then
+                diff + 360
+
+            else
+                diff
+
+        result =
+            current + wrappedDiff * factor
+    in
+    if result < 0 then
+        result + 360
+
+    else if result >= 360 then
+        result - 360
+
+    else
+        result
+
+
+addLog : String -> GameState -> GameState
+addLog msg gs =
+    { gs | debugLog = msg :: List.take 9 gs.debugLog }
+
+
+logCmd : String -> Cmd Msg
+logCmd msg =
+    Api.sendLog msg (\_ -> NoOp)
 
 
 
@@ -1613,8 +1925,9 @@ view model =
                         , style "height" "100vh"
                         , style "z-index" "2"
                         , style "overflow" "hidden"
+                        , style "cursor" "pointer"
                         ]
-                        [ World3D.view gs gs.roads 1600 900
+                        [ World3D.view gs 1600 900
                         ]
 
                   else
@@ -1692,7 +2005,9 @@ subscriptions model =
                 (Json.Decode.field "clientX" Json.Decode.float)
             )
         , Browser.Events.onMouseUp
-            (Json.Decode.succeed GameMouseUp)
+            (Json.Decode.map GameMouseUp
+                (Json.Decode.field "clientX" Json.Decode.float)
+            )
         , Ports.gameWheelReceived
             (\deltaY ->
                 if deltaY > 0 then
@@ -1701,6 +2016,7 @@ subscriptions model =
                 else
                     NoOp
             )
+        , Ports.gameMapClicked GameMapClicked
         , Browser.Events.onKeyDown
             (Json.Decode.field "key" Json.Decode.string
                 |> Json.Decode.map
@@ -1748,89 +2064,6 @@ subscriptions model =
 
 
 -- HELPERS
-
-
-{-| Advance player along the nearest road in the direction of bearing.
-Finds the closest road point ahead and moves there.
--}
-advanceAlongRoad : Coordinate -> Float -> Float -> List (List Coordinate) -> Coordinate
-advanceAlongRoad pos bearing distM roads =
-    let
-        bearingRad =
-            bearing * pi / 180
-
-        -- All road points from all roads
-        allPoints =
-            List.concatMap identity roads
-
-        -- Filter points that are roughly in the direction we're facing
-        -- and within a reasonable distance
-        candidates =
-            List.filterMap
-                (\pt ->
-                    let
-                        dist =
-                            haversineMeters pos pt
-
-                        ptBearing =
-                            bearingBetween pos pt
-
-                        -- Angle difference between player bearing and direction to point
-                        angleDiff =
-                            abs (ptBearing - bearing)
-                                |> (\d ->
-                                        if d > 180 then
-                                            360 - d
-
-                                        else
-                                            d
-                                   )
-                    in
-                    -- Point must be: 2-20m away, within 90° of bearing direction
-                    if dist > 1 && dist < 20 && angleDiff < 90 then
-                        Just ( dist, angleDiff, pt )
-
-                    else
-                        Nothing
-                )
-                allPoints
-
-        -- Sort by angle difference first (prefer points in our direction), then distance
-        best =
-            candidates
-                |> List.sortBy (\( dist, angle, _ ) -> angle * 2 + dist)
-                |> List.head
-    in
-    case best of
-        Just ( _, _, pt ) ->
-            pt
-
-        Nothing ->
-            -- No road point found, fallback: move in bearing direction
-            { lat = pos.lat + cos bearingRad * distM / 111000
-            , lon = pos.lon + sin bearingRad * distM / (111000 * cos (pos.lat * pi / 180))
-            }
-
-
-bearingBetween : Coordinate -> Coordinate -> Float
-bearingBetween from to =
-    let
-        dLon =
-            (to.lon - from.lon) * pi / 180
-
-        lat1 =
-            from.lat * pi / 180
-
-        lat2 =
-            to.lat * pi / 180
-
-        y =
-            sin dLon * cos lat2
-
-        x =
-            cos lat1 * sin lat2 - sin lat1 * cos lat2 * cos dLon
-    in
-    toFloat (modBy 360 (round (atan2 y x * 180 / pi) + 360))
 
 
 handleMapClick : Float -> Float -> Model -> ( Model, Cmd Msg )

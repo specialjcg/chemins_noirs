@@ -1400,14 +1400,23 @@ fn is_supported_highway(highway_value: &str) -> bool {
         highway_value,
         "path"
             | "footway"
+            | "pedestrian"
+            | "cycleway"
+            | "bridleway"
+            | "steps"
             | "living_street"
             | "secondary"
+            | "secondary_link"
             | "tertiary"
+            | "tertiary_link"
             | "residential"
             | "track"
             | "service"
             | "unclassified"
             | "primary"
+            | "primary_link"
+            | "trunk"
+            | "trunk_link"
     )
 }
 

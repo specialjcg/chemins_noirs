@@ -1,8 +1,12 @@
 module Types exposing (..)
 
+import Array
+import Color
 import Http
 import Json.Decode
 import Dict exposing (Dict)
+import Scene3d.Material
+import WebGL.Texture
 
 
 -- MODEL
@@ -218,9 +222,12 @@ type Msg
     | GameKeyRight
     | GameKeyForward
     | RoadsFetched (Result Http.Error (List (List Coordinate)))
+    | BuildingsFetched (Result Http.Error (List { center : Coordinate, polygon : List Coordinate }))
     | GameMouseDrag Float
     | GameMouseDown Float
-    | GameMouseUp
+    | GameMouseUp Float
+    | GameMapClicked { lat : Float, lon : Float }
+    | TopoTileLoaded { minLat : Float, maxLat : Float, minLon : Float, maxLon : Float } (Result WebGL.Texture.Error (Scene3d.Material.Texture Color.Color))
 
 
 
@@ -272,8 +279,15 @@ type alias GameState =
     , speedMultiplier : Float
     , targetBearing : Maybe Float
     , roads : List (List Coordinate)
+    , buildings : List { center : Coordinate, polygon : List Coordinate }
+    , routePath : Array.Array Coordinate
+    , routeIndex : Int
     , isDragging : Bool
     , lastMouseX : Float
+    , dragStartX : Float
+    , debugLog : List String
+    , topoTiles : List { texture : Scene3d.Material.Texture Color.Color, bounds : { minLat : Float, maxLat : Float, minLon : Float, maxLon : Float } }
+    , topoTileCenter : Maybe Coordinate
     }
 
 
@@ -537,8 +551,15 @@ initialGameState waypoints =
     , speedMultiplier = 1.0
     , targetBearing = Nothing
     , roads = []
+    , buildings = []
+    , routePath = Array.empty
+    , routeIndex = 0
     , isDragging = False
     , lastMouseX = 0
+    , dragStartX = 0
+    , debugLog = []
+    , topoTiles = []
+    , topoTileCenter = Nothing
     }
 
 

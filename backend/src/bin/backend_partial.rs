@@ -109,6 +109,54 @@ fn pad_bbox(bbox: &BoundingBox) -> BoundingBox {
     }
 }
 
+/// Handler for /api/log - write frontend log to file
+async fn frontend_log_handler(
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    if let Some(msg) = req["msg"].as_str() {
+        use std::io::Write;
+        let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
+        let line = format!("[{}] {}\n", timestamp, msg);
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("frontend_debug.log")
+        {
+            let _ = f.write_all(line.as_bytes());
+        }
+        tracing::info!("[FRONTEND] {}", msg);
+    }
+    Json(serde_json::json!({"ok": true}))
+}
+
+/// Handler for /api/buildings - returns building footprints in a bounding box
+async fn buildings_handler(
+    State(config): State<Arc<PartialGraphConfig>>,
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let min_lat = req["min_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lat required".into()))?;
+    let max_lat = req["max_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lat required".into()))?;
+    let min_lon = req["min_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lon required".into()))?;
+    let max_lon = req["max_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lon required".into()))?;
+
+    let buildings = backend::buildings::extract_buildings(
+        &config.pbf_path,
+        min_lat, max_lat, min_lon, max_lon,
+    ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let buildings_json: Vec<serde_json::Value> = buildings.iter().map(|b| {
+        serde_json::json!({
+            "polygon": b.polygon.iter().map(|c| serde_json::json!({"lat": c.lat, "lon": c.lon})).collect::<Vec<_>>(),
+            "center": {"lat": b.center.lat, "lon": b.center.lon}
+        })
+    }).collect();
+
+    Ok(Json(serde_json::json!({
+        "buildings": buildings_json,
+        "count": buildings_json.len()
+    })))
+}
+
 /// Handler for /api/roads - returns all road polylines in a bounding box
 async fn roads_handler(
     State(config): State<Arc<PartialGraphConfig>>,
@@ -131,6 +179,98 @@ async fn roads_handler(
     Ok(Json(serde_json::json!({
         "roads": roads_json,
         "count": roads_json.len()
+    })))
+}
+
+/// Handler for /api/ign-roads - proxy to IGN WFS for BD TOPO road geometries.
+/// Returns road polylines in the same format as /api/roads, but from IGN data
+/// so they match the IGN topo tiles perfectly.
+async fn ign_roads_handler(
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let min_lat = req["min_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lat required".into()))?;
+    let max_lat = req["max_lat"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lat required".into()))?;
+    let min_lon = req["min_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lon required".into()))?;
+    let max_lon = req["max_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lon required".into()))?;
+
+    // IGN WFS endpoint for BD TOPO road segments
+    // BBOX format for WFS 2.0: min_lat,min_lon,max_lat,max_lon,CRS
+    let url = format!(
+        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature\
+         &TYPENAMES=BDTOPO_V3:troncon_de_route\
+         &BBOX={},{},{},{},EPSG:4326\
+         &OUTPUTFORMAT=application/json\
+         &COUNT=500",
+        min_lat, min_lon, max_lat, max_lon
+    );
+
+    tracing::info!("IGN WFS request: bbox=[{},{},{},{}]", min_lat, min_lon, max_lat, max_lon);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN WFS request failed: {}", e)))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err((StatusCode::BAD_GATEWAY, format!("IGN WFS error {}: {}", status, &body[..body.len().min(200)])));
+    }
+
+    let geojson: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN WFS parse error: {}", e)))?;
+
+    // Parse GeoJSON features → road polylines
+    let mut roads: Vec<Vec<serde_json::Value>> = Vec::new();
+
+    if let Some(features) = geojson["features"].as_array() {
+        for feature in features {
+            let geom = &feature["geometry"];
+            let geom_type = geom["type"].as_str().unwrap_or("");
+
+            let coord_arrays = match geom_type {
+                "LineString" => {
+                    vec![geom["coordinates"].as_array()]
+                }
+                "MultiLineString" => {
+                    geom["coordinates"]
+                        .as_array()
+                        .map(|arr| arr.iter().map(|line| line.as_array()).collect())
+                        .unwrap_or_default()
+                }
+                _ => vec![],
+            };
+
+            for maybe_coords in coord_arrays {
+                if let Some(coords) = maybe_coords {
+                    let polyline: Vec<serde_json::Value> = coords
+                        .iter()
+                        .filter_map(|c| {
+                            let arr = c.as_array()?;
+                            let lon = arr.first()?.as_f64()?;
+                            let lat = arr.get(1)?.as_f64()?;
+                            Some(serde_json::json!({"lat": lat, "lon": lon}))
+                        })
+                        .collect();
+
+                    if polyline.len() >= 2 {
+                        roads.push(polyline);
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::info!("IGN WFS returned {} road segments", roads.len());
+
+    Ok(Json(serde_json::json!({
+        "roads": roads,
+        "count": roads.len()
     })))
 }
 
@@ -600,6 +740,9 @@ async fn main() {
         .route("/api/route", axum::routing::post(route_handler))
         .route("/api/route/multi", axum::routing::post(multi_route_handler))
         .route("/api/roads", axum::routing::post(roads_handler))
+        .route("/api/ign-roads", axum::routing::post(ign_roads_handler))
+        .route("/api/buildings", axum::routing::post(buildings_handler))
+        .route("/api/log", axum::routing::post(frontend_log_handler))
         .route("/api/click_mode", axum::routing::get(click_mode_handler))
         .route("/api/pois", axum::routing::get(pois_handler))
         .layer(cors.clone())

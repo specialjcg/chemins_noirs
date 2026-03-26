@@ -7,6 +7,7 @@ Toutes les fonctions retournent des Cmd Msg (effets purs).
 import Decoders exposing (..)
 import Encoders exposing (..)
 import Http
+import Json.Encode
 import Types exposing (..)
 import Url
 
@@ -95,6 +96,45 @@ fetchRoads center marginDeg toMsg =
             Http.jsonBody
                 (Encoders.encodeRoadsRequest center marginDeg)
         , expect = Http.expectJson toMsg Decoders.decodeRoadsResponse
+        }
+
+
+{-| Fetch IGN BD TOPO road geometries (matches IGN topo tiles perfectly).
+Used in game mode for movement that follows the visible map.
+-}
+fetchIgnRoads : Coordinate -> Float -> (Result Http.Error (List (List Coordinate)) -> msg) -> Cmd msg
+fetchIgnRoads center marginDeg toMsg =
+    Http.post
+        { url = "/api/ign-roads"
+        , body =
+            Http.jsonBody
+                (Encoders.encodeRoadsRequest center marginDeg)
+        , expect = Http.expectJson toMsg Decoders.decodeRoadsResponse
+        }
+
+
+
+fetchBuildings : Coordinate -> Float -> (Result Http.Error (List { center : Coordinate, polygon : List Coordinate }) -> msg) -> Cmd msg
+fetchBuildings center marginDeg toMsg =
+    Http.post
+        { url = "/api/buildings"
+        , body =
+            Http.jsonBody
+                (Encoders.encodeRoadsRequest center marginDeg)
+        , expect = Http.expectJson toMsg Decoders.decodeBuildingsResponse
+        }
+
+
+
+{-| Send a debug log message to the backend (written to frontend_debug.log).
+Fire-and-forget — response is ignored.
+-}
+sendLog : String -> (Result Http.Error () -> msg) -> Cmd msg
+sendLog msg toMsg =
+    Http.post
+        { url = "/api/log"
+        , body = Http.jsonBody (Json.Encode.object [ ( "msg", Json.Encode.string msg ) ])
+        , expect = Http.expectWhatever toMsg
         }
 
 
