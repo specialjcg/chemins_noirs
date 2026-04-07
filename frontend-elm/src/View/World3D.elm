@@ -109,7 +109,8 @@ view gs width height =
         , entities = terrainEntity ++ vegetationEntities ++ roadEntities ++ buildingEntities ++ cpEntities
         , shadows = False
         , upDirection = Direction3d.z
-        , sunlightDirection = Direction3d.negativeZ
+        , sunlightDirection =
+            Direction3d.xyZ (Angle.degrees 210) (Angle.degrees -35)
         }
 
 
@@ -282,15 +283,13 @@ buildTerrainMesh maybeGrid center baseAlt exag =
                     Mesh.indexedFacets terrainMesh
 
                 -- Flat base ground beyond terrain
-                avgZ =
-                    ((grid.minAlt + grid.maxAlt) / 2 - baseAlt) * exag
             in
             [ Scene3d.mesh (Material.matte (Color.rgb255 75 135 45)) sceneMesh
             , Scene3d.quad (Material.matte (Color.rgb255 65 120 40))
-                (Point3d.meters -1000 -1000 avgZ)
-                (Point3d.meters 1000 -1000 avgZ)
-                (Point3d.meters 1000 1000 avgZ)
-                (Point3d.meters -1000 1000 avgZ)
+                (Point3d.meters -1000 -1000 0)
+                (Point3d.meters 1000 -1000 0)
+                (Point3d.meters 1000 1000 0)
+                (Point3d.meters -1000 1000 0)
             ]
 
 
@@ -321,19 +320,77 @@ isNearby center maxDistM coords =
 roadStyle : String -> { color : Color.Color, halfWidth : Float, z : Float }
 roadStyle nature =
     if String.contains "1 chauss" nature || String.contains "2 chauss" nature || String.contains "Rond-point" nature then
-        { color = Color.rgb255 55 55 55, halfWidth = 2.0, z = 0.15 }
+        { color = Color.rgb255 55 55 55, halfWidth = 2.0, z = 0.4 }
 
     else if String.contains "Chemin" nature then
-        { color = Color.rgb255 194 160 80, halfWidth = 1.2, z = 0.12 }
+        { color = Color.rgb255 194 160 80, halfWidth = 1.2, z = 0.35 }
 
     else if String.contains "Sentier" nature then
-        { color = Color.rgb255 165 125 75, halfWidth = 0.5, z = 0.10 }
+        { color = Color.rgb255 165 125 75, halfWidth = 0.5, z = 0.3 }
 
     else if String.contains "cyclable" nature then
-        { color = Color.rgb255 160 160 160, halfWidth = 1.0, z = 0.13 }
+        { color = Color.rgb255 160 160 160, halfWidth = 1.0, z = 0.35 }
 
     else
-        { color = Color.rgb255 150 110 60, halfWidth = 1.0, z = 0.12 }
+        { color = Color.rgb255 150 110 60, halfWidth = 1.0, z = 0.35 }
+
+
+{-| Subdivide a list of Coord3D so no segment exceeds maxLen meters.
+    Inserts interpolated points along long segments.
+-}
+subdivideCoords : Float -> List Coord3D -> List Coord3D
+subdivideCoords maxLenM coords =
+    case coords of
+        [] ->
+            []
+
+        first :: rest ->
+            first :: subdivideHelper maxLenM first rest
+
+
+subdivideHelper : Float -> Coord3D -> List Coord3D -> List Coord3D
+subdivideHelper maxLenM prev remaining =
+    case remaining of
+        [] ->
+            []
+
+        next :: rest ->
+            let
+                dlat =
+                    next.lat - prev.lat
+
+                dlon =
+                    next.lon - prev.lon
+
+                distM =
+                    sqrt (dlat * dlat + dlon * dlon) * 111000
+
+                segments =
+                    max 1 (ceiling (distM / maxLenM))
+            in
+            if segments <= 1 then
+                next :: subdivideHelper maxLenM next rest
+
+            else
+                let
+                    dalt =
+                        next.alt - prev.alt
+
+                    interpPoints =
+                        List.map
+                            (\i ->
+                                let
+                                    t =
+                                        toFloat i / toFloat segments
+                                in
+                                { lat = prev.lat + dlat * t
+                                , lon = prev.lon + dlon * t
+                                , alt = prev.alt + dalt * t
+                                }
+                            )
+                            (List.range 1 segments)
+                in
+                interpPoints ++ subdivideHelper maxLenM next rest
 
 
 {-| Render a road as a smooth triangle strip with averaged normals at each vertex.
@@ -345,8 +402,12 @@ smoothRoadEntities center maybeGrid baseAlt exag road =
         style =
             roadStyle road.nature
 
+        -- Subdivide long segments so roads follow terrain relief
+        subdividedCoords =
+            subdivideCoords 5.0 road.coords
+
         pts =
-            List.map (\c -> toXYZ c center maybeGrid baseAlt exag style.z) road.coords
+            List.map (\c -> toXYZ c center maybeGrid baseAlt exag style.z) subdividedCoords
 
         arr =
             Array.fromList pts
@@ -466,58 +527,121 @@ vegetationToEntity : Coordinate -> Maybe ElevationGrid -> Float -> Float -> Vege
 vegetationToEntity center maybeGrid baseAlt exag zone =
     let
         color = vegetationColor zone.nature
-        pts = List.map (\c -> toXYZ c center maybeGrid baseAlt exag 0.05) zone.coords
-        n = List.length pts
-        nf = toFloat n
+
+        -- Rasterize polygon into terrain-following grid quads
+        coords = zone.coords
+        lats = List.map .lat coords
+        lons = List.map .lon coords
+        minLat = List.minimum lats |> Maybe.withDefault 0
+        maxLat = List.maximum lats |> Maybe.withDefault 0
+        minLon = List.minimum lons |> Maybe.withDefault 0
+        maxLon = List.maximum lons |> Maybe.withDefault 0
+
+        -- Grid step ~15m in degrees
+        stepLat = 15.0 / 111000.0
+        stepLon = 15.0 / (111000.0 * cos (center.lat * pi / 180))
+
+        nStepsRow = max 1 (ceiling ((maxLat - minLat) / stepLat))
+        nStepsCol = max 1 (ceiling ((maxLon - minLon) / stepLon))
+
+        -- Limit grid size for perf
+        cappedRows = min 20 nStepsRow
+        cappedCols = min 20 nStepsCol
+        actualStepLat = (maxLat - minLat) / toFloat cappedRows
+        actualStepLon = (maxLon - minLon) / toFloat cappedCols
+
+        -- Point-in-polygon (ray casting)
+        pointInPoly lat lon =
+            let
+                testRay =
+                    List.map2
+                        (\a b ->
+                            let
+                                crosses =
+                                    ((a.lat > lat) /= (b.lat > lat))
+                                        && (lon < (b.lon - a.lon) * (lat - a.lat) / (b.lat - a.lat) + a.lon)
+                            in
+                            if crosses then 1 else 0
+                        )
+                        coords
+                        (List.drop 1 coords ++ List.take 1 coords)
+                count = List.sum testRay
+            in
+            modBy 2 count == 1
+
+        -- Generate grid quads
+        mat = Material.matte color
+
+        gridQuads =
+            List.concatMap
+                (\ri ->
+                    List.filterMap
+                        (\ci ->
+                            let
+                                lat0 = minLat + toFloat ri * actualStepLat
+                                lon0 = minLon + toFloat ci * actualStepLon
+                                lat1 = lat0 + actualStepLat
+                                lon1 = lon0 + actualStepLon
+                                cLat = (lat0 + lat1) / 2
+                                cLon = (lon0 + lon1) / 2
+                            in
+                            if pointInPoly cLat cLon then
+                                let
+                                    p00 = toXYZ { lat = lat0, lon = lon0, alt = 0 } center maybeGrid baseAlt exag 0.05
+                                    p10 = toXYZ { lat = lat0, lon = lon1, alt = 0 } center maybeGrid baseAlt exag 0.05
+                                    p11 = toXYZ { lat = lat1, lon = lon1, alt = 0 } center maybeGrid baseAlt exag 0.05
+                                    p01 = toXYZ { lat = lat1, lon = lon0, alt = 0 } center maybeGrid baseAlt exag 0.05
+                                in
+                                Just (Scene3d.quad mat
+                                    (Point3d.meters p00.x p00.y p00.z)
+                                    (Point3d.meters p10.x p10.y p10.z)
+                                    (Point3d.meters p11.x p11.y p11.z)
+                                    (Point3d.meters p01.x p01.y p01.z))
+                            else
+                                Nothing
+                        )
+                        (List.range 0 (cappedCols - 1))
+                )
+                (List.range 0 (cappedRows - 1))
+
+        -- Scene-space coords for decorations
+        pts = List.map (\c -> toXYZ c center maybeGrid baseAlt exag 0.05) coords
+        nf = toFloat (List.length pts)
         cx = List.sum (List.map .x pts) / max 1 nf
         cy = List.sum (List.map .y pts) / max 1 nf
-        cz = List.sum (List.map .z pts) / max 1 nf
 
-        -- Ground: fan of quads from centroid to each edge (4 distinct points)
-        centroid = { x = cx, y = cy, z = cz }
-        pairs = List.map2 Tuple.pair pts (List.drop 1 pts ++ List.take 1 pts)
+        -- Terrain z lookup from scene (x,y) coordinates
+        earthR = 6371000
+        avgLat = center.lat * pi / 180
+        zAtXY x y =
+            let
+                lat = center.lat + y / (pi / 180 * earthR)
+                lon = center.lon + x / (pi / 180 * earthR * cos avgLat)
+            in
+            altAt maybeGrid { lat = lat, lon = lon } baseAlt exag
 
-        ground =
-            List.map
-                (\( a, b ) ->
-                    let
-                        -- Midpoint between a and b as 4th distinct point
-                        mx = (a.x + b.x) / 2
-                        my = (a.y + b.y) / 2
-                        mz = (a.z + b.z) / 2
-                    in
-                    Scene3d.quad (Material.matte color)
-                        (Point3d.meters centroid.x centroid.y centroid.z)
-                        (Point3d.meters a.x a.y a.z)
-                        (Point3d.meters mx my mz)
-                        (Point3d.meters b.x b.y b.z)
-                )
-                pairs
-
-        -- 3D decorations (limited for performance)
         isVigne = String.contains "Vigne" zone.nature
 
         decor =
             if isForest zone.nature then
-                scatterTrees zone.nature cx cy cz pts
+                scatterTrees zone.nature cx cy zAtXY pts
 
             else if isVigne then
-                vineRows cx cy cz pts
+                vineRows cx cy zAtXY pts
 
             else if String.contains "Verger" zone.nature then
-                orchardTrees cx cy cz pts
+                orchardTrees cx cy zAtXY pts
 
             else
                 []
 
-        -- Vineyard ground: alternating strips of soil colors
         vineStrips =
             if isVigne then
-                vineGroundStrips cx cy cz pts
+                vineGroundStrips cx cy zAtXY pts
             else
                 []
     in
-    ground ++ vineStrips ++ decor
+    gridQuads ++ vineStrips ++ decor
 
 
 isForest : String -> Bool
@@ -530,8 +654,8 @@ isForest nature =
 
 {-| Scatter trees inside a vegetation polygon. Max 12 per zone.
 -}
-scatterTrees : String -> Float -> Float -> Float -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
-scatterTrees nature cx cy cz pts =
+scatterTrees : String -> Float -> Float -> (Float -> Float -> Float) -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
+scatterTrees nature cx cy zAtXY pts =
     let
         xs = List.map .x pts
         ys = List.map .y pts
@@ -556,16 +680,17 @@ scatterTrees nature cx cy cz pts =
                         ry = pseudoRand iy ix
                         x = minX + toFloat ix * step + (rx - 0.5) * step * 0.5
                         y = minY + toFloat iy * step + (ry - 0.5) * step * 0.5
+                        z = zAtXY x y
                     in
                     if pointInPolygon x y pts then
                         Just
                             (Scene3d.group
                                 [ Scene3d.cylinder (Material.matte (Color.rgb255 90 60 30))
-                                    (Cylinder3d.startingAt (Point3d.meters x y cz) Direction3d.z
+                                    (Cylinder3d.startingAt (Point3d.meters x y z) Direction3d.z
                                         { length = Length.meters 2.5, radius = Length.meters 0.2 }
                                     )
                                 , Scene3d.sphere (Material.matte crownColor)
-                                    (Sphere3d.atPoint (Point3d.meters x y (cz + 3.5))
+                                    (Sphere3d.atPoint (Point3d.meters x y (z + 3.5))
                                         (Length.meters 1.8)
                                     )
                                 ]
@@ -581,8 +706,8 @@ scatterTrees nature cx cy cz pts =
 
 {-| Vine rows: parallel rows along Y axis, posts every 5m. Max 30 vines.
 -}
-vineRows : Float -> Float -> Float -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
-vineRows cx cy cz pts =
+vineRows : Float -> Float -> (Float -> Float -> Float) -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
+vineRows cx cy zAtXY pts =
     let
         xs = List.map .x pts
         ys = List.map .y pts
@@ -604,16 +729,17 @@ vineRows cx cy cz pts =
                 (\ip ->
                     let
                         y = minY + toFloat ip * postStep + postStep / 2
+                        z = zAtXY x y
                     in
                     if pointInPolygon x y pts then
                         Just
                             (Scene3d.group
                                 [ Scene3d.cylinder postBrown
-                                    (Cylinder3d.startingAt (Point3d.meters x y cz) Direction3d.z
+                                    (Cylinder3d.startingAt (Point3d.meters x y z) Direction3d.z
                                         { length = Length.meters 1.2, radius = Length.meters 0.03 }
                                     )
                                 , Scene3d.sphere vineGreen
-                                    (Sphere3d.atPoint (Point3d.meters x y (cz + 1.0))
+                                    (Sphere3d.atPoint (Point3d.meters x y (z + 1.0))
                                         (Length.meters 0.4)
                                     )
                                 ]
@@ -629,8 +755,8 @@ vineRows cx cy cz pts =
 
 {-| Orchard trees: regular grid, max 10.
 -}
-orchardTrees : Float -> Float -> Float -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
-orchardTrees cx cy cz pts =
+orchardTrees : Float -> Float -> (Float -> Float -> Float) -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
+orchardTrees cx cy zAtXY pts =
     let
         xs = List.map .x pts
         ys = List.map .y pts
@@ -647,16 +773,17 @@ orchardTrees cx cy cz pts =
                     let
                         x = minX + toFloat ix * step + step / 2
                         y = minY + toFloat iy * step + step / 2
+                        z = zAtXY x y
                     in
                     if pointInPolygon x y pts then
                         Just
                             (Scene3d.group
                                 [ Scene3d.cylinder (Material.matte (Color.rgb255 100 70 35))
-                                    (Cylinder3d.startingAt (Point3d.meters x y cz) Direction3d.z
+                                    (Cylinder3d.startingAt (Point3d.meters x y z) Direction3d.z
                                         { length = Length.meters 1.8, radius = Length.meters 0.15 }
                                     )
                                 , Scene3d.sphere (Material.matte (Color.rgb255 60 140 40))
-                                    (Sphere3d.atPoint (Point3d.meters x y (cz + 2.5))
+                                    (Sphere3d.atPoint (Point3d.meters x y (z + 2.5))
                                         (Length.meters 1.5)
                                     )
                                 ]
@@ -673,8 +800,8 @@ orchardTrees cx cy cz pts =
 {-| Vineyard ground: alternating strips of earth colors to simulate soil texture.
     Dark brown rows (plowed earth) alternating with lighter dry earth.
 -}
-vineGroundStrips : Float -> Float -> Float -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
-vineGroundStrips cx cy cz pts =
+vineGroundStrips : Float -> Float -> (Float -> Float -> Float) -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
+vineGroundStrips cx cy zAtXY pts =
     let
         xs = List.map .x pts
         ys = List.map .y pts
@@ -683,7 +810,6 @@ vineGroundStrips cx cy cz pts =
         minY = List.minimum ys |> Maybe.withDefault cy
         maxY = List.maximum ys |> Maybe.withDefault cy
         stripW = 1.2
-        z = cz + 0.06
 
         -- Dark plowed earth between vines
         darkSoil = Material.matte (Color.rgb255 95 70 45)
@@ -712,14 +838,15 @@ vineGroundStrips cx cy cz pts =
                         y2 = min maxY (y1 + 6.0)
                         midX = (x1 + x2) / 2
                         midY = (y1 + y2) / 2
+                        off = 0.06
                     in
                     if pointInPolygon midX midY pts then
                         Just
                             (Scene3d.quad mat
-                                (Point3d.meters x1 y1 z)
-                                (Point3d.meters x2 y1 z)
-                                (Point3d.meters x2 y2 z)
-                                (Point3d.meters x1 y2 z)
+                                (Point3d.meters x1 y1 (zAtXY x1 y1 + off))
+                                (Point3d.meters x2 y1 (zAtXY x2 y1 + off))
+                                (Point3d.meters x2 y2 (zAtXY x2 y2 + off))
+                                (Point3d.meters x1 y2 (zAtXY x1 y2 + off))
                             )
                     else
                         Nothing

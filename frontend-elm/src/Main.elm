@@ -1144,7 +1144,7 @@ update msg model =
                         , Api.fetchIgnRoads startPos 0.01 RoadsFetched
                         , Api.fetchIgnVegetation startPos 0.005 VegetationFetched
                         , Api.fetchIgnBuildings startPos 0.005 IgnBuildingsFetched
-                        , Api.fetchElevationGrid startPos 400 40 ElevationGridFetched
+                        , Api.fetchElevationGrid startPos 800 40 ElevationGridFetched
                         , logCmd ("START pos=" ++ String.fromFloat startPos.lat ++ "," ++ String.fromFloat startPos.lon)
                         ]
                     )

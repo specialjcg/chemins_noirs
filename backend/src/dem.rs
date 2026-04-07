@@ -347,35 +347,84 @@ impl ArcAsciiDem {
 }
 
 /// Transform WGS84 (EPSG:4326) coordinates to Lambert 93 (EPSG:2154)
-fn wgs84_to_lambert93(lat: f64, lon: f64) -> Option<(f64, f64)> {
-    use std::cell::RefCell;
-    thread_local! {
-        static PROJ: RefCell<Option<proj::Proj>> = const { RefCell::new(None) };
+/// Pure Rust — EPSG Guidance Note 7-2, Lambert Conic Conformal (2SP).
+fn wgs84_to_lambert93(lat_deg: f64, lon_deg: f64) -> Option<(f64, f64)> {
+    use std::f64::consts::FRAC_PI_4;
+
+    // GRS80 ellipsoid
+    let a: f64 = 6_378_137.0;
+    let f: f64 = 1.0 / 298.257222101;
+    let e = (2.0 * f - f * f).sqrt();
+
+    // Lambert 93 parameters
+    let phi0 = 46.5_f64.to_radians();
+    let lam0 = 3.0_f64.to_radians();
+    let phi1 = 44.0_f64.to_radians();
+    let phi2 = 49.0_f64.to_radians();
+    let ef = 700_000.0; // false easting
+    let nf = 6_600_000.0; // false northing
+
+    let phi = lat_deg.to_radians();
+    let lam = lon_deg.to_radians();
+
+    // EPSG formulas: t = tan(π/4 - φ/2) / ((1-e·sinφ)/(1+e·sinφ))^(e/2)
+    let t_fn = |p: f64| -> f64 {
+        let es = e * p.sin();
+        (FRAC_PI_4 - p / 2.0).tan() / ((1.0 - es) / (1.0 + es)).powf(e / 2.0)
+    };
+    // m = cosφ / (1 - e²sin²φ)^0.5
+    let m_fn = |p: f64| -> f64 {
+        p.cos() / (1.0 - e * e * p.sin() * p.sin()).sqrt()
+    };
+
+    let m1 = m_fn(phi1);
+    let m2 = m_fn(phi2);
+    let t0 = t_fn(phi0);
+    let t1 = t_fn(phi1);
+    let t2 = t_fn(phi2);
+    let t = t_fn(phi);
+
+    let n = (m1.ln() - m2.ln()) / (t1.ln() - t2.ln());
+    let ff = m1 / (n * t1.powf(n));
+    let r0 = a * ff * t0.powf(n);
+    let r = a * ff * t.powf(n);
+
+    let theta = n * (lam - lam0);
+
+    let x = ef + r * theta.sin();
+    let y = nf + r0 - r * theta.cos();
+
+    Some((x, y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wgs84_to_lambert93_beaujolais() {
+        // Test with exact coordinates from user prompt: (45.93, 4.578) = (822273, 6537922)
+        let result = wgs84_to_lambert93(45.93, 4.578);
+        assert!(result.is_some(), "Conversion returned None!");
+        let (x, y) = result.unwrap();
+        assert!((x - 822273.0).abs() < 1.0, "x={x} too far from 822273");
+        assert!((y - 6537922.0).abs() < 1.0, "y={y} too far from 6537922");
     }
 
-    PROJ.with(|proj_cell| {
-        let mut proj = proj_cell.borrow_mut();
-        if proj.is_none() {
-            match proj::Proj::new_known_crs("EPSG:4326", "EPSG:2154", None) {
-                Ok(p) => *proj = Some(p),
-                Err(e) => {
-                    tracing::error!("Failed to create projection: {}", e);
-                    return None;
-                }
-            }
+    #[test]
+    fn test_dem_sample_beaujolais() {
+        let path = std::path::Path::new("data/dem/region.asc");
+        if !path.exists() {
+            eprintln!("Skipping: DEM file not found");
+            return;
         }
+        let dem = ArcAsciiDem::from_path(path).expect("Failed to load DEM");
+        eprintln!("DEM loaded: {}x{}, nodata={}", dem.ncols, dem.nrows, dem.nodata);
 
-        if let Some(p) = proj.as_ref() {
-            // proj expects (lon, lat) order for geographic coordinates
-            match p.convert((lon, lat)) {
-                Ok((x, y)) => Some((x, y)),
-                Err(e) => {
-                    tracing::warn!("Failed to transform coordinates ({}, {}): {}", lat, lon, e);
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    })
+        let result = dem.sample(45.93063, 4.57791);
+        eprintln!("sample(45.93063, 4.57791) = {:?}", result);
+        assert!(result.is_some(), "DEM sample returned None for Beaujolais center!");
+        let alt = result.unwrap();
+        assert!(alt > 100.0 && alt < 1000.0, "Altitude {alt}m out of expected range");
+    }
 }
