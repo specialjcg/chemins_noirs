@@ -1,3 +1,4 @@
+pub mod buildings;
 pub mod database;
 pub mod dem;
 pub mod elevation;

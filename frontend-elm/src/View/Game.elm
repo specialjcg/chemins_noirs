@@ -75,14 +75,18 @@ compass bearing targetBearing =
             "rotate(" ++ String.fromFloat (-bearing) ++ "deg)"
 
         deg =
-            round bearing |> modBy 360
+            (round bearing |> modBy 360 |> (+) 360) |> modBy 360
 
         targetMarker =
             case targetBearing of
                 Just tb ->
                     let
+                        -- Rotate relative to current bearing so marker stays fixed on the outer ring
+                        relativeAngle =
+                            tb - (toFloat deg)
+
                         targetRotation =
-                            "rotate(" ++ String.fromFloat tb ++ "deg)"
+                            "rotate(" ++ String.fromFloat relativeAngle ++ "deg)"
                     in
                     div
                         [ class "compass-target-marker"

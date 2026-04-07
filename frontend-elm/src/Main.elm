@@ -1144,7 +1144,7 @@ update msg model =
                         , Api.fetchIgnRoads startPos 0.01 RoadsFetched
                         , Api.fetchIgnVegetation startPos 0.005 VegetationFetched
                         , Api.fetchIgnBuildings startPos 0.005 IgnBuildingsFetched
-                        , Api.fetchElevationGrid startPos 400 10 ElevationGridFetched
+                        , Api.fetchElevationGrid startPos 400 40 ElevationGridFetched
                         , logCmd ("START pos=" ++ String.fromFloat startPos.lat ++ "," ++ String.fromFloat startPos.lon)
                         ]
                     )
@@ -1169,7 +1169,11 @@ update msg model =
         PlayerClickedDestination lat lon ->
             case model.appMode of
                 Orienteering gs ->
-                    if gs.gameStatus == GameRunning && not model.pending && gs.movePath == Nothing then
+                    if gs.showTopoOverlay then
+                        -- Topo overlay: ignore (azimut handled by GameMapClicked)
+                        ( model, Cmd.none )
+
+                    else if gs.gameStatus == GameRunning && not model.pending && gs.movePath == Nothing then
                         let
                             request =
                                 { start = gs.playerPosition
@@ -1386,7 +1390,12 @@ update msg model =
                             not gs.showTopoOverlay
 
                         newGs =
-                            { gs | showTopoOverlay = newShow }
+                            if newShow then
+                                { gs | showTopoOverlay = True }
+                            else
+                                -- Force dragStartX far from any mouseX so GameMouseUp sees it as a drag
+                                -- This prevents the "Fermer carte" mouseup from triggering FWD
+                                { gs | showTopoOverlay = False, isDragging = True, dragStartX = -9999 }
 
                     in
                     ( { model | appMode = Orienteering newGs }
@@ -1599,18 +1608,31 @@ update msg model =
         GameKeyForward ->
             case model.appMode of
                 Orienteering gs ->
-                    if gs.gameStatus == GameRunning then
+                    if gs.showTopoOverlay then
+                        -- Topo overlay: ignore forward (let MapLibre handle interactions)
+                        ( model, Cmd.none )
+
+                    else if gs.gameStatus == GameRunning then
                         let
+                            -- Normalize bearing to [0,360) for GameEngine
+                            normalizedBearing =
+                                toFloat (modBy 360 (round gs.playerBearing + 3600))
+
                             -- Manual forward = boost 10m along road
                             result =
-                                GameEngine.advanceOnSegments gs.playerPosition gs.playerBearing 10.0 (plainRoads gs.roads)
+                                GameEngine.advanceOnSegments gs.playerPosition normalizedBearing 10.0 (plainRoads gs.roads)
 
                             nextPos =
                                 result.position
 
-                            -- After moving, snap bearing to road direction
+                            -- Snap bearing to road only if player is roughly aligned
+                            -- If player turned camera far from road (>30°), keep their bearing
+                            bearDiff =
+                                let d = abs (result.roadBearing - normalizedBearing)
+                                in if d > 180 then 360 - d else d
+
                             newBearing =
-                                if result.snapped then
+                                if result.snapped && bearDiff < 30 then
                                     result.roadBearing
 
                                 else
@@ -1710,7 +1732,11 @@ update msg model =
                         newGs =
                             { gs | isDragging = False }
                     in
-                    if wasDrag || gs.gameStatus /= GameRunning then
+                    if gs.showTopoOverlay then
+                        -- Topo overlay visible: ignore mouse events (MapLibre handles them)
+                        ( { model | appMode = Orienteering newGs }, Cmd.none )
+
+                    else if wasDrag || gs.gameStatus /= GameRunning then
                         ( { model | appMode = Orienteering (addLog ("DRAG dx=" ++ String.fromInt (round (mouseX - gs.dragStartX))) newGs) }
                         , logCmd ("MOUSEUP drag dx=" ++ String.fromInt (round (mouseX - gs.dragStartX)))
                         )
@@ -1729,13 +1755,18 @@ update msg model =
         GameMouseDrag mouseX ->
             case model.appMode of
                 Orienteering gs ->
-                    if gs.isDragging then
+                    if gs.showTopoOverlay then
+                        ( model, Cmd.none )
+
+                    else if gs.isDragging then
                         let
                             deltaX =
                                 mouseX - gs.lastMouseX
 
+                            -- Don't modBy 360 here: let bearing accumulate continuously
+                            -- to avoid 358° jump when crossing 0/360. ModBy only for display.
                             newBearing =
-                                toFloat (modBy 360 (round (gs.playerBearing + deltaX * 0.4) + 360))
+                                gs.playerBearing + deltaX * 0.4
                         in
                         ( { model | appMode = Orienteering { gs | playerBearing = newBearing, lastMouseX = mouseX } }
                         , Ports.updateGameCamera { lat = gs.playerPosition.lat, lon = gs.playerPosition.lon, bearing = newBearing }
@@ -1750,119 +1781,25 @@ update msg model =
         GameMapClicked target ->
             case model.appMode of
                 Orienteering gs ->
-                    if gs.gameStatus == GameRunning then
+                    if gs.showTopoOverlay then
+                        -- Topo overlay mode: click sets compass azimuth only (no movement)
                         let
                             clickCoord =
                                 { lat = target.lat, lon = target.lon }
 
-                            -- Snap click to nearest road segment
-                            allSegments =
-                                List.concatMap GameEngine.roadToSegments (plainRoads gs.roads)
-
-                            snappedPoint =
-                                allSegments
-                                    |> List.map (\( a, b ) -> GameEngine.projectOntoSegment clickCoord a b)
-                                    |> List.sortBy (\proj -> haversineMeters clickCoord proj)
-                                    |> List.head
-                                    |> Maybe.withDefault clickCoord
-
-                            -- Only move if the click is near a road (< 50m)
-                            snapDist =
-                                haversineMeters clickCoord snappedPoint
-
-                            moveTarget =
-                                if snapDist < 50 then
-                                    snappedPoint
-
-                                else
-                                    clickCoord
-
-                            -- Limit movement to 100m max per click
-                            distToTarget =
-                                haversineMeters gs.playerPosition moveTarget
-
-                            finalTarget =
-                                if distToTarget > 100 then
-                                    let
-                                        ratio =
-                                            100 / distToTarget
-                                    in
-                                    { lat = gs.playerPosition.lat + (moveTarget.lat - gs.playerPosition.lat) * ratio
-                                    , lon = gs.playerPosition.lon + (moveTarget.lon - gs.playerPosition.lon) * ratio
-                                    }
-
-                                else
-                                    moveTarget
-
-                            -- Update bearing towards target
-                            newBearing =
-                                GameEngine.bearingBetween gs.playerPosition finalTarget
-
-                            -- Check control points
-                            currentCp =
-                                List.drop gs.currentPointIndex gs.controlPoints
-                                    |> List.head
-
-                            ( updatedCps, nextIdx, finished ) =
-                                case currentCp of
-                                    Just cp ->
-                                        if haversineMeters finalTarget cp.position < 30 then
-                                            let
-                                                cps =
-                                                    List.indexedMap
-                                                        (\i c ->
-                                                            if i == gs.currentPointIndex then
-                                                                { c | found = True }
-
-                                                            else
-                                                                c
-                                                        )
-                                                        gs.controlPoints
-
-                                                newIdx =
-                                                    gs.currentPointIndex + 1
-                                            in
-                                            ( cps, newIdx, newIdx >= List.length gs.controlPoints )
-
-                                        else
-                                            ( gs.controlPoints, gs.currentPointIndex, False )
-
-                                    Nothing ->
-                                        ( gs.controlPoints, gs.currentPointIndex, False )
-
-                            newStatus =
-                                if finished then
-                                    GameFinished
-
-                                else
-                                    gs.gameStatus
-
-                            logMsg =
-                                "CLICK (" ++ String.fromFloat (toFloat (round (target.lat * 100000)) / 100000) ++ "," ++ String.fromFloat (toFloat (round (target.lon * 100000)) / 100000) ++ ") snap=" ++ String.fromInt (round snapDist) ++ "m dist=" ++ String.fromInt (round (haversineMeters gs.playerPosition finalTarget)) ++ "m roads=" ++ String.fromInt (List.length gs.roads)
+                            azimut =
+                                GameEngine.bearingBetween gs.playerPosition clickCoord
 
                             newGs =
-                                addLog logMsg
-                                    { gs
-                                        | playerPosition = finalTarget
-                                        , playerBearing = newBearing
-                                        , controlPoints = updatedCps
-                                        , currentPointIndex = nextIdx
-                                        , gameStatus = newStatus
-                                        , foundFlash = nextIdx > gs.currentPointIndex
-                                    }
+                                addLog ("AZIMUT " ++ String.fromInt (round azimut) ++ "deg")
+                                    { gs | targetBearing = Just azimut }
                         in
                         ( { model | appMode = Orienteering newGs }
-                        , Cmd.batch
-                            [ Ports.updateGameCamera
-                                { lat = finalTarget.lat
-                                , lon = finalTarget.lon
-                                , bearing = newBearing
-                                }
-                            , logCmd ("MAPCLICK target=" ++ String.fromFloat target.lat ++ "," ++ String.fromFloat target.lon ++ " snap=" ++ String.fromInt (round snapDist) ++ "m moved=" ++ String.fromInt (round (haversineMeters gs.playerPosition finalTarget)) ++ "m")
-                            ]
+                        , logCmd ("TOPO-AZIMUT " ++ String.fromInt (round azimut) ++ "deg")
                         )
 
                     else
+                        -- Walk mode: map clicks ignored (only FWD advances the player)
                         ( model, Cmd.none )
 
                 _ ->

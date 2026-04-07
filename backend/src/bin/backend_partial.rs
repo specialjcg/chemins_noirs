@@ -496,40 +496,64 @@ async fn elevation_grid_handler(
         }
     }
 
-    // Batch query IGN elevation API (pipe-separated)
-    let url = format!(
-        "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json?lon={}&lat={}&resource=ign_rge_alti_wld&zonly=true",
-        lons.join("|"), lats.join("|")
-    );
+    // Try local DEM first, fall back to IGN API
+    let elevations: Vec<f64> = if let Some(dem) = backend::elevation::local_dem_grid() {
+        tracing::info!("Using local DEM for elevation grid");
+        // Debug: test center point
+        let center_alt = dem.sample(center_lat, center_lon);
+        tracing::info!("DEM sample at center ({},{}) = {:?}", center_lat, center_lon, center_alt);
+        let mut elev = Vec::with_capacity(resolution * resolution);
+        let mut none_count = 0u32;
+        for row in 0..resolution {
+            for col in 0..resolution {
+                let lat = center_lat - half_size_deg_lat + (row as f64 / (resolution as f64 - 1.0)) * 2.0 * half_size_deg_lat;
+                let lon = center_lon - half_size_deg_lon + (col as f64 / (resolution as f64 - 1.0)) * 2.0 * half_size_deg_lon;
+                match dem.sample(lat, lon) {
+                    Some(alt) => elev.push(alt),
+                    None => { none_count += 1; elev.push(0.0); }
+                }
+            }
+        }
+        if none_count > 0 {
+            tracing::warn!("DEM: {} out of {} points returned None", none_count, resolution * resolution);
+        }
+        elev
+    } else {
+        // Fallback: IGN API
+        let url = format!(
+            "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json?lon={}&lat={}&resource=ign_rge_alti_wld&zonly=true",
+            lons.join("|"), lats.join("|")
+        );
 
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN elevation request failed: {}", e)))?;
+        let client = reqwest::Client::new();
+        let response = client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN elevation request failed: {}", e)))?;
 
-    if !response.status().is_success() {
-        return Err((StatusCode::BAD_GATEWAY, format!("IGN elevation error: {}", response.status())));
-    }
+        if !response.status().is_success() {
+            return Err((StatusCode::BAD_GATEWAY, format!("IGN elevation error: {}", response.status())));
+        }
 
-    let data: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN elevation parse error: {}", e)))?;
+        let data: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN elevation parse error: {}", e)))?;
 
-    // Parse elevations from response
-    let elevations: Vec<f64> = data["elevations"]
-        .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect())
-        .unwrap_or_default();
+        let elev: Vec<f64> = data["elevations"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect())
+            .unwrap_or_default();
 
-    if elevations.len() != resolution * resolution {
-        return Err((StatusCode::BAD_GATEWAY, format!(
-            "IGN elevation returned {} values, expected {}", elevations.len(), resolution * resolution
-        )));
-    }
+        if elev.len() != resolution * resolution {
+            return Err((StatusCode::BAD_GATEWAY, format!(
+                "IGN elevation returned {} values, expected {}", elev.len(), resolution * resolution
+            )));
+        }
+        elev
+    };
 
     // Build 2D grid
     let mut grid: Vec<Vec<f64>> = Vec::new();

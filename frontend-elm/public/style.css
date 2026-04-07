@@ -1758,14 +1758,13 @@ small {
 .compass-deg-180 { bottom: 4px; left: 50%; transform: translateX(-50%); }
 .compass-deg-270 { left: 4px; top: 50%; transform: translateY(-50%); }
 
-/* Rotating inner dial */
+/* Rotating inner dial — no CSS transition to avoid 360° wrap-around saccade */
 .compass-dial {
   position: absolute;
   top: 14px; left: 14px; right: 14px; bottom: 14px;
   border-radius: 50%;
   background: radial-gradient(circle, #333328 0%, #252520 100%);
   border: 1px solid #444438;
-  transition: transform 0.12s ease-out;
 }
 
 /* Cardinal points on rotating dial */
@@ -1819,16 +1818,19 @@ small {
   border: 1px solid #aaa;
 }
 
-/* Fixed lubber line (reading mark at top) */
+/* Fixed lubber line (reading mark at top) — bright triangle pointer */
 .compass-lubber {
   position: absolute;
-  top: 2px;
+  top: 0px;
   left: 50%;
-  width: 2px;
-  height: 12px;
-  margin-left: -1px;
-  background: #ff9800;
+  margin-left: -6px;
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 14px solid #ff9800;
   z-index: 5;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
 }
 
 /* Target bearing marker (fixed on outer ring) */

@@ -59,7 +59,7 @@ fn local_dem_path() -> Option<PathBuf> {
     }
 }
 
-fn local_dem_grid() -> Option<&'static ArcAsciiDem> {
+pub fn local_dem_grid() -> Option<&'static ArcAsciiDem> {
     static CACHE: OnceLock<Option<ArcAsciiDem>> = OnceLock::new();
 
     CACHE

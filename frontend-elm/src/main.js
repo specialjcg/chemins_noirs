@@ -16,6 +16,8 @@ import * as MapLibreMap from './maplibre_map.js';
 const app = Elm.Main.init({
   node: document.getElementById('app')
 });
+// Expose app globally for maplibre_map.js game walk click handler
+window._elmApp = app;
 
 // ============================================================
 // PORTS OUT : Elm → JavaScript
@@ -116,8 +118,9 @@ app.ports.centerMapOn.subscribe(({ lat, lon }) => {
 // PORTS IN : JavaScript → Elm
 // ============================================================
 
-// Écouter les clics sur la carte
+// Écouter les clics sur la carte (pas en mode jeu walk)
 window.addEventListener('map-click', (event) => {
+  if (gameWalkActive) return; // Game walk mode handles clicks via gameMapClicked port
   console.log('[JS→Elm] map-click', event.detail);
   app.ports.mapClickReceived.send({
     lat: event.detail.lat,
@@ -310,36 +313,115 @@ window.addEventListener('route-hover', (event) => {
 // ORIENTEERING GAME PORTS (minimal — most logic is in Elm)
 // ============================================================
 
-// Show/hide MapLibre map
-app.ports.setMapVisible.subscribe((visible) => {
+// Show topo overlay centered on player position (overhead view)
+app.ports.showTopoOverlay.subscribe(({ show, lat, lon }) => {
+  if (!show) return;
   const mapEl = document.getElementById('map');
-  if (mapEl) {
-    mapEl.style.display = visible ? '' : 'none';
-    // When showing map for topo overlay, make it fullscreen and resize
-    if (visible) {
-      mapEl.style.position = 'fixed';
-      mapEl.style.top = '0';
-      mapEl.style.left = '0';
-      mapEl.style.width = '100vw';
-      mapEl.style.height = '100vh';
-      mapEl.style.zIndex = '5';
-      mapEl.style.maxWidth = 'none';
-      mapEl.style.borderRadius = '0';
-      mapEl.style.border = 'none';
-      mapEl.style.margin = '0';
-      setTimeout(() => {
-        window.dispatchEvent(new Event('resize'));
-      }, 150);
-    } else {
-      // Reset to default styles
-      mapEl.style.cssText = 'display: none;';
-    }
+  if (mapEl) showMapOverlay(mapEl);
+  // Make game container transparent to clicks so map receives them,
+  // but keep HUD buttons clickable (they have pointer-events: auto)
+  const gameContainer = document.querySelector('.app-container.game-mode');
+  if (gameContainer) {
+    gameContainer.style.setProperty('z-index', '100001', 'important');
+    gameContainer.style.setProperty('pointer-events', 'none', 'important');
+  }
+  // Register topo click handler for azimut (once)
+  MapLibreMap.onTopoOverlayClick((lat, lon) => {
+    console.log('[main.js] Topo click → Elm azimut:', lat, lon);
+    app.ports.gameMapClicked.send({ lat, lon });
+  });
+  MapLibreMap.showTopoOverlayMode(true);
+  setTimeout(() => {
+    MapLibreMap.centerMapOnCoord(lat, lon);
+  }, 200);
+});
+
+function showMapOverlay(mapEl) {
+  mapEl.style.position = 'fixed';
+  mapEl.style.top = '0';
+  mapEl.style.left = '0';
+  mapEl.style.width = '100vw';
+  mapEl.style.height = '100vh';
+  mapEl.style.zIndex = '99999';
+  mapEl.style.maxWidth = 'none';
+  mapEl.style.borderRadius = '0';
+  mapEl.style.border = 'none';
+  mapEl.style.margin = '0';
+  mapEl.style.visibility = 'visible';
+  mapEl.style.display = '';
+  setTimeout(() => {
+    window.dispatchEvent(new Event('resize'));
+  }, 50);
+}
+
+function hideMapOverlay(mapEl) {
+  mapEl.style.visibility = 'hidden';
+  mapEl.style.position = 'absolute';
+  mapEl.style.zIndex = '-1';
+}
+
+// Game scroll wheel → Elm (only when map overlay is not visible)
+document.addEventListener('wheel', (e) => {
+  const mapEl = document.getElementById('map');
+  if (mapEl && mapEl.style.visibility !== 'hidden' && mapEl.style.zIndex === '99999') return; // topo overlay active
+  app.ports.gameWheelReceived.send(e.deltaY);
+}, { passive: true });
+
+// Enter game walk mode (topo map at ground level)
+let gameWalkActive = false;
+let mapDragStartX = null;
+
+let gameClickRegistered = false;
+
+app.ports.enterGameView.subscribe(({ lat, lon, bearing }) => {
+  console.log('[main.js] enterGameView received', lat, lon, bearing);
+  const mapEl = document.getElementById('map');
+  if (mapEl) hideMapOverlay(mapEl);
+  gameWalkActive = true;
+
+  // Register click handler once
+  if (!gameClickRegistered) {
+    gameClickRegistered = true;
+    MapLibreMap.onGameWalkClick((lat, lon) => {
+      console.log('[main.js] Forwarding click to Elm:', lat, lon);
+      app.ports.gameMapClicked.send({ lat, lon });
+    });
   }
 });
 
-// Game scroll wheel → Elm
-document.addEventListener('wheel', (e) => {
-  app.ports.gameWheelReceived.send(e.deltaY);
-}, { passive: true });
+// Update game camera (each step/rotation)
+let cameraUpdateCount = 0;
+app.ports.updateGameCamera.subscribe(({ lat, lon, bearing }) => {
+  cameraUpdateCount++;
+  // Hide MapLibre when in elm-3d-scene mode (returning from topo overlay)
+  if (gameWalkActive) {
+    const mapEl = document.getElementById('map');
+    if (mapEl && mapEl.style.visibility !== 'hidden') {
+      hideMapOverlay(mapEl);
+      // Restore game container after topo overlay (only if it was modified)
+      const gameContainer = document.querySelector('.app-container.game-mode');
+      if (gameContainer) {
+        gameContainer.style.setProperty('z-index', '10', 'important');
+        gameContainer.style.setProperty('pointer-events', '', '');
+      }
+      MapLibreMap.showTopoOverlayMode(false);
+    }
+  }
+  // Log every 5th camera update to file via backend
+  if (cameraUpdateCount <= 5 || cameraUpdateCount % 10 === 0) {
+    fetch('/api/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ msg: `JS updateCamera #${cameraUpdateCount} lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} bearing=${bearing.toFixed(0)}` })
+    });
+  }
+});
+
+// Exit game, restore normal map
+app.ports.exitGameView.subscribe(() => {
+  gameWalkActive = false;
+  const mapEl = document.getElementById('map');
+  if (mapEl) showMapOverlay(mapEl);
+});
 
 console.log('✅ Elm application initialized with MapLibre ports');

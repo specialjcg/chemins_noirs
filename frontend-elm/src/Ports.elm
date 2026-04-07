@@ -82,6 +82,18 @@ port centerMapOn : { lat : Float, lon : Float } -> Cmd msg
 port setMapVisible : Bool -> Cmd msg
 
 
+port showTopoOverlay : { show : Bool, lat : Float, lon : Float } -> Cmd msg
+
+
+port enterGameView : { lat : Float, lon : Float, bearing : Float } -> Cmd msg
+
+
+port updateGameCamera : { lat : Float, lon : Float, bearing : Float } -> Cmd msg
+
+
+port exitGameView : () -> Cmd msg
+
+
 
 -- PORTS IN (JavaScript -> Elm) — MapLibre events
 
@@ -120,3 +132,12 @@ port closeLoopRequested : (Bool -> msg) -> Sub msg
 
 
 port gameWheelReceived : (Float -> msg) -> Sub msg
+
+
+port gameMapClicked : ({ lat : Float, lon : Float } -> msg) -> Sub msg
+
+
+port pixelToLatLon : { x : Float, y : Float } -> Cmd msg
+
+
+port pixelToLatLonResult : ({ lat : Float, lon : Float } -> msg) -> Sub msg

@@ -374,6 +374,19 @@ function ensureMap() {
       }
     });
 
+    // Game walk mode: forward clicks to callback
+    mapInstance.on('click', (e) => {
+      // Topo overlay: send click for azimut calculation
+      if (topoOverlayActive && topoClickCallback) {
+        console.log('[topo-click] lat=', e.lngLat.lat.toFixed(6), 'lon=', e.lngLat.lng.toFixed(6));
+        topoClickCallback(e.lngLat.lat, e.lngLat.lng);
+        return;
+      }
+      if (!gameWalkMode || !gameWalkClickCallback) return;
+      console.log('[game-walk] CLICK lat=', e.lngLat.lat.toFixed(6), 'lon=', e.lngLat.lng.toFixed(6));
+      gameWalkClickCallback(e.lngLat.lat, e.lngLat.lng);
+    });
+
     console.debug('[maplibre] Map loaded with terrain support');
   });
 
@@ -764,7 +777,7 @@ export function initMap() {
   ensureMap();
   if (!clickHandlerSet) {
     mapInstance.on('click', (event) => {
-      if (gameMode) return; // Game mode handles clicks separately
+      if (gameMode || gameWalkMode) return; // Game modes handle clicks separately
       const { lng, lat } = event.lngLat;
       console.debug('[maplibre] click', { lat, lon: lng });
       window.dispatchEvent(
@@ -1140,7 +1153,9 @@ export function updateWaypointMarkers(waypoints) {
     el.style.color = 'white';
     el.style.cursor = 'grab';
     el.style.boxShadow = '0 2px 6px rgba(0,0,0,0.3)';
-    el.textContent = (index + 1).toString();
+    // In game mode: first waypoint is "D" (départ), rest are balise numbers
+    // In planning mode: simple 1, 2, 3...
+    el.textContent = gameWalkMode ? (index === 0 ? 'D' : index.toString()) : (index + 1).toString();
 
     // Delete button (× top-right, visible on hover)
     const delBtn = document.createElement('div');
@@ -1868,6 +1883,13 @@ export function setGameSpeedMultiplier(speed) {
   console.log('[game] Speed:', speed, 'x, duration:', (animationDurationMs / 1000).toFixed(0), 's');
 }
 
+let topoOverlayActive = false;
+let topoClickCallback = null;
+
+export function onTopoOverlayClick(callback) {
+  topoClickCallback = callback;
+}
+
 // Show/hide topo map overlay (overhead view with balises, no player position)
 export function showTopoOverlayMode(show) {
   if (!mapInstance) return;
@@ -1882,6 +1904,24 @@ export function showTopoOverlayMode(show) {
       zoom: 14,
       bearing: 0
     });
+    // Enable map interactions for topo overlay (pan, zoom)
+    mapInstance.dragPan.enable();
+    mapInstance.scrollZoom.enable();
+    mapInstance.doubleClickZoom.enable();
+    mapInstance.dragRotate.enable();
+    mapInstance.touchZoomRotate.enable();
+    mapInstance.keyboard.enable();
+    console.log('[game] Topo overlay: interactions ENABLED (pan, zoom, rotate)');
+    topoOverlayActive = true;
+    // Show balise markers on topo overlay with game numbering (D, 1, 2, 3...)
+    waypointMarkers.forEach((m, i) => {
+      const el = m.getElement();
+      el.style.display = '';
+      // Re-label: first text node = D (départ), rest = balise number matching HUD
+      if (el.firstChild && el.firstChild.nodeType === 3) {
+        el.firstChild.textContent = i === 0 ? 'D' : i.toString();
+      }
+    });
     // Hide player marker (no GPS in CO!)
     if (playerMarker) playerMarker.getElement().style.display = 'none';
   } else {
@@ -1889,8 +1929,186 @@ export function showTopoOverlayMode(show) {
     switchMapStyle('hybrid');
     mapInstance.setTerrain({ source: 'terrainSource', exaggeration: 1.5 });
     terrainEnabled = true;
-    // Show player marker
-    if (playerMarker) playerMarker.getElement().style.display = '';
+    topoOverlayActive = false;
+    // Disable map interactions again (Elm controls movement)
+    mapInstance.dragPan.disable();
+    mapInstance.scrollZoom.disable();
+    mapInstance.doubleClickZoom.disable();
+    mapInstance.dragRotate.disable();
+    mapInstance.touchZoomRotate.disable();
+    // Hide balise markers again (no cheating!)
+    waypointMarkers.forEach(m => m.getElement().style.display = 'none');
+    // Hide player marker (Elm renders the player in 3D)
+    if (playerMarker) playerMarker.getElement().style.display = 'none';
+  }
+}
+
+// Center map on a coordinate (used for topo overlay centering on player)
+export function centerMapOnCoord(lat, lon) {
+  if (!mapInstance) return;
+  mapInstance.jumpTo({ center: [lon, lat] });
+}
+
+// ============================================================
+// GAME WALK MODE - First-person topo map view
+// ============================================================
+
+let gameWalkMode = false;
+let gameWalkSavedState = null;
+
+/**
+ * Enter game walk mode: topo map seen from near ground level.
+ * Pitch 85° + zoom 19 = quasi first-person view on the topo map.
+ * Roads on the map ARE the roads the player walks on.
+ */
+export function enterGameWalkMode(lat, lon, bearing) {
+  if (!mapInstance) return;
+  console.log('[game-walk] Entering walk mode at', lat, lon, 'bearing', bearing);
+
+  gameWalkMode = true;
+
+  // Save current camera for restore
+  gameWalkSavedState = {
+    center: mapInstance.getCenter(),
+    zoom: mapInstance.getZoom(),
+    pitch: mapInstance.getPitch(),
+    bearing: mapInstance.getBearing(),
+    style: currentMapStyle
+  };
+
+  // Switch to topo style
+  switchMapStyle('topo');
+
+  // Enable terrain for 3D elevation (crucial for realism)
+  setTimeout(() => {
+    try {
+      if (mapInstance.getSource('terrainSource')) {
+        mapInstance.setTerrain({ source: 'terrainSource', exaggeration: 1.5 });
+      }
+    } catch (e) {
+      console.warn('[game-walk] Terrain not available:', e);
+    }
+  }, 1000);
+
+  // Allow max pitch for more immersive view
+  mapInstance.setMaxPitch(85);
+
+  // Disable all map interactions (Elm controls movement)
+  mapInstance.dragPan.disable();
+  mapInstance.scrollZoom.disable();
+  mapInstance.doubleClickZoom.disable();
+  mapInstance.dragRotate.disable();
+  mapInstance.touchZoomRotate.disable();
+
+  // Hide route line and waypoints (they reveal the path)
+  setTimeout(() => {
+    try {
+      if (mapInstance.getLayer('route-line')) {
+        mapInstance.setLayoutProperty('route-line', 'visibility', 'none');
+      }
+      if (mapInstance.getLayer('route-line-outline')) {
+        mapInstance.setLayoutProperty('route-line-outline', 'visibility', 'none');
+      }
+    } catch (e) {}
+    waypointMarkers.forEach(m => m.getElement().style.display = 'none');
+  }, 500);
+
+  // Hide player marker
+  if (playerMarker) playerMarker.getElement().style.display = 'none';
+
+  // Set walk camera — high pitch for ground-level feel
+  mapInstance.jumpTo({
+    center: [lon, lat],
+    zoom: 19,
+    pitch: 85,
+    bearing: bearing
+  });
+
+  mapInstance.getCanvas().style.cursor = 'pointer';
+}
+
+let gameWalkClickCallback = null;
+
+/**
+ * Register a callback for game walk clicks.
+ * The actual click listener is in the map 'load' handler above.
+ */
+export function onGameWalkClick(callback) {
+  gameWalkClickCallback = callback;
+}
+
+/**
+ * Update camera position during game walk mode.
+ * Called on each player step or rotation from Elm.
+ */
+export function updateGameWalkCamera(lat, lon, bearing) {
+  if (!mapInstance) return;
+  if (gameWalkMode) {
+    mapInstance.jumpTo({
+      center: [lon, lat],
+      bearing: bearing,
+      pitch: 85,
+      zoom: 19
+    });
+  } else {
+    // Called when returning from topo overlay — re-enter walk mode
+    gameWalkMode = true;
+    mapInstance.setTerrain(null);
+    setTimeout(() => {
+      try {
+        if (mapInstance.getSource('terrainSource')) {
+          mapInstance.setTerrain({ source: 'terrainSource', exaggeration: 1.5 });
+        }
+      } catch (e) {}
+    }, 300);
+    mapInstance.jumpTo({
+      center: [lon, lat],
+      bearing: bearing,
+      pitch: 85,
+      zoom: 19
+    });
+  }
+}
+
+/**
+ * Exit game walk mode, restore previous camera state.
+ */
+export function exitGameWalkMode() {
+  if (!mapInstance) return;
+  console.log('[game-walk] Exiting walk mode');
+
+  gameWalkMode = false;
+
+  mapInstance.getCanvas().style.cursor = '';
+
+  // Re-enable map interactions
+  mapInstance.dragPan.enable();
+  mapInstance.scrollZoom.enable();
+  mapInstance.doubleClickZoom.enable();
+  mapInstance.dragRotate.enable();
+  mapInstance.touchZoomRotate.enable();
+
+  // Show route and waypoints
+  if (mapInstance.getLayer('route-line')) {
+    mapInstance.setLayoutProperty('route-line', 'visibility', 'visible');
+  }
+  if (mapInstance.getLayer('route-line-outline')) {
+    mapInstance.setLayoutProperty('route-line-outline', 'visibility', 'visible');
+  }
+  waypointMarkers.forEach(m => m.getElement().style.display = '');
+  if (playerMarker) playerMarker.getElement().style.display = '';
+
+  // Restore camera
+  if (gameWalkSavedState) {
+    switchMapStyle(gameWalkSavedState.style || 'topo');
+    mapInstance.flyTo({
+      center: gameWalkSavedState.center,
+      zoom: gameWalkSavedState.zoom,
+      pitch: gameWalkSavedState.pitch,
+      bearing: gameWalkSavedState.bearing,
+      duration: 1000
+    });
+    gameWalkSavedState = null;
   }
 }
 
