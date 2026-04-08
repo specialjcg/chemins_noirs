@@ -656,8 +656,14 @@ vegetationToEntity tex center maybeGrid baseAlt exag zone =
 
         isVigne = String.contains "Vigne" zone.nature
 
+        -- Distance from player to zone center (in scene meters)
+        zoneDist = sqrt (cx * cx + cy * cy)
+
+        -- LOD: 3D decorations only within 100m, ground strips within 120m
         decor =
-            if isForest zone.nature then
+            if zoneDist > 100 then
+                []
+            else if isForest zone.nature then
                 scatterTrees zone.nature cx cy zAtXY pts
 
             else if isVigne then
@@ -670,7 +676,7 @@ vegetationToEntity tex center maybeGrid baseAlt exag zone =
                 []
 
         vineStrips =
-            if isVigne then
+            if isVigne && zoneDist < 120 then
                 vineGroundStrips tex cx cy zAtXY pts
             else
                 []
@@ -754,7 +760,7 @@ scatterTrees nature cx cy zAtXY pts =
         |> List.take 12
 
 
-{-| Vine rows: parallel rows along Y axis, posts every 5m. Max 30 vines.
+{-| Vine rows: parallel rows along Y axis, posts every 5m. Fills the polygon.
 -}
 vineRows : Float -> Float -> (Float -> Float -> Float) -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
 vineRows cx cy zAtXY pts =
@@ -767,6 +773,8 @@ vineRows cx cy zAtXY pts =
         maxY = List.maximum ys |> Maybe.withDefault cy
         rowStep = 2.5
         postStep = 5.0
+        nRows = round ((maxX - minX) / rowStep)
+        nPosts = round ((maxY - minY) / postStep)
         vineGreen = Material.matte (Color.rgb255 80 130 40)
         postBrown = Material.matte (Color.rgb255 130 100 50)
     in
@@ -797,10 +805,9 @@ vineRows cx cy zAtXY pts =
                     else
                         Nothing
                 )
-                (List.range 0 (min 8 (round ((maxY - minY) / postStep))))
+                (List.range 0 nPosts)
         )
-        (List.range 0 (min 12 (round ((maxX - minX) / rowStep))))
-        |> List.take 30
+        (List.range 0 nRows)
 
 
 {-| Orchard trees: regular grid, max 10.
@@ -876,7 +883,8 @@ vineGroundStrips tex cx cy zAtXY pts =
                 Just t -> Material.texturedMatte t
                 Nothing -> Material.matte (Color.rgb255 110 125 65)
 
-        numStrips = min 20 (round ((maxX - minX) / stripW))
+        numStrips = round ((maxX - minX) / stripW)
+        nSegsY = round ((maxY - minY) / 6.0)
     in
     List.concatMap
         (\i ->
@@ -909,10 +917,9 @@ vineGroundStrips tex cx cy zAtXY pts =
                     else
                         Nothing
                 )
-                (List.range 0 (min 15 (round ((maxY - minY) / 6.0))))
+                (List.range 0 nSegsY)
         )
         (List.range 0 numStrips)
-        |> List.take 120
 
 
 {-| Point-in-polygon test (ray casting).

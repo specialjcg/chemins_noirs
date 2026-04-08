@@ -319,6 +319,7 @@ type alias GameState =
     , dragStartX : Float
     , debugLog : List String
     , cachedEntities : List (Scene3d.Entity WorldCoordinates)
+    , cachePosition : Coordinate
     , textures : GameTextures
     }
 
@@ -632,6 +633,7 @@ initialGameState waypoints =
     , dragStartX = 0
     , debugLog = []
     , cachedEntities = []
+    , cachePosition = startPos
     , textures = emptyTextures
     }
 

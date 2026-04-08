@@ -59,13 +59,25 @@ init _ =
 -- HELPERS
 
 
-{-| Recompute cached 3D entities after position or scene data changes.
-Only call this when playerPosition, roads, vegetation, buildings, elevationGrid, or controlPoints change.
-Do NOT call on playerBearing changes (drag) — that's the whole point of caching.
+{-| Recompute cached 3D entities only if position moved > 20m or scene data changed.
+Call withEntitiesForce when data changes (vegetation/roads/buildings/textures).
+Call withEntities on position changes (forward steps) — skips if < 20m from last cache.
 -}
 withEntities : GameState -> GameState
 withEntities gs =
-    { gs | cachedEntities = World3D.computeEntities gs }
+    let
+        dist =
+            haversineMeters gs.playerPosition gs.cachePosition
+    in
+    if dist > 20 then
+        { gs | cachedEntities = World3D.computeEntities gs, cachePosition = gs.playerPosition }
+    else
+        gs
+
+
+withEntitiesForce : GameState -> GameState
+withEntitiesForce gs =
+    { gs | cachedEntities = World3D.computeEntities gs, cachePosition = gs.playerPosition }
 
 
 
@@ -1163,7 +1175,7 @@ update msg model =
                                 )
                                 gs.controlPoints
                     in
-                    ( { model | appMode = Orienteering (withEntities newGs) }
+                    ( { model | appMode = Orienteering (withEntitiesForce newGs) }
                     , Cmd.batch
                         [ Ports.enterGameView
                             { lat = startPos.lat
@@ -1305,7 +1317,7 @@ update msg model =
                                 , foundFlash = finished || (nextIdx > gs.currentPointIndex)
                             }
                     in
-                    ( { model | appMode = Orienteering (withEntities newGs), pending = False }
+                    ( { model | appMode = Orienteering (withEntitiesForce newGs), pending = False }
                     , Api.fetchIgnRoads endPos 0.005 RoadsFetched
                     )
 
@@ -1573,7 +1585,7 @@ update msg model =
                             else
                                 gs.playerPosition
                     in
-                    ( { model | appMode = Orienteering (withEntities { gs | roads = roads, playerPosition = finalPos }) }
+                    ( { model | appMode = Orienteering (withEntitiesForce { gs | roads = roads, playerPosition = finalPos }) }
                     , Cmd.batch
                         [ logCmd ("ROADS " ++ String.fromInt (List.length roads) ++ "r " ++ String.fromInt segCount ++ "s snap=" ++ String.fromInt (round snapDist) ++ "m natures=" ++ String.join "," (List.take 5 (List.map .nature roads)))
                         , Ports.updateGameCamera { lat = finalPos.lat, lon = finalPos.lon, bearing = gs.playerBearing }
@@ -1589,7 +1601,7 @@ update msg model =
         VegetationFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok zones ) ->
-                    ( { model | appMode = Orienteering (withEntities { gs | vegetation = zones }) }
+                    ( { model | appMode = Orienteering (withEntitiesForce { gs | vegetation = zones }) }
                     , logCmd ("VEGETATION " ++ String.fromInt (List.length zones) ++ " zones")
                     )
 
@@ -1602,7 +1614,7 @@ update msg model =
         IgnBuildingsFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok blds ) ->
-                    ( { model | appMode = Orienteering (withEntities { gs | ign_buildings = blds }) }
+                    ( { model | appMode = Orienteering (withEntitiesForce { gs | ign_buildings = blds }) }
                     , logCmd ("BUILDINGS " ++ String.fromInt (List.length blds) ++ " buildings")
                     )
 
@@ -1615,7 +1627,7 @@ update msg model =
         ElevationGridFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok grid ) ->
-                    ( { model | appMode = Orienteering (withEntities { gs | elevationGrid = Just grid }) }
+                    ( { model | appMode = Orienteering (withEntitiesForce { gs | elevationGrid = Just grid }) }
                     , logCmd ("ELEVATION " ++ String.fromInt grid.rows ++ "x" ++ String.fromInt grid.cols ++ " alt=" ++ String.fromInt (round grid.minAlt) ++ "-" ++ String.fromInt (round grid.maxAlt) ++ "m")
                     )
 
@@ -1657,7 +1669,7 @@ update msg model =
                                 newGs =
                                     { gs | textures = newTex }
                             in
-                            ( { model | appMode = Orienteering (withEntities newGs) }
+                            ( { model | appMode = Orienteering (withEntitiesForce newGs) }
                             , Cmd.none
                             )
 
