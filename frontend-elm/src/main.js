@@ -424,4 +424,25 @@ app.ports.exitGameView.subscribe(() => {
   if (mapEl) showMapOverlay(mapEl);
 });
 
+// ============================================================
+// MOUSE DRAG → Elm (rAF throttled for smooth camera rotation)
+// ============================================================
+// Batches mousemove events at display refresh rate (~60fps)
+// instead of raw event rate (100+ per second)
+let pendingMouseX = null;
+let dragRafId = null;
+
+document.addEventListener('mousemove', (e) => {
+  pendingMouseX = e.clientX;
+  if (!dragRafId) {
+    dragRafId = requestAnimationFrame(() => {
+      if (pendingMouseX !== null) {
+        app.ports.gameDragReceived.send(pendingMouseX);
+        pendingMouseX = null;
+      }
+      dragRafId = null;
+    });
+  }
+});
+
 console.log('✅ Elm application initialized with MapLibre ports');

@@ -1,4 +1,4 @@
-module View.World3D exposing (view)
+module View.World3D exposing (view, computeEntities)
 
 {-| 3D World renderer for the orienteering game.
 First-person view with smooth terrain relief, colored roads, vegetation and buildings.
@@ -24,12 +24,11 @@ import TriangularMesh
 import Types exposing (..)
 
 
-type WorldCoordinates
-    = WorldCoordinates
-
-
-view : GameState -> Int -> Int -> Html Msg
-view gs width height =
+{-| Pre-compute all 3D entities (terrain, roads, vegetation, buildings, control points).
+Call this when playerPosition or scene data changes, NOT on every bearing change.
+-}
+computeEntities : GameState -> List (Scene3d.Entity WorldCoordinates)
+computeEntities gs =
     let
         center =
             gs.playerPosition
@@ -42,16 +41,61 @@ view gs width height =
         exag =
             1.5
 
-        -- Camera direction
+        maxDist =
+            150
+
+        nearbyVeg =
+            List.filter (\z -> isNearby center maxDist z.coords) gs.vegetation
+
+        nearbyBuildings =
+            List.filter (\b -> isNearby center maxDist b.coords) gs.ign_buildings
+
+        nearbyRoads =
+            List.filter (\r -> isNearby center maxDist r.coords) gs.roads
+
+        tex =
+            gs.textures
+
+        terrainEntity =
+            buildTerrainMesh tex gs.elevationGrid center baseAlt exag
+
+        vegetationEntities =
+            List.concatMap (vegetationToEntity tex center gs.elevationGrid baseAlt exag) nearbyVeg
+
+        buildingEntities =
+            List.concatMap (buildingToEntity center gs.elevationGrid baseAlt exag) nearbyBuildings
+
+        roadEntities =
+            List.concatMap (smoothRoadEntities tex center gs.elevationGrid baseAlt exag) nearbyRoads
+
+        cpEntities =
+            List.concatMap (controlPointToEntity center gs.elevationGrid baseAlt exag) gs.controlPoints
+    in
+    terrainEntity ++ vegetationEntities ++ roadEntities ++ buildingEntities ++ cpEntities
+
+
+{-| Render the 3D scene using cached entities. Only the camera is recomputed per frame.
+-}
+view : GameState -> Int -> Int -> Html Msg
+view gs width height =
+    let
+        baseAlt =
+            case gs.elevationGrid of
+                Just grid -> grid.minAlt
+                Nothing -> 0
+
+        exag =
+            1.5
+
+        -- Camera direction (only thing that changes on drag)
         elmAngle =
             Angle.degrees (90 - gs.playerBearing)
 
         lookDirection =
             Direction3d.xy elmAngle
 
-        -- Player altitude from terrain
         playerZ =
-            altAt gs.elevationGrid center baseAlt exag
+            altAt gs.elevationGrid gs.playerPosition baseAlt exag
 
         eyePoint =
             Point3d.meters 0 0 (playerZ + 1.7)
@@ -68,36 +112,6 @@ view gs width height =
                 , projection = Camera3d.Perspective
                 }
 
-        -- Distance culling
-        maxDist =
-            150
-
-        nearbyVeg =
-            List.filter (\z -> isNearby center maxDist z.coords) gs.vegetation
-
-        nearbyBuildings =
-            List.filter (\b -> isNearby center maxDist b.coords) gs.ign_buildings
-
-        nearbyRoads =
-            List.filter (\r -> isNearby center maxDist r.coords) gs.roads
-
-        -- Terrain mesh (single entity!)
-        terrainEntity =
-            buildTerrainMesh gs.elevationGrid center baseAlt exag
-
-        -- Features on terrain
-        vegetationEntities =
-            List.concatMap (vegetationToEntity center gs.elevationGrid baseAlt exag) nearbyVeg
-
-        buildingEntities =
-            List.concatMap (buildingToEntity center gs.elevationGrid baseAlt exag) nearbyBuildings
-
-        roadEntities =
-            List.concatMap (smoothRoadEntities center gs.elevationGrid baseAlt exag) nearbyRoads
-
-        cpEntities =
-            List.concatMap (controlPointToEntity center gs.elevationGrid baseAlt exag) gs.controlPoints
-
         skyColor =
             Color.rgb255 135 206 235
     in
@@ -106,7 +120,7 @@ view gs width height =
         , clipDepth = Length.meters 0.1
         , dimensions = ( Pixels.int width, Pixels.int height )
         , background = Scene3d.backgroundColor skyColor
-        , entities = terrainEntity ++ vegetationEntities ++ roadEntities ++ buildingEntities ++ cpEntities
+        , entities = gs.cachedEntities
         , shadows = False
         , upDirection = Direction3d.z
         , sunlightDirection =
@@ -215,12 +229,18 @@ toXYZ c center maybeGrid baseAlt exag zOffset =
 -- TERRAIN MESH (single entity)
 
 
-buildTerrainMesh : Maybe ElevationGrid -> Coordinate -> Float -> Float -> List (Scene3d.Entity WorldCoordinates)
-buildTerrainMesh maybeGrid center baseAlt exag =
+buildTerrainMesh : GameTextures -> Maybe ElevationGrid -> Coordinate -> Float -> Float -> List (Scene3d.Entity WorldCoordinates)
+buildTerrainMesh tex maybeGrid center baseAlt exag =
+    let
+        grassMat =
+            case tex.grass of
+                Just t -> Material.texturedMatte t
+                Nothing -> Material.matte (Color.rgb255 75 135 45)
+    in
     case maybeGrid of
         Nothing ->
             -- Flat green ground fallback
-            [ Scene3d.quad (Material.matte (Color.rgb255 75 135 45))
+            [ Scene3d.quad grassMat
                 (Point3d.meters -500 -500 0)
                 (Point3d.meters 500 -500 0)
                 (Point3d.meters 500 500 0)
@@ -256,41 +276,38 @@ buildTerrainMesh maybeGrid center baseAlt exag =
                         |> Maybe.andThen (Array.get col)
                         |> Maybe.withDefault grid.minAlt
 
-                -- Build single terrain mesh using TriangularMesh.grid
-                terrainMesh =
-                    TriangularMesh.grid (grid.cols - 1) (grid.rows - 1)
-                        (\u v ->
-                            let
-                                col =
-                                    round (u * toFloat (grid.cols - 1))
+                -- Helper: grid cell corner to 3D point
+                cellPoint row col =
+                    let
+                        x = originX + toFloat col * grid.cellSizeM
+                        y = originY + toFloat row * grid.cellSizeM
+                        z = (getAlt row col - baseAlt) * exag
+                    in
+                    Point3d.meters x y z
 
-                                row =
-                                    round (v * toFloat (grid.rows - 1))
-
-                                x =
-                                    originX + u * totalSizeX
-
-                                y =
-                                    originY + v * totalSizeY
-
-                                z =
-                                    (getAlt row col - baseAlt) * exag
-                            in
-                            Point3d.meters x y z
+                -- Build one textured quad per grid cell (each gets tiled texture via UVs)
+                terrainQuads =
+                    List.concatMap
+                        (\row ->
+                            List.map
+                                (\col ->
+                                    Scene3d.quad grassMat
+                                        (cellPoint row col)
+                                        (cellPoint row (col + 1))
+                                        (cellPoint (row + 1) (col + 1))
+                                        (cellPoint (row + 1) col)
+                                )
+                                (List.range 0 (grid.cols - 2))
                         )
-
-                sceneMesh =
-                    Mesh.indexedFacets terrainMesh
-
-                -- Flat base ground beyond terrain
+                        (List.range 0 (grid.rows - 2))
             in
-            [ Scene3d.mesh (Material.matte (Color.rgb255 75 135 45)) sceneMesh
-            , Scene3d.quad (Material.matte (Color.rgb255 65 120 40))
-                (Point3d.meters -1000 -1000 0)
-                (Point3d.meters 1000 -1000 0)
-                (Point3d.meters 1000 1000 0)
-                (Point3d.meters -1000 1000 0)
-            ]
+            terrainQuads
+                ++ [ Scene3d.quad grassMat
+                        (Point3d.meters -1000 -1000 0)
+                        (Point3d.meters 1000 -1000 0)
+                        (Point3d.meters 1000 1000 0)
+                        (Point3d.meters -1000 1000 0)
+                   ]
 
 
 
@@ -396,8 +413,8 @@ subdivideHelper maxLenM prev remaining =
 {-| Render a road as a smooth triangle strip with averaged normals at each vertex.
     This produces clean joins at bends without junction discs.
 -}
-smoothRoadEntities : Coordinate -> Maybe ElevationGrid -> Float -> Float -> StyledRoad -> List (Scene3d.Entity WorldCoordinates)
-smoothRoadEntities center maybeGrid baseAlt exag road =
+smoothRoadEntities : GameTextures -> Coordinate -> Maybe ElevationGrid -> Float -> Float -> StyledRoad -> List (Scene3d.Entity WorldCoordinates)
+smoothRoadEntities tex center maybeGrid baseAlt exag road =
     let
         style =
             roadStyle road.nature
@@ -488,13 +505,29 @@ smoothRoadEntities center maybeGrid baseAlt exag road =
             List.map2 Tuple.pair edges (List.drop 1 edges)
 
         mat =
-            Material.matte style.color
+            roadMaterial tex road.nature style.color
     in
     List.map
         (\( e1, e2 ) ->
             Scene3d.quad mat e1.left e1.right e2.right e2.left
         )
         edgePairs
+
+
+{-| Pick textured or matte material for roads based on type. -}
+roadMaterial tex nature fallback =
+    let
+        maybeTexture =
+            if String.contains "1 chauss" nature || String.contains "2 chauss" nature || String.contains "Rond-point" nature then
+                tex.asphalt
+            else if String.contains "Chemin" nature || String.contains "Sentier" nature then
+                tex.dirt
+            else
+                tex.gravel
+    in
+    case maybeTexture of
+        Just t -> Material.texturedMatte t
+        Nothing -> Material.texturedMatte (Material.constant fallback)
 
 
 
@@ -523,8 +556,8 @@ vegetationColor nature =
         Color.rgb255 60 120 50
 
 
-vegetationToEntity : Coordinate -> Maybe ElevationGrid -> Float -> Float -> VegetationZone -> List (Scene3d.Entity WorldCoordinates)
-vegetationToEntity center maybeGrid baseAlt exag zone =
+vegetationToEntity : GameTextures -> Coordinate -> Maybe ElevationGrid -> Float -> Float -> VegetationZone -> List (Scene3d.Entity WorldCoordinates)
+vegetationToEntity tex center maybeGrid baseAlt exag zone =
     let
         color = vegetationColor zone.nature
 
@@ -569,8 +602,9 @@ vegetationToEntity center maybeGrid baseAlt exag zone =
             in
             modBy 2 count == 1
 
-        -- Generate grid quads
-        mat = Material.matte color
+        -- Generate grid quads with texture
+        mat =
+            vegetationMaterial tex zone.nature color
 
         gridQuads =
             List.concatMap
@@ -637,11 +671,27 @@ vegetationToEntity center maybeGrid baseAlt exag zone =
 
         vineStrips =
             if isVigne then
-                vineGroundStrips cx cy zAtXY pts
+                vineGroundStrips tex cx cy zAtXY pts
             else
                 []
     in
     gridQuads ++ vineStrips ++ decor
+
+
+{-| Pick textured or matte material for vegetation ground quads. -}
+vegetationMaterial tex nature fallback =
+    let
+        maybeTexture =
+            if isForest nature then
+                tex.forest
+            else if String.contains "Vigne" nature then
+                tex.vineyard
+            else
+                tex.grass
+    in
+    case maybeTexture of
+        Just t -> Material.texturedMatte t
+        Nothing -> Material.matte fallback
 
 
 isForest : String -> Bool
@@ -800,8 +850,7 @@ orchardTrees cx cy zAtXY pts =
 {-| Vineyard ground: alternating strips of earth colors to simulate soil texture.
     Dark brown rows (plowed earth) alternating with lighter dry earth.
 -}
-vineGroundStrips : Float -> Float -> (Float -> Float -> Float) -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
-vineGroundStrips cx cy zAtXY pts =
+vineGroundStrips tex cx cy zAtXY pts =
     let
         xs = List.map .x pts
         ys = List.map .y pts
@@ -812,11 +861,20 @@ vineGroundStrips cx cy zAtXY pts =
         stripW = 1.2
 
         -- Dark plowed earth between vines
-        darkSoil = Material.matte (Color.rgb255 95 70 45)
+        darkSoil =
+            case tex.dirt of
+                Just t -> Material.texturedMatte t
+                Nothing -> Material.matte (Color.rgb255 95 70 45)
         -- Lighter dry earth / gravel
-        lightSoil = Material.matte (Color.rgb255 165 140 100)
-        -- Slight green for vine row strip
-        vineStrip = Material.matte (Color.rgb255 110 125 65)
+        lightSoil =
+            case tex.dirt of
+                Just t -> Material.texturedMatte t
+                Nothing -> Material.matte (Color.rgb255 165 140 100)
+        -- Vine row strip
+        vineStrip =
+            case tex.vineyard of
+                Just t -> Material.texturedMatte t
+                Nothing -> Material.matte (Color.rgb255 110 125 65)
 
         numStrips = min 20 (round ((maxX - minX) / stripW))
     in

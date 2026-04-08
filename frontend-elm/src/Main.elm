@@ -18,6 +18,8 @@ import Html.Events
 import Json.Decode
 import Ports
 import Dict exposing (Dict)
+import Scene3d.Material as Material
+import Task
 import Types exposing (..)
 import View.Form as Form
 import View.Game as Game
@@ -51,6 +53,33 @@ init _ =
         , Api.listSavedRoutes SavedRoutesLoaded
         ]
     )
+
+
+
+-- HELPERS
+
+
+{-| Recompute cached 3D entities after position or scene data changes.
+Only call this when playerPosition, roads, vegetation, buildings, elevationGrid, or controlPoints change.
+Do NOT call on playerBearing changes (drag) — that's the whole point of caching.
+-}
+withEntities : GameState -> GameState
+withEntities gs =
+    { gs | cachedEntities = World3D.computeEntities gs }
+
+
+
+{-| Load all terrain textures at game start. -}
+loadTextures : Cmd Msg
+loadTextures =
+    Cmd.batch
+        [ Material.load "/textures/grass.png" |> Task.attempt (TextureLoaded "grass")
+        , Material.load "/textures/dirt.png" |> Task.attempt (TextureLoaded "dirt")
+        , Material.load "/textures/gravel.png" |> Task.attempt (TextureLoaded "gravel")
+        , Material.load "/textures/asphalt.png" |> Task.attempt (TextureLoaded "asphalt")
+        , Material.load "/textures/forest.png" |> Task.attempt (TextureLoaded "forest")
+        , Material.load "/textures/vineyard.png" |> Task.attempt (TextureLoaded "vineyard")
+        ]
 
 
 
@@ -1134,7 +1163,7 @@ update msg model =
                                 )
                                 gs.controlPoints
                     in
-                    ( { model | appMode = Orienteering newGs }
+                    ( { model | appMode = Orienteering (withEntities newGs) }
                     , Cmd.batch
                         [ Ports.enterGameView
                             { lat = startPos.lat
@@ -1145,6 +1174,7 @@ update msg model =
                         , Api.fetchIgnVegetation startPos 0.005 VegetationFetched
                         , Api.fetchIgnBuildings startPos 0.005 IgnBuildingsFetched
                         , Api.fetchElevationGrid startPos 800 40 ElevationGridFetched
+                        , loadTextures
                         , logCmd ("START pos=" ++ String.fromFloat startPos.lat ++ "," ++ String.fromFloat startPos.lon)
                         ]
                     )
@@ -1275,7 +1305,7 @@ update msg model =
                                 , foundFlash = finished || (nextIdx > gs.currentPointIndex)
                             }
                     in
-                    ( { model | appMode = Orienteering newGs, pending = False }
+                    ( { model | appMode = Orienteering (withEntities newGs), pending = False }
                     , Api.fetchIgnRoads endPos 0.005 RoadsFetched
                     )
 
@@ -1355,7 +1385,7 @@ update msg model =
                                 , foundFlash = justFound
                             }
                     in
-                    ( { model | appMode = Orienteering newGs }
+                    ( { model | appMode = Orienteering (withEntities newGs) }
                     , Cmd.none
                     )
 
@@ -1543,7 +1573,7 @@ update msg model =
                             else
                                 gs.playerPosition
                     in
-                    ( { model | appMode = Orienteering { gs | roads = roads, playerPosition = finalPos } }
+                    ( { model | appMode = Orienteering (withEntities { gs | roads = roads, playerPosition = finalPos }) }
                     , Cmd.batch
                         [ logCmd ("ROADS " ++ String.fromInt (List.length roads) ++ "r " ++ String.fromInt segCount ++ "s snap=" ++ String.fromInt (round snapDist) ++ "m natures=" ++ String.join "," (List.take 5 (List.map .nature roads)))
                         , Ports.updateGameCamera { lat = finalPos.lat, lon = finalPos.lon, bearing = gs.playerBearing }
@@ -1559,7 +1589,7 @@ update msg model =
         VegetationFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok zones ) ->
-                    ( { model | appMode = Orienteering { gs | vegetation = zones } }
+                    ( { model | appMode = Orienteering (withEntities { gs | vegetation = zones }) }
                     , logCmd ("VEGETATION " ++ String.fromInt (List.length zones) ++ " zones")
                     )
 
@@ -1572,7 +1602,7 @@ update msg model =
         IgnBuildingsFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok blds ) ->
-                    ( { model | appMode = Orienteering { gs | ign_buildings = blds } }
+                    ( { model | appMode = Orienteering (withEntities { gs | ign_buildings = blds }) }
                     , logCmd ("BUILDINGS " ++ String.fromInt (List.length blds) ++ " buildings")
                     )
 
@@ -1585,7 +1615,7 @@ update msg model =
         ElevationGridFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok grid ) ->
-                    ( { model | appMode = Orienteering { gs | elevationGrid = Just grid } }
+                    ( { model | appMode = Orienteering (withEntities { gs | elevationGrid = Just grid }) }
                     , logCmd ("ELEVATION " ++ String.fromInt grid.rows ++ "x" ++ String.fromInt grid.cols ++ " alt=" ++ String.fromInt (round grid.minAlt) ++ "-" ++ String.fromInt (round grid.maxAlt) ++ "m")
                     )
 
@@ -1601,6 +1631,38 @@ update msg model =
                     ( { model | appMode = Orienteering { gs | buildings = buildings } }
                     , Cmd.none
                     )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        TextureLoaded name result ->
+            case model.appMode of
+                Orienteering gs ->
+                    case result of
+                        Ok texture ->
+                            let
+                                tex =
+                                    gs.textures
+
+                                newTex =
+                                    case name of
+                                        "grass" -> { tex | grass = Just texture }
+                                        "dirt" -> { tex | dirt = Just texture }
+                                        "gravel" -> { tex | gravel = Just texture }
+                                        "asphalt" -> { tex | asphalt = Just texture }
+                                        "forest" -> { tex | forest = Just texture }
+                                        "vineyard" -> { tex | vineyard = Just texture }
+                                        _ -> tex
+
+                                newGs =
+                                    { gs | textures = newTex }
+                            in
+                            ( { model | appMode = Orienteering (withEntities newGs) }
+                            , Cmd.none
+                            )
+
+                        Err _ ->
+                            ( model, Cmd.none )
 
                 _ ->
                     ( model, Cmd.none )
@@ -1691,7 +1753,7 @@ update msg model =
                             reloadCmds =
                                 []
                         in
-                        ( { model | appMode = Orienteering newGs }
+                        ( { model | appMode = Orienteering (withEntities newGs) }
                         , Cmd.batch
                             ([ Ports.updateGameCamera
                                 { lat = nextPos.lat
@@ -1951,10 +2013,7 @@ subscriptions model =
             (Json.Decode.map GameMouseDown
                 (Json.Decode.field "clientX" Json.Decode.float)
             )
-        , Browser.Events.onMouseMove
-            (Json.Decode.map GameMouseDrag
-                (Json.Decode.field "clientX" Json.Decode.float)
-            )
+        , Ports.gameDragReceived GameMouseDrag
         , Browser.Events.onMouseUp
             (Json.Decode.map GameMouseUp
                 (Json.Decode.field "clientX" Json.Decode.float)

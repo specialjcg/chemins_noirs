@@ -5,6 +5,34 @@ import Color
 import Http
 import Json.Decode
 import Dict exposing (Dict)
+import Scene3d
+import Scene3d.Material as Material
+import WebGL.Texture
+
+
+type WorldCoordinates
+    = WorldCoordinates
+
+
+type alias GameTextures =
+    { grass : Maybe (Material.Texture Color.Color)
+    , dirt : Maybe (Material.Texture Color.Color)
+    , gravel : Maybe (Material.Texture Color.Color)
+    , asphalt : Maybe (Material.Texture Color.Color)
+    , forest : Maybe (Material.Texture Color.Color)
+    , vineyard : Maybe (Material.Texture Color.Color)
+    }
+
+
+emptyTextures : GameTextures
+emptyTextures =
+    { grass = Nothing
+    , dirt = Nothing
+    , gravel = Nothing
+    , asphalt = Nothing
+    , forest = Nothing
+    , vineyard = Nothing
+    }
 
 
 -- MODEL
@@ -228,6 +256,7 @@ type Msg
     | GameMouseDown Float
     | GameMouseUp Float
     | GameMapClicked { lat : Float, lon : Float }
+    | TextureLoaded String (Result WebGL.Texture.Error (Material.Texture Color.Color))
 
 
 
@@ -289,6 +318,8 @@ type alias GameState =
     , lastMouseX : Float
     , dragStartX : Float
     , debugLog : List String
+    , cachedEntities : List (Scene3d.Entity WorldCoordinates)
+    , textures : GameTextures
     }
 
 
@@ -600,6 +631,8 @@ initialGameState waypoints =
     , lastMouseX = 0
     , dragStartX = 0
     , debugLog = []
+    , cachedEntities = []
+    , textures = emptyTextures
     }
 
 

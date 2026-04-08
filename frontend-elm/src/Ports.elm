@@ -141,3 +141,6 @@ port pixelToLatLon : { x : Float, y : Float } -> Cmd msg
 
 
 port pixelToLatLonResult : ({ lat : Float, lon : Float } -> msg) -> Sub msg
+
+
+port gameDragReceived : (Float -> msg) -> Sub msg
