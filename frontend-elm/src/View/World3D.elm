@@ -570,18 +570,14 @@ vegetationToEntity tex center maybeGrid baseAlt exag zone =
         minLon = List.minimum lons |> Maybe.withDefault 0
         maxLon = List.maximum lons |> Maybe.withDefault 0
 
-        -- Grid step ~15m in degrees
-        stepLat = 15.0 / 111000.0
-        stepLon = 15.0 / (111000.0 * cos (center.lat * pi / 180))
+        -- Grid step ~20m in degrees — fills the polygon
+        stepLat = 20.0 / 111000.0
+        stepLon = 20.0 / (111000.0 * cos (center.lat * pi / 180))
 
-        nStepsRow = max 1 (ceiling ((maxLat - minLat) / stepLat))
-        nStepsCol = max 1 (ceiling ((maxLon - minLon) / stepLon))
-
-        -- Limit grid size for perf
-        cappedRows = min 20 nStepsRow
-        cappedCols = min 20 nStepsCol
-        actualStepLat = (maxLat - minLat) / toFloat cappedRows
-        actualStepLon = (maxLon - minLon) / toFloat cappedCols
+        nRows = max 1 (ceiling ((maxLat - minLat) / stepLat))
+        nCols = max 1 (ceiling ((maxLon - minLon) / stepLon))
+        actualStepLat = (maxLat - minLat) / toFloat nRows
+        actualStepLon = (maxLon - minLon) / toFloat nCols
 
         -- Point-in-polygon (ray casting)
         pointInPoly lat lon =
@@ -634,9 +630,9 @@ vegetationToEntity tex center maybeGrid baseAlt exag zone =
                             else
                                 Nothing
                         )
-                        (List.range 0 (cappedCols - 1))
+                        (List.range 0 (nCols - 1))
                 )
-                (List.range 0 (cappedRows - 1))
+                (List.range 0 (nRows - 1))
 
         -- Scene-space coords for decorations
         pts = List.map (\c -> toXYZ c center maybeGrid baseAlt exag 0.05) coords
@@ -748,13 +744,13 @@ scatterTrees nature cx cy zAtXY pts =
                     else
                         Nothing
                 )
-                (List.range 0 (min 3 (round ((maxY - minY) / step))))
+                (List.range 0 (round ((maxY - minY) / step)))
         )
-        (List.range 0 (min 3 (round ((maxX - minX) / step))))
-        |> List.take 12
+        (List.range 0 (round ((maxX - minX) / step)))
+        |> List.take 60
 
 
-{-| Vine rows: parallel rows along Y axis, posts every 5m. Max 30 vines.
+{-| Vine rows: parallel rows along Y axis, posts every 5m.
 -}
 vineRows : Float -> Float -> (Float -> Float -> Float) -> List { x : Float, y : Float, z : Float } -> List (Scene3d.Entity WorldCoordinates)
 vineRows cx cy zAtXY pts =
@@ -797,10 +793,10 @@ vineRows cx cy zAtXY pts =
                     else
                         Nothing
                 )
-                (List.range 0 (min 8 (round ((maxY - minY) / postStep))))
+                (List.range 0 (round ((maxY - minY) / postStep)))
         )
-        (List.range 0 (min 12 (round ((maxX - minX) / rowStep))))
-        |> List.take 30
+        (List.range 0 (round ((maxX - minX) / rowStep)))
+        |> List.take 150
 
 
 {-| Orchard trees: regular grid, max 10.
@@ -841,10 +837,10 @@ orchardTrees cx cy zAtXY pts =
                     else
                         Nothing
                 )
-                (List.range 0 (min 3 (round ((maxY - minY) / step))))
+                (List.range 0 (round ((maxY - minY) / step)))
         )
-        (List.range 0 (min 3 (round ((maxX - minX) / step))))
-        |> List.take 10
+        (List.range 0 (round ((maxX - minX) / step)))
+        |> List.take 40
 
 
 {-| Vineyard ground: alternating strips of earth colors to simulate soil texture.
@@ -876,7 +872,7 @@ vineGroundStrips tex cx cy zAtXY pts =
                 Just t -> Material.texturedMatte t
                 Nothing -> Material.matte (Color.rgb255 110 125 65)
 
-        numStrips = min 20 (round ((maxX - minX) / stripW))
+        numStrips = round ((maxX - minX) / stripW)
     in
     List.concatMap
         (\i ->
@@ -909,10 +905,10 @@ vineGroundStrips tex cx cy zAtXY pts =
                     else
                         Nothing
                 )
-                (List.range 0 (min 15 (round ((maxY - minY) / 6.0))))
+                (List.range 0 (round ((maxY - minY) / 6.0)))
         )
         (List.range 0 numStrips)
-        |> List.take 120
+        |> List.take 500
 
 
 {-| Point-in-polygon test (ray casting).
