@@ -396,21 +396,48 @@ async fn ign_buildings_handler(
     tracing::info!("IGN buildings request: bbox=[{},{},{},{}]", min_lat, min_lon, max_lat, max_lon);
 
     let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN WFS request failed: {}", e)))?;
 
-    if !response.status().is_success() {
-        return Err((StatusCode::BAD_GATEWAY, format!("IGN WFS error: {}", response.status())));
+    // Retry up to 3 times with exponential backoff — IGN WFS is known to be flaky
+    let mut last_err: Option<String> = None;
+    let mut geojson: Option<serde_json::Value> = None;
+    for attempt in 1..=3 {
+        match client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    match response.json::<serde_json::Value>().await {
+                        Ok(json) => {
+                            geojson = Some(json);
+                            break;
+                        }
+                        Err(e) => {
+                            last_err = Some(format!("parse error: {}", e));
+                        }
+                    }
+                } else {
+                    // Read body for diagnostic
+                    let body = response.text().await.unwrap_or_default();
+                    last_err = Some(format!("HTTP {} — body: {}", status, body.chars().take(200).collect::<String>()));
+                }
+            }
+            Err(e) => {
+                last_err = Some(format!("network: {}", e));
+            }
+        }
+        tracing::warn!("IGN buildings attempt {}/3 failed: {}", attempt, last_err.as_deref().unwrap_or("?"));
+        if attempt < 3 {
+            tokio::time::sleep(std::time::Duration::from_millis(500 * attempt)).await;
+        }
     }
 
-    let geojson: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("IGN WFS parse error: {}", e)))?;
+    let geojson = geojson.ok_or_else(|| {
+        (StatusCode::BAD_GATEWAY, format!("IGN WFS failed after 3 attempts: {}", last_err.unwrap_or_default()))
+    })?;
 
     let mut buildings = Vec::new();
 
