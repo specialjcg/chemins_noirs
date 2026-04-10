@@ -157,28 +157,24 @@ view model =
           else
             text ""
 
-        , if model.routeMode == MultiPoint then
-            div [ class "action-buttons" ]
-                [ button
-                    [ type_ "button"
-                    , class "btn-gpx-import"
-                    , onClick ImportGpxClicked
-                    ]
-                    [ text "Importer GPX" ]
-                , if List.length model.waypoints >= 2 then
-                    button
-                        [ type_ "button"
-                        , class "btn-game"
-                        , onClick EnterOrienteeringMode
-                        ]
-                        [ text "Course d'Orientation" ]
-
-                  else
-                    text ""
+        , div [ class "action-buttons" ]
+            [ button
+                [ type_ "button"
+                , class "btn-gpx-import"
+                , onClick ImportGpxClicked
                 ]
+                [ text "Importer GPX" ]
+            , if model.routeMode == MultiPoint && List.length model.waypoints >= 2 then
+                button
+                    [ type_ "button"
+                    , class "btn-game"
+                    , onClick EnterOrienteeringMode
+                    ]
+                    [ text "Course d'Orientation" ]
 
-          else
-            text ""
+              else
+                text ""
+            ]
         , small [ class "waypoints-summary" ]
             [ text <|
                 String.fromInt (List.length model.waypoints)
