@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "elm-test"
+    "test": "node --test test/*.test.mjs && elm-test",
+    "test:js": "node --test test/*.test.mjs",
+    "test:elm": "elm-test"
   },
   "dependencies": {
     "maplibre-contour": "^0.1.0",

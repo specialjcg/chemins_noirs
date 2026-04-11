@@ -3,6 +3,68 @@
  * Connecte l'application Elm avec la carte MapLibre via les Ports
  */
 
+// ============================================================
+// Console → backend log forwarding (dev debug)
+// Renvoie chaque console.{log,warn,error,info,debug} vers POST /api/log
+// pour qu'ils apparaissent dans le terminal et dans frontend_debug.log
+// ============================================================
+(function installConsoleForwarder() {
+  const LEVELS = ['log', 'info', 'warn', 'error', 'debug'];
+  const originals = {};
+  // Petit buffer + flush async pour éviter de saturer le réseau et garder l'ordre
+  const queue = [];
+  let flushScheduled = false;
+
+  function serializeArg(a) {
+    if (a instanceof Error) return a.stack || a.message;
+    if (typeof a === 'string') return a;
+    try { return JSON.stringify(a); } catch { return String(a); }
+  }
+
+  function scheduleFlush() {
+    if (flushScheduled) return;
+    flushScheduled = true;
+    setTimeout(() => {
+      flushScheduled = false;
+      const batch = queue.splice(0, queue.length);
+      if (batch.length === 0) return;
+      // POST chaque ligne (handler backend prend une string par requête)
+      for (const msg of batch) {
+        fetch('/api/log', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ msg }),
+          keepalive: true,
+        }).catch(() => {/* swallow — pas de récursion sinon boucle infinie */});
+      }
+    }, 50);
+  }
+
+  for (const level of LEVELS) {
+    originals[level] = console[level].bind(console);
+    console[level] = function(...args) {
+      originals[level](...args);
+      try {
+        const line = `[${level.toUpperCase()}] ` + args.map(serializeArg).join(' ');
+        queue.push(line);
+        scheduleFlush();
+      } catch { /* ignore */ }
+    };
+  }
+
+  // Capture les erreurs JS non catchées
+  window.addEventListener('error', (e) => {
+    queue.push(`[UNCAUGHT] ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}\n${e.error?.stack || ''}`);
+    scheduleFlush();
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    queue.push(`[UNHANDLED_REJECTION] ${serializeArg(e.reason)}`);
+    scheduleFlush();
+  });
+
+  originals.log('[devlog] console forwarding → /api/log actif');
+})();
+
 import maplibregl from 'maplibre-gl';
 
 // Import de l'application Elm compilée
@@ -11,6 +73,9 @@ import { Elm } from './Main.elm';
 // Import des fonctions MapLibre depuis le fichier original
 // Note: Ce fichier doit être copié depuis frontend/maplibre_map.js
 import * as MapLibreMap from './maplibre_map.js';
+
+// Renderer Three.js pour la Course d'Orientation
+import * as World3D from './world3d.js';
 
 // Initialiser l'application Elm
 const app = Elm.Main.init({
@@ -387,13 +452,19 @@ app.ports.enterGameView.subscribe(({ lat, lon, bearing }) => {
       app.ports.gameMapClicked.send({ lat, lon });
     });
   }
+
+  // Mount Three.js renderer. Elm renders the <div id="world3d-root"> in the same
+  // frame as StartGame, so the div is in the DOM by the time this port subscriber runs.
+  // Any payloads (terrain/roads/...) that arrived BEFORE init() are cached in world3d.js
+  // and replayed on init.
+  World3D.init({ lat, lon, bearing });
 });
 
 // Update game camera (each step/rotation)
 let cameraUpdateCount = 0;
 app.ports.updateGameCamera.subscribe(({ lat, lon, bearing }) => {
   cameraUpdateCount++;
-  // Hide MapLibre when in elm-3d-scene mode (returning from topo overlay)
+  // Hide MapLibre when in 3D mode (returning from topo overlay)
   if (gameWalkActive) {
     const mapEl = document.getElementById('map');
     if (mapEl && mapEl.style.visibility !== 'hidden') {
@@ -407,14 +478,8 @@ app.ports.updateGameCamera.subscribe(({ lat, lon, bearing }) => {
       MapLibreMap.showTopoOverlayMode(false);
     }
   }
-  // Log every 5th camera update to file via backend
-  if (cameraUpdateCount <= 5 || cameraUpdateCount % 10 === 0) {
-    fetch('/api/log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ msg: `JS updateCamera #${cameraUpdateCount} lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} bearing=${bearing.toFixed(0)}` })
-    });
-  }
+  // Update Three.js camera (high-frequency, kept light)
+  World3D.updateCamera({ lat, lon, bearing });
 });
 
 // Exit game, restore normal map
@@ -422,6 +487,35 @@ app.ports.exitGameView.subscribe(() => {
   gameWalkActive = false;
   const mapEl = document.getElementById('map');
   if (mapEl) showMapOverlay(mapEl);
+  World3D.destroy();
+});
+
+// ============================================================
+// Three.js scene data ports (Elm → world3d.js)
+// ============================================================
+app.ports.world3dSetTerrain.subscribe((grid) => {
+  console.log('[Elm→JS] world3dSetTerrain', grid.rows, 'x', grid.cols);
+  World3D.setTerrain(grid);
+});
+
+app.ports.world3dSetRoads.subscribe((roads) => {
+  console.log('[Elm→JS] world3dSetRoads', roads.length);
+  World3D.setRoads(roads);
+});
+
+app.ports.world3dSetVegetation.subscribe((zones) => {
+  console.log('[Elm→JS] world3dSetVegetation', zones.length);
+  World3D.setVegetation(zones);
+});
+
+app.ports.world3dSetBuildings.subscribe((buildings) => {
+  console.log('[Elm→JS] world3dSetBuildings', buildings.length);
+  World3D.setBuildings(buildings);
+});
+
+app.ports.world3dSetControlPoints.subscribe((cps) => {
+  console.log('[Elm→JS] world3dSetControlPoints', cps.length);
+  World3D.setControlPoints(cps);
 });
 
 // ============================================================

@@ -18,13 +18,11 @@ import Html.Events
 import Json.Decode
 import Ports
 import Dict exposing (Dict)
-import Scene3d.Material as Material
 import Task
 import Types exposing (..)
 import View.Form as Form
 import View.Game as Game
 import View.Preview as Preview
-import View.World3D as World3D
 
 
 
@@ -53,33 +51,6 @@ init _ =
         , Api.listSavedRoutes SavedRoutesLoaded
         ]
     )
-
-
-
--- HELPERS
-
-
-{-| Recompute cached 3D entities after position or scene data changes.
-Only call this when playerPosition, roads, vegetation, buildings, elevationGrid, or controlPoints change.
-Do NOT call on playerBearing changes (drag) — that's the whole point of caching.
--}
-withEntities : GameState -> GameState
-withEntities gs =
-    { gs | cachedEntities = World3D.computeEntities gs }
-
-
-
-{-| Load all terrain textures at game start. -}
-loadTextures : Cmd Msg
-loadTextures =
-    Cmd.batch
-        [ Material.load "/textures/grass.png" |> Task.attempt (TextureLoaded "grass")
-        , Material.load "/textures/dirt.png" |> Task.attempt (TextureLoaded "dirt")
-        , Material.load "/textures/gravel.png" |> Task.attempt (TextureLoaded "gravel")
-        , Material.load "/textures/asphalt.png" |> Task.attempt (TextureLoaded "asphalt")
-        , Material.load "/textures/forest.png" |> Task.attempt (TextureLoaded "forest")
-        , Material.load "/textures/vineyard.png" |> Task.attempt (TextureLoaded "vineyard")
-        ]
 
 
 
@@ -1163,18 +1134,37 @@ update msg model =
                                 )
                                 gs.controlPoints
                     in
-                    ( { model | appMode = Orienteering (withEntities newGs) }
+                    ( { model | appMode = Orienteering newGs }
                     , Cmd.batch
                         [ Ports.enterGameView
                             { lat = startPos.lat
                             , lon = startPos.lon
                             , bearing = gs.playerBearing
                             }
-                        , Api.fetchIgnRoads startPos 0.01 RoadsFetched
-                        , Api.fetchIgnVegetation startPos 0.005 VegetationFetched
-                        , Api.fetchIgnBuildings startPos 0.005 IgnBuildingsFetched
-                        , Api.fetchElevationGrid startPos 800 40 ElevationGridFetched
-                        , loadTextures
+                          -- Margins must keep the IGN bboxes inside the DEM grid otherwise
+                          -- out-of-grid points end up at minAlt (enfouis). Smaller values
+                          -- here than the first attempt: better perf, raycaster scales with
+                          -- triangle count.
+                          --
+                          -- Margin 0.014° at lat 46° → bbox 3.1km lat × 2.16km lon.
+                          -- DEM 3500m square → ±1750m, covers with margin both directions.
+                          -- Resolution 140 → cell ~25m (= résolution native RGE ALTI IGN).
+                          -- Réduit l'écart bilinéaire/triangulé qui faisait flotter ou enterrer les routes.
+                        , Api.fetchIgnRoads startPos 0.014 RoadsFetched
+                        , Api.fetchIgnVegetation startPos 0.014 VegetationFetched
+                        , Api.fetchIgnBuildings startPos 0.014 IgnBuildingsFetched
+                        , Api.fetchElevationGrid startPos 3500 140 ElevationGridFetched
+                        , Ports.world3dSetControlPoints
+                            (List.map
+                                (\cp ->
+                                    { lat = cp.position.lat
+                                    , lon = cp.position.lon
+                                    , label = cp.label
+                                    , found = cp.found
+                                    }
+                                )
+                                gs.controlPoints
+                            )
                         , logCmd ("START pos=" ++ String.fromFloat startPos.lat ++ "," ++ String.fromFloat startPos.lon)
                         ]
                     )
@@ -1305,8 +1295,15 @@ update msg model =
                                 , foundFlash = finished || (nextIdx > gs.currentPointIndex)
                             }
                     in
-                    ( { model | appMode = Orienteering (withEntities newGs), pending = False }
-                    , Api.fetchIgnRoads endPos 0.005 RoadsFetched
+                    ( { model | appMode = Orienteering newGs, pending = False }
+                    , Cmd.batch
+                        [ Api.fetchIgnRoads endPos 0.005 RoadsFetched
+                        , if nextIdx > gs.currentPointIndex then
+                            cpPortCmd updatedCps
+
+                          else
+                            Cmd.none
+                        ]
                     )
 
                 ( _, Err httpError ) ->
@@ -1385,8 +1382,12 @@ update msg model =
                                 , foundFlash = justFound
                             }
                     in
-                    ( { model | appMode = Orienteering (withEntities newGs) }
-                    , Cmd.none
+                    ( { model | appMode = Orienteering newGs }
+                    , if justFound then
+                        cpPortCmd updatedCps
+
+                      else
+                        Cmd.none
                     )
 
                 _ ->
@@ -1573,10 +1574,11 @@ update msg model =
                             else
                                 gs.playerPosition
                     in
-                    ( { model | appMode = Orienteering (withEntities { gs | roads = roads, playerPosition = finalPos }) }
+                    ( { model | appMode = Orienteering { gs | roads = roads, playerPosition = finalPos } }
                     , Cmd.batch
                         [ logCmd ("ROADS " ++ String.fromInt (List.length roads) ++ "r " ++ String.fromInt segCount ++ "s snap=" ++ String.fromInt (round snapDist) ++ "m natures=" ++ String.join "," (List.take 5 (List.map .nature roads)))
                         , Ports.updateGameCamera { lat = finalPos.lat, lon = finalPos.lon, bearing = gs.playerBearing }
+                        , Ports.world3dSetRoads roads
                         ]
                     )
 
@@ -1589,8 +1591,11 @@ update msg model =
         VegetationFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok zones ) ->
-                    ( { model | appMode = Orienteering (withEntities { gs | vegetation = zones }) }
-                    , logCmd ("VEGETATION " ++ String.fromInt (List.length zones) ++ " zones")
+                    ( { model | appMode = Orienteering { gs | vegetation = zones } }
+                    , Cmd.batch
+                        [ logCmd ("VEGETATION " ++ String.fromInt (List.length zones) ++ " zones")
+                        , Ports.world3dSetVegetation zones
+                        ]
                     )
 
                 ( _, Err err ) ->
@@ -1602,8 +1607,11 @@ update msg model =
         IgnBuildingsFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok blds ) ->
-                    ( { model | appMode = Orienteering (withEntities { gs | ign_buildings = blds }) }
-                    , logCmd ("BUILDINGS " ++ String.fromInt (List.length blds) ++ " buildings")
+                    ( { model | appMode = Orienteering { gs | ign_buildings = blds } }
+                    , Cmd.batch
+                        [ logCmd ("BUILDINGS " ++ String.fromInt (List.length blds) ++ " buildings")
+                        , Ports.world3dSetBuildings blds
+                        ]
                     )
 
                 ( _, Err err ) ->
@@ -1615,8 +1623,11 @@ update msg model =
         ElevationGridFetched result ->
             case ( model.appMode, result ) of
                 ( Orienteering gs, Ok grid ) ->
-                    ( { model | appMode = Orienteering (withEntities { gs | elevationGrid = Just grid }) }
-                    , logCmd ("ELEVATION " ++ String.fromInt grid.rows ++ "x" ++ String.fromInt grid.cols ++ " alt=" ++ String.fromInt (round grid.minAlt) ++ "-" ++ String.fromInt (round grid.maxAlt) ++ "m")
+                    ( { model | appMode = Orienteering { gs | elevationGrid = Just grid } }
+                    , Cmd.batch
+                        [ logCmd ("ELEVATION " ++ String.fromInt grid.rows ++ "x" ++ String.fromInt grid.cols ++ " alt=" ++ String.fromInt (round grid.minAlt) ++ "-" ++ String.fromInt (round grid.maxAlt) ++ "m")
+                        , Ports.world3dSetTerrain grid
+                        ]
                     )
 
                 ( _, Err err ) ->
@@ -1631,38 +1642,6 @@ update msg model =
                     ( { model | appMode = Orienteering { gs | buildings = buildings } }
                     , Cmd.none
                     )
-
-                _ ->
-                    ( model, Cmd.none )
-
-        TextureLoaded name result ->
-            case model.appMode of
-                Orienteering gs ->
-                    case result of
-                        Ok texture ->
-                            let
-                                tex =
-                                    gs.textures
-
-                                newTex =
-                                    case name of
-                                        "grass" -> { tex | grass = Just texture }
-                                        "dirt" -> { tex | dirt = Just texture }
-                                        "gravel" -> { tex | gravel = Just texture }
-                                        "asphalt" -> { tex | asphalt = Just texture }
-                                        "forest" -> { tex | forest = Just texture }
-                                        "vineyard" -> { tex | vineyard = Just texture }
-                                        _ -> tex
-
-                                newGs =
-                                    { gs | textures = newTex }
-                            in
-                            ( { model | appMode = Orienteering (withEntities newGs) }
-                            , Cmd.none
-                            )
-
-                        Err _ ->
-                            ( model, Cmd.none )
 
                 _ ->
                     ( model, Cmd.none )
@@ -1751,9 +1730,13 @@ update msg model =
                                 }
                             -- No reload on FWD — data covers 1km+ around start point
                             reloadCmds =
-                                []
+                                if nextIdx > gs.currentPointIndex then
+                                    [ cpPortCmd updatedCps ]
+
+                                else
+                                    []
                         in
-                        ( { model | appMode = Orienteering (withEntities newGs) }
+                        ( { model | appMode = Orienteering newGs }
                         , Cmd.batch
                             ([ Ports.updateGameCamera
                                 { lat = nextPos.lat
@@ -1920,6 +1903,23 @@ logCmd msg =
     Api.sendLog msg (\_ -> NoOp)
 
 
+{-| Push the current control point list to the Three.js renderer
+(positions + found state). Use after any CP found update. -}
+cpPortCmd : List ControlPoint -> Cmd Msg
+cpPortCmd cps =
+    Ports.world3dSetControlPoints
+        (List.map
+            (\cp ->
+                { lat = cp.position.lat
+                , lon = cp.position.lon
+                , label = cp.label
+                , found = cp.found
+                }
+            )
+            cps
+        )
+
+
 
 -- VIEW
 
@@ -1929,9 +1929,13 @@ view model =
     case model.appMode of
         Orienteering gs ->
             div [ class "app-container game-mode" ]
-                [ if gs.gameStatus == GameRunning && not gs.showTopoOverlay then
+                [ if gs.gameStatus == GameRunning then
+                    -- Le div reste mounted en permanence pendant le jeu (même quand la
+                    -- topo overlay s'ouvre) pour préserver le canvas Three.js. On masque
+                    -- via display:none au lieu de l'enlever du DOM.
                     div
-                        [ style "position" "fixed"
+                        [ Html.Attributes.id "world3d-root"
+                        , style "position" "fixed"
                         , style "top" "0"
                         , style "left" "0"
                         , style "width" "100vw"
@@ -1939,9 +1943,15 @@ view model =
                         , style "z-index" "2"
                         , style "overflow" "hidden"
                         , style "cursor" "pointer"
+                        , style "display"
+                            (if gs.showTopoOverlay then
+                                "none"
+
+                             else
+                                "block"
+                            )
                         ]
-                        [ World3D.view gs 1600 900
-                        ]
+                        []
 
                   else
                     text ""

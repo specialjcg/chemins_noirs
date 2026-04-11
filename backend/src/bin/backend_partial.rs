@@ -196,7 +196,7 @@ async fn ign_roads_handler(
     // IGN WFS endpoint for BD TOPO road segments
     // BBOX format for WFS 2.0: min_lat,min_lon,max_lat,max_lon,CRS
     let url = format!(
-        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3:troncon_de_route&BBOX={},{},{},{},EPSG:4326&OUTPUTFORMAT=application/json&COUNT=500",
+        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3:troncon_de_route&BBOX={},{},{},{},EPSG:4326&OUTPUTFORMAT=application/json&COUNT=5000",
         min_lon, min_lat, max_lon, max_lat
     );
 
@@ -285,7 +285,7 @@ async fn fetch_ign_polygons(
     nature_field: &str,
 ) -> Result<Vec<serde_json::Value>, (StatusCode, String)> {
     let url = format!(
-        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES={}&BBOX={},{},{},{},EPSG:4326&OUTPUTFORMAT=application/json&COUNT=500",
+        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES={}&BBOX={},{},{},{},EPSG:4326&OUTPUTFORMAT=application/json&COUNT=5000",
         type_name, min_lon, min_lat, max_lon, max_lat
     );
 
@@ -388,8 +388,12 @@ async fn ign_buildings_handler(
     let min_lon = req["min_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "min_lon required".into()))?;
     let max_lon = req["max_lon"].as_f64().ok_or((StatusCode::BAD_REQUEST, "max_lon required".into()))?;
 
+    // COUNT raised from 500 to 5000 — for large bboxes (~3km × 2km) covering entire
+    // hamlets, 500 was below the actual building count, causing nearest buildings to
+    // be silently dropped and the player to appear "in a field" when actually in a
+    // hamlet street.
     let url = format!(
-        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3:batiment&BBOX={},{},{},{},EPSG:4326&OUTPUTFORMAT=application/json&COUNT=500",
+        "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3:batiment&BBOX={},{},{},{},EPSG:4326&OUTPUTFORMAT=application/json&COUNT=5000",
         min_lon, min_lat, max_lon, max_lat
     );
 

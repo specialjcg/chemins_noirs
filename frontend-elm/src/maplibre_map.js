@@ -1544,6 +1544,60 @@ let controlPointMarkers = [];
 let moveAnimationId = null;
 let gameTimerInterval = null;
 
+/**
+ * Create a visible player marker on the main map.
+ * Called when entering game view. The marker is a red arrow pointing in the player's bearing.
+ */
+export function createPlayerMarker(lat, lon, bearing) {
+  if (!mapInstance) return;
+  // Remove any previous instance
+  if (playerMarker) {
+    playerMarker.remove();
+    playerMarker = null;
+  }
+
+  const el = document.createElement('div');
+  el.className = 'player-marker';
+  el.style.cssText = `
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #ff3b30;
+    border: 3px solid #ffffff;
+    box-shadow: 0 0 0 2px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.6);
+    position: relative;
+  `;
+  // Inner direction triangle (points "up" before bearing rotation)
+  const arrow = document.createElement('div');
+  arrow.style.cssText = `
+    position: absolute;
+    top: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-bottom: 12px solid #ff3b30;
+    filter: drop-shadow(0 0 1px white);
+  `;
+  el.appendChild(arrow);
+
+  playerMarker = new maplibregl.Marker({ element: el, rotationAlignment: 'map' })
+    .setLngLat([lon, lat])
+    .setRotation(bearing || 0)
+    .addTo(mapInstance);
+
+  console.log('[maplibre] player marker created at', lat, lon);
+}
+
+/** Update the player marker position + bearing. Called every camera tick. */
+export function updatePlayerMarker(lat, lon, bearing) {
+  if (!playerMarker) return;
+  playerMarker.setLngLat([lon, lat]);
+  if (typeof bearing === 'number') playerMarker.setRotation(bearing);
+}
+
 export function enterFirstPersonMode(lat, lon, bearing) {
   if (!mapInstance || !currentRoute || currentRoute.length < 2) {
     console.warn('[game] No route to simulate');
@@ -1922,7 +1976,7 @@ export function showTopoOverlayMode(show) {
         el.firstChild.textContent = i === 0 ? 'D' : i.toString();
       }
     });
-    // Hide player marker (no GPS in CO!)
+    // Hide player marker on topo (CO purist rule: no GPS).
     if (playerMarker) playerMarker.getElement().style.display = 'none';
   } else {
     // Back to hybrid 3D walking view (satellite + roads visible)
@@ -1938,8 +1992,8 @@ export function showTopoOverlayMode(show) {
     mapInstance.touchZoomRotate.disable();
     // Hide balise markers again (no cheating!)
     waypointMarkers.forEach(m => m.getElement().style.display = 'none');
-    // Hide player marker (Elm renders the player in 3D)
-    if (playerMarker) playerMarker.getElement().style.display = 'none';
+    // Player marker stays visible if it exists (the Three.js view also shows position
+    // but the topo marker is the source of truth for orientation against the map).
   }
 }
 

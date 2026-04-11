@@ -1,11 +1,11 @@
 port module Ports exposing (..)
 
-{-| Module de ports pour la communication Elm <-> JavaScript (MapLibre).
+{-| Module de ports pour la communication Elm <-> JavaScript (MapLibre + Three.js).
 Approche fonctionnelle pure : les ports sont des effets controles.
 -}
 
 import Json.Encode as Encode
-import Types exposing (Coordinate, RouteBounds)
+import Types exposing (Coordinate, ElevationGrid, IgnBuilding, RouteBounds, StyledRoad, VegetationZone)
 
 
 -- PORTS OUT (Elm -> JavaScript) — MapLibre map
@@ -92,6 +92,27 @@ port updateGameCamera : { lat : Float, lon : Float, bearing : Float } -> Cmd msg
 
 
 port exitGameView : () -> Cmd msg
+
+
+
+-- Three.js renderer ports (Elm -> JS)
+-- Note : init / camera / destroy passent par enterGameView / updateGameCamera / exitGameView ci-dessus
+-- (le subscriber main.js route vers Three.js + MapLibre simultanément).
+
+
+port world3dSetTerrain : ElevationGrid -> Cmd msg
+
+
+port world3dSetRoads : List StyledRoad -> Cmd msg
+
+
+port world3dSetVegetation : List VegetationZone -> Cmd msg
+
+
+port world3dSetBuildings : List IgnBuilding -> Cmd msg
+
+
+port world3dSetControlPoints : List { lat : Float, lon : Float, label : String, found : Bool } -> Cmd msg
 
 
 
