@@ -416,6 +416,12 @@ function ensureMap() {
   const poiControl = createPoiControl();
   mapInstance.addControl(poiControl, 'top-right');
 
+  // Add fullscreen toggle control
+  mapInstance.addControl(createFullscreenControl(), 'top-right');
+
+  // Add lodgings search control
+  mapInstance.addControl(createLodgingsControl(), 'top-right');
+
   // Add map style switcher (topo / satellite / hybrid)
   const styleControl = createStyleSwitcherControl();
   mapInstance.addControl(styleControl, 'bottom-left');
@@ -772,6 +778,77 @@ function createPoiControl() {
 function clearPoiMarkers() {
   poiMarkers.forEach(m => m.remove());
   poiMarkers = [];
+}
+
+function createFullscreenControl() {
+  class FullscreenCtrl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      this._button = document.createElement('button');
+      this._button.textContent = '⛶';
+      this._button.title = 'Plein écran';
+      this._button.onclick = () => this.toggle();
+      this._container.appendChild(this._button);
+
+      // Échap pour quitter le plein écran
+      this._escHandler = (e) => {
+        if (e.key === 'Escape' && this._active) this.toggle();
+      };
+      document.addEventListener('keydown', this._escHandler);
+      this._active = false;
+      return this._container;
+    }
+    toggle() {
+      const mapEl = document.getElementById('map');
+      if (!mapEl) return;
+      this._active = mapEl.classList.toggle('map-fullscreen');
+      this._button.textContent = this._active ? '✕' : '⛶';
+      this._button.title = this._active ? 'Quitter le plein écran' : 'Plein écran';
+      setTimeout(() => { mapInstance?.resize(); }, 50);
+    }
+    onRemove() {
+      document.removeEventListener('keydown', this._escHandler);
+      this._container.parentNode?.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+  return new FullscreenCtrl();
+}
+
+function createLodgingsControl() {
+  class LodgingsCtrl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      this._button = document.createElement('button');
+      this._button.textContent = '🏠';
+      this._button.title = 'Chercher gîtes le long du tracé';
+      this._button.onclick = () => this.search();
+      this._container.appendChild(this._button);
+      return this._container;
+    }
+    search() {
+      const previewBtn = document.querySelector('.btn-lodgings');
+      if (previewBtn) {
+        previewBtn.click();
+        this._button.textContent = '⏳';
+        this._button.disabled = true;
+        setTimeout(() => { this._button.textContent = '🏠'; this._button.disabled = false; }, 5000);
+      } else {
+        // Pas de route chargée
+        this._button.textContent = '❌';
+        setTimeout(() => { this._button.textContent = '🏠'; }, 2000);
+      }
+    }
+    onRemove() {
+      this._container.parentNode?.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+  return new LodgingsCtrl();
 }
 
 export function initMap() {
