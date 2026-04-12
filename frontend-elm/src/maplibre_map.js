@@ -22,7 +22,6 @@ let lastTerrainZoomAdjust = 0; // Smoothed zoom offset for terrain avoidance
 let waypointMarkers = []; // Markers for multi-point route waypoints
 let currentMapStyle = 'topo'; // 'topo' | 'satellite' | 'hybrid'
 let kmMarkers = []; // Kilometer markers along route
-let lodgingMarkers = []; // Lodging markers along route
 let poiMarkers = []; // POI markers on map
 let poisVisible = false; // POI toggle state
 let lastPoiBbox = null; // Last fetched POI bbox to avoid re-fetching
@@ -419,8 +418,8 @@ function ensureMap() {
   // Add fullscreen toggle control
   mapInstance.addControl(createFullscreenControl(), 'top-right');
 
-  // Add lodgings search control
-  mapInstance.addControl(createLodgingsControl(), 'top-right');
+  // Add boucles Baronnies control
+  mapInstance.addControl(createBouclesControl(), 'top-right');
 
   // Add map style switcher (topo / satellite / hybrid)
   const styleControl = createStyleSwitcherControl();
@@ -817,30 +816,30 @@ function createFullscreenControl() {
   return new FullscreenCtrl();
 }
 
-function createLodgingsControl() {
-  class LodgingsCtrl {
+function createBouclesControl() {
+  class BouclesCtrl {
     onAdd(map) {
       this._map = map;
       this._container = document.createElement('div');
       this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
       this._button = document.createElement('button');
-      this._button.textContent = '🏠';
-      this._button.title = 'Chercher gîtes le long du tracé';
-      this._button.onclick = () => this.search();
+      this._button.textContent = '🥾';
+      this._button.title = '7 boucles Baronnies en étoile';
+      this._button.onclick = () => this.toggle();
       this._container.appendChild(this._button);
+      this._active = false;
       return this._container;
     }
-    search() {
-      const previewBtn = document.querySelector('.btn-lodgings');
-      if (previewBtn) {
-        previewBtn.click();
-        this._button.textContent = '⏳';
-        this._button.disabled = true;
-        setTimeout(() => { this._button.textContent = '🏠'; this._button.disabled = false; }, 5000);
+    toggle() {
+      this._active = !this._active;
+      if (this._active) {
+        this._button.style.backgroundColor = '#4dab7b';
+        this._button.style.color = 'white';
+        loadBouclesBaronnies();
       } else {
-        // Pas de route chargée
-        this._button.textContent = '❌';
-        setTimeout(() => { this._button.textContent = '🏠'; }, 2000);
+        this._button.style.backgroundColor = '';
+        this._button.style.color = '';
+        clearBouclesBaronnies();
       }
     }
     onRemove() {
@@ -848,7 +847,104 @@ function createLodgingsControl() {
       this._map = undefined;
     }
   }
-  return new LodgingsCtrl();
+  return new BouclesCtrl();
+}
+
+let bouclesLayers = [];
+let bouclesMarkers = [];
+
+async function loadBouclesBaronnies() {
+  try {
+    const resp = await fetch('/boucles-baronnies/manifest.json');
+    const manifest = await resp.json();
+
+    const colors = ['#e63946', '#457b9d', '#2a9d8f', '#e9c46a', '#f4a261', '#264653', '#a855f7'];
+
+    for (let i = 0; i < manifest.length; i++) {
+      const boucle = manifest[i];
+      const gpxResp = await fetch(`/boucles-baronnies/${boucle.file}`);
+      const gpxText = await gpxResp.text();
+
+      // Parse GPX to GeoJSON
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(gpxText, 'text/xml');
+      const trkpts = doc.querySelectorAll('trkpt');
+      const coordinates = [];
+      for (const pt of trkpts) {
+        coordinates.push([parseFloat(pt.getAttribute('lon')), parseFloat(pt.getAttribute('lat'))]);
+      }
+
+      const sourceId = `boucle-${i}`;
+      const layerId = `boucle-line-${i}`;
+
+      if (mapInstance.getSource(sourceId)) {
+        mapInstance.removeLayer(layerId);
+        mapInstance.removeSource(sourceId);
+      }
+
+      mapInstance.addSource(sourceId, {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates }
+        }
+      });
+
+      mapInstance.addLayer({
+        id: layerId,
+        type: 'line',
+        source: sourceId,
+        paint: {
+          'line-color': colors[i % colors.length],
+          'line-width': 3,
+          'line-opacity': 0.85
+        }
+      });
+
+      bouclesLayers.push({ sourceId, layerId });
+
+      // Parking marker
+      const el = document.createElement('div');
+      el.className = 'boucle-marker';
+      el.textContent = `J${i + 1}`;
+      el.style.backgroundColor = colors[i % colors.length];
+
+      const popup = new maplibregl.Popup({ offset: 25, maxWidth: '280px' }).setHTML(
+        `<div class="boucle-popup">` +
+        `<strong>${boucle.name}</strong><br/>` +
+        `${boucle.km} km · +${boucle.dplus}m<br/>` +
+        `🅿️ ${boucle.parking}<br/>` +
+        `<em>${boucle.desc}</em></div>`
+      );
+
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([boucle.lon, boucle.lat])
+        .setPopup(popup)
+        .addTo(mapInstance);
+
+      bouclesMarkers.push(marker);
+    }
+
+    // Fit map to all boucles
+    const allCoords = manifest.map(b => [b.lon, b.lat]);
+    const bounds = new maplibregl.LngLatBounds(allCoords[0], allCoords[0]);
+    allCoords.forEach(c => bounds.extend(c));
+    mapInstance.fitBounds(bounds, { padding: 80, duration: 1000 });
+
+    console.log(`[maplibre] Loaded ${manifest.length} boucles Baronnies`);
+  } catch (err) {
+    console.error('[maplibre] Failed to load boucles:', err);
+  }
+}
+
+function clearBouclesBaronnies() {
+  for (const { sourceId, layerId } of bouclesLayers) {
+    if (mapInstance.getLayer(layerId)) mapInstance.removeLayer(layerId);
+    if (mapInstance.getSource(sourceId)) mapInstance.removeSource(sourceId);
+  }
+  bouclesLayers = [];
+  bouclesMarkers.forEach(m => m.remove());
+  bouclesMarkers = [];
 }
 
 export function initMap() {
@@ -2290,86 +2386,6 @@ export function hideAllCPs() {
     revealedCpMarker.remove();
     revealedCpMarker = null;
   }
-}
-
-export function displayLodgingMarkers(lodgings) {
-  // Remove existing lodging markers
-  lodgingMarkers.forEach(m => m.remove());
-  lodgingMarkers = [];
-
-  if (!mapInstance || !lodgings || lodgings.length === 0) return;
-
-  const KIND_ICONS = {
-    guest_house: '🏠', hostel: '🛏️', alpine_hut: '⛺', wilderness_hut: '🏚️',
-    chalet: '🏡', hotel: '🏨', apartment: '🏢',
-  };
-  const KIND_LABELS = {
-    guest_house: 'Gîte / CH', hostel: 'Auberge', alpine_hut: 'Refuge',
-    wilderness_hut: 'Cabane', chalet: 'Chalet', hotel: 'Hôtel', apartment: 'Appartement',
-  };
-
-  for (const l of lodgings) {
-    const icon = KIND_ICONS[l.kind] || '🏠';
-    const label = KIND_LABELS[l.kind] || l.kind;
-
-    const el = document.createElement('div');
-    el.className = 'lodging-marker';
-    el.textContent = icon;
-    el.title = l.name;
-
-    // Popup HTML
-    let popupHtml = `<div class="lodging-popup">`;
-    popupHtml += `<strong>${l.name}</strong><br/>`;
-    popupHtml += `<span class="lodging-kind">${label}</span>`;
-    popupHtml += ` · <span class="lodging-dist">km ${l.along_route_km.toFixed(1)}</span>`;
-    popupHtml += ` · <span class="lodging-perp">${Math.round(l.perpendicular_dist_m)}m du tracé</span>`;
-    if (l.capacity) popupHtml += `<br/>📍 ${l.capacity} places`;
-    if (l.phone) popupHtml += `<br/>📞 <a href="tel:${l.phone}">${l.phone}</a>`;
-    if (l.website) popupHtml += `<br/>🔗 <a href="${l.website}" target="_blank" rel="noopener">${new URL(l.website).hostname}</a>`;
-    if (l.email) popupHtml += `<br/>✉️ <a href="mailto:${l.email}">${l.email}</a>`;
-    if (l.address) popupHtml += `<br/>📍 ${l.address}`;
-    popupHtml += `</div>`;
-
-    const popup = new maplibregl.Popup({ offset: 25, maxWidth: '300px' }).setHTML(popupHtml);
-
-    const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
-      .setLngLat([l.lon, l.lat])
-      .setPopup(popup)
-      .addTo(mapInstance);
-
-    lodgingMarkers.push(marker);
-  }
-
-  console.log(`[maplibre] Placed ${lodgingMarkers.length} lodging markers`);
-}
-
-export function displayStagesPanel(data) {
-  // Remove existing panel
-  const existing = document.getElementById('stages-panel');
-  if (existing) existing.remove();
-
-  if (!data || !data.stages || data.stages.length === 0) return;
-
-  const panel = document.createElement('div');
-  panel.id = 'stages-panel';
-
-  const avgKm = data.avg_km_per_day ? data.avg_km_per_day.toFixed(1) : '?';
-  let html = `<h3>Plan d'étapes (${data.num_stages} jours · ${avgKm} km/j moy.)</h3>`;
-  html += `<table><thead><tr><th>Jour</th><th>km</th><th>Gîte</th><th>Score</th><th>📞</th></tr></thead><tbody>`;
-
-  for (const s of data.stages) {
-    const name = s.lodging ? s.lodging.name : '(arrivée)';
-    const score = s.lodging_score ? `⭐${Math.round(s.lodging_score)}` : '-';
-    const phone = s.lodging && s.lodging.phone
-      ? `<a href="tel:${s.lodging.phone}" title="${s.lodging.phone}">☎</a>`
-      : '';
-    html += `<tr><td>J${s.day}</td><td>${s.distance_km.toFixed(1)}</td><td>${name}</td><td>${score}</td><td>${phone}</td></tr>`;
-  }
-
-  html += `</tbody></table>`;
-  html += `<button class="stages-close-btn" onclick="this.parentElement.remove()">Fermer</button>`;
-  panel.innerHTML = html;
-  document.body.appendChild(panel);
 }
 
 export function updateGameControlPoints(points) {

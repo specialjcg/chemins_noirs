@@ -1,0 +1,72 @@
+[
+  {
+    "file": "j1-buis-gorges-cols.gpx",
+    "name": "J1 — Buis — Gorges et Cols",
+    "desc": "Boucle depuis Buis-les-Baronnies. Gorges calcaires, rocher St-Julien, 3 cols. Balisage PR jaune.",
+    "km": 18.8,
+    "dplus": 825,
+    "parking": "Allée des Platanes, Buis-les-Baronnies",
+    "lat": 44.275238,
+    "lon": 5.274063
+  },
+  {
+    "file": "j2-sainte-jalle-linceuil.gpx",
+    "name": "J2 — Sainte-Jalle — Crêtes du Linceuil",
+    "desc": "Boucle depuis Sainte-Jalle. Vue 360° Ventoux + Baronnies, cols, bergerie. Balisage PR.",
+    "km": 18.2,
+    "dplus": 760,
+    "parking": "Parking mairie, Sainte-Jalle",
+    "lat": 44.345051,
+    "lon": 5.283401
+  },
+  {
+    "file": "j3-villeperdrix-eygues.gpx",
+    "name": "J3 — Villeperdrix — Vallée de l'Eygues",
+    "desc": "Boucle depuis Villeperdrix. Gorges sauvages Eygues, village perché, mont Angèle. Balisage GRP.",
+    "km": 23.9,
+    "dplus": 1673,
+    "parking": "Parking village, Villeperdrix",
+    "lat": 44.422673,
+    "lon": 5.272449
+  },
+  {
+    "file": "j4-remuzat-vautours.gpx",
+    "name": "J4 — Rémuzat — Vautours et Rocher du Caire",
+    "desc": "Boucle depuis Rémuzat. Falaises des vautours fauves, Rocher du Caire, belvédère. Balisage PR + GRP.",
+    "km": 19.3,
+    "dplus": 1224,
+    "parking": "Parking centre, Rémuzat",
+    "lat": 44.442588,
+    "lon": 5.34681
+  },
+  {
+    "file": "j5-rosans-cols.gpx",
+    "name": "J5 — Rosans — Village médiéval et cols",
+    "desc": "Boucle depuis Rosans. Village fortifié médiéval, cols sauvages, panoramas. Balisage GRP.",
+    "km": 20.2,
+    "dplus": 721,
+    "parking": "Parking place, Rosans",
+    "lat": 44.384066,
+    "lon": 5.43157
+  },
+  {
+    "file": "j6-vergol-aulan.gpx",
+    "name": "J6 — Vergol — Château d'Aulan et Montbrun",
+    "desc": "Boucle depuis Vergol/Montbrun-les-Bains. Château d'Aulan, thermes, lavandes. Balisage GRP.",
+    "km": 24.3,
+    "dplus": 1027,
+    "parking": "Parking Vergol ou Montbrun-les-Bains",
+    "lat": 44.247778,
+    "lon": 5.400295
+  },
+  {
+    "file": "j7-plaisians-lavandes.gpx",
+    "name": "J7 — Plaisians — Lavandes et Mont Ventoux",
+    "desc": "Boucle depuis Plaisians. Champs de lavande, vue Mont Ventoux, cols. Balisage PR.",
+    "km": 23.2,
+    "dplus": 1141,
+    "parking": "Parking village, Plaisians",
+    "lat": 44.19945,
+    "lon": 5.336437
+  }
+]

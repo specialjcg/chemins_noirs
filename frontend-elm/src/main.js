@@ -92,9 +92,8 @@ window._elmApp = app;
 app.ports.initMap.subscribe(() => {
   console.log('[Elm→JS] initMap');
   MapLibreMap.initMap();
-  // Fullscreen + Lodgings buttons are now MapLibre IControl instances
-  // created inside maplibre_map.js initMap() → addControl(). No more
-  // installFullscreenButton/installLodgingsButton needed here.
+  // Fullscreen + Boucles buttons are MapLibre IControl instances
+  // created inside maplibre_map.js initMap() → addControl().
 });
 
 // Mettre à jour la route affichée
@@ -542,20 +541,5 @@ document.addEventListener('mousemove', (e) => {
   }
 });
 
-// ============================================================
-// LODGINGS ALONG ROUTE
-// ============================================================
-app.ports.displayLodgingMarkers.subscribe((data) => {
-  console.log('[Elm→JS] displayLodgingMarkers', data.count, 'lodgings');
-  MapLibreMap.displayLodgingMarkers(data.lodgings || []);
-});
-
-// ============================================================
-// STAGES PLANNER
-// ============================================================
-app.ports.displayStagesPanel.subscribe((data) => {
-  console.log('[Elm→JS] displayStagesPanel', data.num_stages, 'stages');
-  MapLibreMap.displayStagesPanel(data);
-});
 
 console.log('✅ Elm application initialized with MapLibre ports');

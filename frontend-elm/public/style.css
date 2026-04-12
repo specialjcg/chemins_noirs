@@ -872,38 +872,6 @@ small {
   transform: translateY(0);
 }
 
-/* Bouton gîtes — sous le bouton plein écran sur la carte */
-#map-lodgings-btn {
-  position: absolute;
-  top: 60px;
-  right: 12px;
-  z-index: 10;
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(12, 16, 13, 0.92);
-  color: #ffd180;
-  border: 1px solid #c97a3a;
-  border-radius: 6px;
-  font-size: 20px;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-  transition: background 0.15s, transform 0.1s;
-  user-select: none;
-}
-
-#map-lodgings-btn:hover {
-  background: rgba(40, 30, 10, 0.95);
-  transform: translateY(-1px);
-}
-
-#map-lodgings-btn:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-
 #three3dContainer {
   position: relative;
   background: #000;
@@ -2258,76 +2226,32 @@ small {
   border-color: #ff4444;
 }
 
-/* Lodging markers on map */
-.lodging-marker {
-  width: 32px;
-  height: 32px;
+/* Boucle markers on map */
+.boucle-marker {
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 22px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 2px solid #c97a3a;
+  font-size: 12px;
+  font-weight: bold;
+  font-family: 'Courier New', monospace;
+  color: white;
   border-radius: 50%;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  transition: transform 0.15s;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  border: 2px solid white;
 }
 
-.lodging-marker:hover {
-  transform: scale(1.2);
-}
-
-.lodging-popup {
+.boucle-popup {
   font-family: 'Courier New', monospace;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.5;
   color: #1a1a14;
 }
 
-.lodging-popup strong {
+.boucle-popup strong {
   font-size: 14px;
-  color: #333;
-}
-
-.lodging-popup a {
-  color: #c97a3a;
-  text-decoration: none;
-}
-
-.lodging-popup a:hover {
-  text-decoration: underline;
-}
-
-.lodging-kind {
-  color: #666;
-  font-style: italic;
-}
-
-.lodging-dist {
-  color: #2e7d32;
-  font-weight: bold;
-}
-
-.btn-lodgings {
-  background: var(--surface-elevated, #1a1e1b);
-  border: 1px solid #c97a3a;
-  color: #c97a3a;
-  padding: 8px 16px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-family: var(--font-mono, 'Courier New', monospace);
-  font-size: 14px;
-  transition: background 0.15s;
-}
-
-.btn-lodgings:hover {
-  background: rgba(201, 122, 58, 0.15);
-}
-
-.btn-lodgings:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* Speed controls */
@@ -2365,71 +2289,4 @@ small {
   color: #4caf50 !important;
 }
 
-/* ─── Stages Panel ─── */
-#stages-panel {
-  position: fixed;
-  top: 80px;
-  left: 20px;
-  z-index: 10000;
-  background: var(--bg-card, #182019);
-  border: 1px solid var(--accent-brass, #c9a84c);
-  border-radius: 8px;
-  padding: 16px;
-  max-width: 520px;
-  max-height: 80vh;
-  overflow-y: auto;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-  color: var(--text-primary, #e4ddd0);
-  font-family: var(--font-body, sans-serif);
-}
-#stages-panel h3 {
-  margin: 0 0 12px 0;
-  font-family: var(--font-display, serif);
-  color: var(--accent-brass, #c9a84c);
-  font-size: 1.1rem;
-}
-#stages-panel table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
-}
-#stages-panel th,
-#stages-panel td {
-  padding: 5px 8px;
-  text-align: left;
-  border-bottom: 1px solid rgba(201,168,76,0.15);
-}
-#stages-panel th {
-  color: var(--accent-brass, #c9a84c);
-  font-weight: 600;
-}
-#stages-panel td a {
-  color: var(--accent-forest-light, #7a9e6e);
-  text-decoration: none;
-}
-.stages-close-btn {
-  margin-top: 12px;
-  padding: 6px 16px;
-  background: transparent;
-  border: 1px solid var(--accent-brass, #c9a84c);
-  color: var(--accent-brass, #c9a84c);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.stages-close-btn:hover {
-  background: var(--accent-brass-dim, rgba(201,168,76,0.12));
-}
-.btn-stages {
-  background: transparent;
-  border: 1px solid var(--accent-forest, #5a7a4e);
-  color: var(--accent-forest-light, #7a9e6e);
-  border-radius: 4px;
-  padding: 6px 12px;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.btn-stages:hover {
-  background: rgba(90,122,78,0.15);
-}
 

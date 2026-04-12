@@ -4,7 +4,6 @@ port module Ports exposing (..)
 Approche fonctionnelle pure : les ports sont des effets controles.
 -}
 
-import Json.Decode
 import Json.Encode as Encode
 import Types exposing (Coordinate, ElevationGrid, IgnBuilding, RouteBounds, StyledRoad, VegetationZone)
 
@@ -168,7 +167,3 @@ port pixelToLatLonResult : ({ lat : Float, lon : Float } -> msg) -> Sub msg
 port gameDragReceived : (Float -> msg) -> Sub msg
 
 
-port displayLodgingMarkers : Json.Decode.Value -> Cmd msg
-
-
-port displayStagesPanel : Json.Decode.Value -> Cmd msg
