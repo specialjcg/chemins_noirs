@@ -22,6 +22,7 @@ let lastTerrainZoomAdjust = 0; // Smoothed zoom offset for terrain avoidance
 let waypointMarkers = []; // Markers for multi-point route waypoints
 let currentMapStyle = 'topo'; // 'topo' | 'satellite' | 'hybrid'
 let kmMarkers = []; // Kilometer markers along route
+let lodgingMarkers = []; // Lodging markers along route
 let poiMarkers = []; // POI markers on map
 let poisVisible = false; // POI toggle state
 let lastPoiBbox = null; // Last fetched POI bbox to avoid re-fetching
@@ -2212,6 +2213,57 @@ export function hideAllCPs() {
     revealedCpMarker.remove();
     revealedCpMarker = null;
   }
+}
+
+export function displayLodgingMarkers(lodgings) {
+  // Remove existing lodging markers
+  lodgingMarkers.forEach(m => m.remove());
+  lodgingMarkers = [];
+
+  if (!mapInstance || !lodgings || lodgings.length === 0) return;
+
+  const KIND_ICONS = {
+    guest_house: '🏠', hostel: '🛏️', alpine_hut: '⛺', wilderness_hut: '🏚️',
+    chalet: '🏡', hotel: '🏨', apartment: '🏢',
+  };
+  const KIND_LABELS = {
+    guest_house: 'Gîte / CH', hostel: 'Auberge', alpine_hut: 'Refuge',
+    wilderness_hut: 'Cabane', chalet: 'Chalet', hotel: 'Hôtel', apartment: 'Appartement',
+  };
+
+  for (const l of lodgings) {
+    const icon = KIND_ICONS[l.kind] || '🏠';
+    const label = KIND_LABELS[l.kind] || l.kind;
+
+    const el = document.createElement('div');
+    el.className = 'lodging-marker';
+    el.textContent = icon;
+    el.title = l.name;
+
+    // Popup HTML
+    let popupHtml = `<div class="lodging-popup">`;
+    popupHtml += `<strong>${l.name}</strong><br/>`;
+    popupHtml += `<span class="lodging-kind">${label}</span>`;
+    popupHtml += ` · <span class="lodging-dist">km ${l.along_route_km.toFixed(1)}</span>`;
+    popupHtml += ` · <span class="lodging-perp">${Math.round(l.perpendicular_dist_m)}m du tracé</span>`;
+    if (l.capacity) popupHtml += `<br/>📍 ${l.capacity} places`;
+    if (l.phone) popupHtml += `<br/>📞 <a href="tel:${l.phone}">${l.phone}</a>`;
+    if (l.website) popupHtml += `<br/>🔗 <a href="${l.website}" target="_blank" rel="noopener">${new URL(l.website).hostname}</a>`;
+    if (l.email) popupHtml += `<br/>✉️ <a href="mailto:${l.email}">${l.email}</a>`;
+    if (l.address) popupHtml += `<br/>📍 ${l.address}`;
+    popupHtml += `</div>`;
+
+    const popup = new maplibregl.Popup({ offset: 25, maxWidth: '300px' }).setHTML(popupHtml);
+
+    const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+      .setLngLat([l.lon, l.lat])
+      .setPopup(popup)
+      .addTo(mapInstance);
+
+    lodgingMarkers.push(marker);
+  }
+
+  console.log(`[maplibre] Placed ${lodgingMarkers.length} lodging markers`);
 }
 
 export function updateGameControlPoints(points) {

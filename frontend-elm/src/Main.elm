@@ -15,7 +15,9 @@ import GameEngine
 import Html exposing (..)
 import Html.Attributes exposing (class, style)
 import Html.Events
+import Http
 import Json.Decode
+import Json.Encode
 import Ports
 import Dict exposing (Dict)
 import Task
@@ -1864,6 +1866,48 @@ update msg model =
 
                 _ ->
                     ( model, Cmd.none )
+
+        FindLodgings ->
+            case model.lastResponse of
+                Just route ->
+                    if List.length route.path >= 2 then
+                        let
+                            coordsJson =
+                                Json.Encode.list
+                                    (\c -> Json.Encode.object [ ( "lat", Json.Encode.float c.lat ), ( "lon", Json.Encode.float c.lon ) ])
+                                    route.path
+
+                            body =
+                                Json.Encode.object
+                                    [ ( "coords", coordsJson )
+                                    , ( "buffer_m", Json.Encode.float 2500 )
+                                    ]
+                        in
+                        ( { model | lodgingsLoading = True }
+                        , Http.post
+                            { url = "/api/lodgings-along-route"
+                            , body = Http.jsonBody body
+                            , expect = Http.expectJson LodgingsFetched Json.Decode.value
+                            }
+                        )
+
+                    else
+                        ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        LodgingsFetched result ->
+            case result of
+                Ok json ->
+                    ( { model | lodgingsLoading = False, lodgingsResult = Just json }
+                    , Ports.displayLodgingMarkers json
+                    )
+
+                Err _ ->
+                    ( { model | lodgingsLoading = False }
+                    , Cmd.none
+                    )
 
 
 

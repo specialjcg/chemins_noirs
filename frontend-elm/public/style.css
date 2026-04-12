@@ -2226,6 +2226,78 @@ small {
   border-color: #ff4444;
 }
 
+/* Lodging markers on map */
+.lodging-marker {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 2px solid #c97a3a;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s;
+}
+
+.lodging-marker:hover {
+  transform: scale(1.2);
+}
+
+.lodging-popup {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #1a1a14;
+}
+
+.lodging-popup strong {
+  font-size: 14px;
+  color: #333;
+}
+
+.lodging-popup a {
+  color: #c97a3a;
+  text-decoration: none;
+}
+
+.lodging-popup a:hover {
+  text-decoration: underline;
+}
+
+.lodging-kind {
+  color: #666;
+  font-style: italic;
+}
+
+.lodging-dist {
+  color: #2e7d32;
+  font-weight: bold;
+}
+
+.btn-lodgings {
+  background: var(--surface-elevated, #1a1e1b);
+  border: 1px solid #c97a3a;
+  color: #c97a3a;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--font-mono, 'Courier New', monospace);
+  font-size: 14px;
+  transition: background 0.15s;
+}
+
+.btn-lodgings:hover {
+  background: rgba(201, 122, 58, 0.15);
+}
+
+.btn-lodgings:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Speed controls */
 .game-speed-controls {
   display: flex;

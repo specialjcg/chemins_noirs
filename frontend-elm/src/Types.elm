@@ -40,6 +40,8 @@ type alias Model =
     , freehandDrawing : Maybe FreehandDrawingState
     , freehandEnabled : Bool
     , appMode : AppMode
+    , lodgingsLoading : Bool
+    , lodgingsResult : Maybe Json.Decode.Value
     }
 
 
@@ -128,6 +130,8 @@ initialModel =
     , freehandDrawing = Nothing
     , freehandEnabled = False
     , appMode = Planning
+    , lodgingsLoading = False
+    , lodgingsResult = Nothing
     }
 
 
@@ -227,6 +231,8 @@ type Msg
     | GameMouseDown Float
     | GameMouseUp Float
     | GameMapClicked { lat : Float, lon : Float }
+    | FindLodgings
+    | LodgingsFetched (Result Http.Error Json.Decode.Value)
 
 
 

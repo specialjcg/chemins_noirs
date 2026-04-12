@@ -45,6 +45,11 @@ viewActionButtons =
             , onClick CopyShareLink
             ]
             [ text "Copier le lien" ]
+        , button
+            [ class "btn-lodgings"
+            , onClick FindLodgings
+            ]
+            [ text "🏠 Gîtes" ]
         ]
 
 

@@ -579,4 +579,12 @@ document.addEventListener('mousemove', (e) => {
   }
 });
 
+// ============================================================
+// LODGINGS ALONG ROUTE
+// ============================================================
+app.ports.displayLodgingMarkers.subscribe((data) => {
+  console.log('[Elm→JS] displayLodgingMarkers', data.count, 'lodgings');
+  MapLibreMap.displayLodgingMarkers(data.lodgings || []);
+});
+
 console.log('✅ Elm application initialized with MapLibre ports');
