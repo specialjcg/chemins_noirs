@@ -398,8 +398,26 @@ function applyTerrain(grid) {
   const centerLon = grid.originLon + (widthM / 2) / (111000 * Math.cos(grid.originLat * Math.PI / 180));
   const centerXZ = latLonToXZ(centerLat, centerLon);
 
+  // Initialize per-vertex color buffer with the base "pâture" tone + per-vertex jitter
+  // (small RGB noise + slight altitude-driven brown tint at high ground).
+  // recolorTerrainFromVegetation() will later overwrite forest/vine vertices.
+  const vertexCount = grid.rows * grid.cols;
+  const colors = new Float32Array(vertexCount * 3);
+  for (let j = 0; j < grid.rows; j++) {
+    const demRow = planeJToDemRow(j, grid.rows);
+    for (let i = 0; i < grid.cols; i++) {
+      const idx = j * grid.cols + i;
+      const alt = gridArray[demRow][i];
+      const c = jitterColor(TERRAIN_BASE_COLOR, i, j, alt, grid.minAlt, grid.maxAlt);
+      colors[idx * 3]     = c.r;
+      colors[idx * 3 + 1] = c.g;
+      colors[idx * 3 + 2] = c.b;
+    }
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
   const material = new THREE.MeshLambertMaterial({
-    color: 0x6ea83a,
+    vertexColors: true,
     flatShading: false,
   });
   terrainMesh = new THREE.Mesh(geometry, material);
@@ -410,11 +428,126 @@ function applyTerrain(grid) {
   // Recompute camera Y now that we have terrain altitudes
   updateCameraTransform();
 
+  // If vegetation already arrived, recolor immediately. Otherwise applyVegetation
+  // will trigger the recolor when it runs.
+  if (lastVegetationPayload) {
+    recolorTerrainFromVegetation(lastVegetationPayload);
+  }
+
   // Re-place existing roads/veg/buildings/CPs since their altitudes depend on terrain
   // (they were rendered before terrain arrived → at sea level)
   // We don't store the raw payloads, so caller must re-send. In practice the order is:
   //   StartGame → enterGameView → fetch terrain (arrives first usually) → fetch roads/veg/buildings
   // Even if order is reversed, the next setRoads/etc call rebuilds at correct altitude.
+}
+
+// Default terrain color = pâture/prairie du Beaujolais — vrai vert d'herbe.
+// Plus naturaliste que la convention "yellow open land" des cartes CO papier.
+const TERRAIN_BASE_COLOR = { r: 0.42, g: 0.62, b: 0.28 };  // medium grass green
+
+// Per-category terrain colors. Naturalistes (orientés photo aérienne) plutôt que CO papier.
+const TERRAIN_VEG_COLORS = {
+  feuillus: { r: 0.16, g: 0.42, b: 0.16 }, // forêt dense feuillus — vert foncé
+  conif:    { r: 0.10, g: 0.34, b: 0.16 }, // conifères — encore plus foncé
+  mixte:    { r: 0.13, g: 0.38, b: 0.16 },
+  bois:     { r: 0.20, g: 0.48, b: 0.20 }, // petits bois — vert moyen
+  vigne:    { r: 0.55, g: 0.52, b: 0.28 }, // vignes — tan-vert (signature Beaujolais)
+  verger:   { r: 0.38, g: 0.58, b: 0.24 }, // verger
+  lande:    { r: 0.52, g: 0.58, b: 0.32 }, // lande
+  default:  { r: 0.32, g: 0.55, b: 0.22 }, // végétation inconnue
+};
+
+// Deterministic small noise based on integer (i, j) — kills the flat aplat look.
+// Returns a value in [-1, 1].
+function vertexNoise(i, j) {
+  const n = Math.sin(i * 12.9898 + j * 78.233) * 43758.5453;
+  return (n - Math.floor(n)) * 2 - 1;
+}
+
+// Apply natural variation to a base color: small RGB jitter + slight altitude tint.
+// alt=246 → no shift, alt=534 → up to +0.05 brown shift (drier high ground).
+function jitterColor(base, i, j, alt, minAlt, maxAlt) {
+  const altT = (maxAlt - minAlt > 0) ? (alt - minAlt) / (maxAlt - minAlt) : 0;
+  const noise = vertexNoise(i, j) * 0.04;            // ±0.04 RGB jitter
+  const altShift = altT * 0.05;                       // +0.05 toward brown at top
+  return {
+    r: Math.min(1, Math.max(0, base.r + noise + altShift * 0.6)),
+    g: Math.min(1, Math.max(0, base.g + noise * 0.8 - altShift * 0.2)),
+    b: Math.min(1, Math.max(0, base.b + noise * 0.6 - altShift * 0.4)),
+  };
+}
+
+function pickTerrainVegColor(nature) {
+  if (nature.includes('feuillus')) return TERRAIN_VEG_COLORS.feuillus;
+  if (nature.includes('conif')) return TERRAIN_VEG_COLORS.conif;
+  if (nature.includes('mixte')) return TERRAIN_VEG_COLORS.mixte;
+  if (nature.includes('Bois')) return TERRAIN_VEG_COLORS.bois;
+  if (nature.includes('Vigne')) return TERRAIN_VEG_COLORS.vigne;
+  if (nature.includes('Verger')) return TERRAIN_VEG_COLORS.verger;
+  if (nature.includes('Lande')) return TERRAIN_VEG_COLORS.lande;
+  return TERRAIN_VEG_COLORS.default;
+}
+
+/**
+ * Repaint each terrain vertex according to which vegetation polygon (if any) contains it.
+ * Vertices outside any zone keep TERRAIN_BASE_COLOR.
+ *
+ * Performance: 19600 vertices × ~5-20 zones (after bbox filter) × ~15 PIP edges = ~3M ops.
+ * Typical wall-clock under 100ms. The bbox spatial filter avoids the naive 9M ops.
+ */
+function recolorTerrainFromVegetation(zones) {
+  if (!terrainMesh || !terrain) return;
+  const t0 = performance.now();
+
+  // Precompute each zone's lat/lon bbox (used as a cheap pre-filter before PIP).
+  const zonesWithBbox = zones.map((z) => {
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    for (const c of z.coords) {
+      if (c.lat < minLat) minLat = c.lat;
+      if (c.lat > maxLat) maxLat = c.lat;
+      if (c.lon < minLon) minLon = c.lon;
+      if (c.lon > maxLon) maxLon = c.lon;
+    }
+    return { zone: z, minLat, maxLat, minLon, maxLon, color: pickTerrainVegColor(z.nature) };
+  });
+
+  // Iterate every grid vertex and assign a color
+  const cellLat = (terrain.cellSizeM) / (EARTH_RADIUS * Math.PI / 180);
+  const cellLon = (terrain.cellSizeM) / (EARTH_RADIUS * Math.PI / 180 * Math.cos(terrain.originLat * Math.PI / 180));
+  const colorAttr = terrainMesh.geometry.attributes.color;
+  let recolored = 0;
+  for (let j = 0; j < terrain.rows; j++) {
+    // PlaneGeometry j=0 is north (post-rotation), DEM row 0 is south.
+    // Vertex (j, i) lat = originLat + (rows-1-j) * cellLat
+    const demRow = planeJToDemRow(j, terrain.rows);
+    const vertexLat = terrain.originLat + demRow * cellLat;
+    for (let i = 0; i < terrain.cols; i++) {
+      const vertexLon = terrain.originLon + i * cellLon;
+      const vertexIdx = j * terrain.cols + i;
+
+      // Find the FIRST containing zone (priority by iteration order).
+      // Forest takes priority over scattered features because zones are typically
+      // disjoint anyway. If two zones overlap, the first wins.
+      let found = null;
+      for (const zb of zonesWithBbox) {
+        if (vertexLat < zb.minLat || vertexLat > zb.maxLat) continue;
+        if (vertexLon < zb.minLon || vertexLon > zb.maxLon) continue;
+        if (pointInPolygon(vertexLat, vertexLon, zb.zone.coords)) {
+          found = zb;
+          break;
+        }
+      }
+      if (found) {
+        const alt = terrain.gridArray[demRow][i];
+        const c = jitterColor(found.color, i, j, alt, terrain.minAlt, terrain.maxAlt);
+        colorAttr.setXYZ(vertexIdx, c.r, c.g, c.b);
+        recolored++;
+      }
+    }
+  }
+  colorAttr.needsUpdate = true;
+  const dt = performance.now() - t0;
+  console.log(`[world3d] terrain recolor: ${recolored}/${terrain.rows * terrain.cols} vertices in ${dt.toFixed(0)}ms`);
 }
 
 // ============================================================
@@ -458,88 +591,233 @@ function applyRoads(roads) {
   roadGroup = new THREE.Group();
   roadGroup.name = 'roads';
 
-  // DIAGNOSTIC: find the road point nearest to the player. The player START is a
-  // waypoint that should be ON a road (snapped). If the nearest road is >10m away,
-  // there's a real projection bug.
+  // Build the road quad strips
   const playerXZ = latLonToXZ(player.lat, player.lon);
   let nearestRoadDist = Infinity;
   let nearestRoadNature = '';
 
-  // Pathology counters: detect roads that produce huge altitude jumps (which render
-  // as near-vertical "wall" quads) and roads that have points falling outside the
-  // DEM grid (sampleAltTri returns minAlt → fake plateau at 246m).
-  const minAlt = terrain ? terrain.minAlt : 0;
-  let pathologicalRoads = 0;
-  let totalMinAltPoints = 0;
-  let maxJumpEverM = 0;
-  const worstRoads = []; // top-3 worst by max-jump
-
   for (const road of roads) {
     if (road.coords.length < 2) continue;
-
-    // Sample altitudes for all points on this road and look for jumps + minAlt fallbacks
-    let prevY = null;
-    let maxJumpThis = 0;
-    let minAltCount = 0;
     for (const c of road.coords) {
       const xz = latLonToXZ(c.lat, c.lon);
-      const dx = xz.x - playerXZ.x;
-      const dz = xz.z - playerXZ.z;
-      const d = Math.hypot(dx, dz);
+      const d = Math.hypot(xz.x - playerXZ.x, xz.z - playerXZ.z);
       if (d < nearestRoadDist) {
         nearestRoadDist = d;
         nearestRoadNature = road.nature;
       }
-      const y = sampleAltTri(c.lat, c.lon);
-      if (Math.abs(y - minAlt) < 0.001) minAltCount++;
-      if (prevY !== null) {
-        const jump = Math.abs(y - prevY);
-        if (jump > maxJumpThis) maxJumpThis = jump;
-      }
-      prevY = y;
     }
-    if (maxJumpThis > 5) pathologicalRoads++;
-    if (maxJumpThis > maxJumpEverM) maxJumpEverM = maxJumpThis;
-    totalMinAltPoints += minAltCount;
-    if (worstRoads.length < 3 || maxJumpThis > worstRoads[worstRoads.length - 1].jump) {
-      worstRoads.push({
-        jump: maxJumpThis,
-        minAltCount,
-        nature: road.nature,
-        firstCoord: road.coords[0],
-        lastCoord: road.coords[road.coords.length - 1],
-        nbCoords: road.coords.length,
-      });
-      worstRoads.sort((a, b) => b.jump - a.jump);
-      if (worstRoads.length > 3) worstRoads.pop();
-    }
-
     const style = pickRoadStyle(road.nature);
     const mesh = buildRoadMesh(road.coords, style);
     if (mesh) roadGroup.add(mesh);
   }
 
+  // Add rounded junction discs at every endpoint cluster — fills the gap when
+  // two roads meet, and rounds out the abrupt square ends of isolated road tips.
+  const junctionMeshes = buildJunctionDiscs(roads);
+  for (const m of junctionMeshes) roadGroup.add(m);
+
   console.log('[world3d] DIAG nearest road to player:',
               nearestRoadDist.toFixed(1), 'm,', 'nature:', nearestRoadNature,
               '— player(lat,lon)=', player.lat.toFixed(6), ',', player.lon.toFixed(6),
               '— sceneXZ=', playerXZ.x.toFixed(1), ',', playerXZ.z.toFixed(1));
-  console.log('[world3d] DIAG roads pathology:',
-              pathologicalRoads, '/', roads.length, 'roads have >5m altitude jumps. ',
-              'Total minAlt fallback points:', totalMinAltPoints,
-              '. Max altitude jump anywhere:', maxJumpEverM.toFixed(1), 'm.');
-  for (let i = 0; i < worstRoads.length; i++) {
-    const r = worstRoads[i];
-    console.log(`[world3d] DIAG worst road #${i + 1}: jump=${r.jump.toFixed(1)}m minAltPts=${r.minAltCount}/${r.nbCoords} nature="${r.nature}" first=(${r.firstCoord.lat.toFixed(5)},${r.firstCoord.lon.toFixed(5)}) last=(${r.lastCoord.lat.toFixed(5)},${r.lastCoord.lon.toFixed(5)})`);
-  }
 
   scene.add(roadGroup);
 }
 
+/**
+ * Generate rounded discs at every road endpoint cluster.
+ *
+ * 1. Collect (x, z) of every road endpoint with its style.
+ * 2. Cluster endpoints whose centers are within MERGE_RADIUS of each other
+ *    (BFS over a spatial hash grid — O(N) total).
+ * 3. For each cluster, place ONE flat disc at the cluster centroid, with
+ *    radius = max halfWidth of any road touching the cluster, color = same.
+ * 4. All discs of the same color are merged into a single BufferGeometry to
+ *    keep draw calls minimal (5 colors → 5 draw calls regardless of road count).
+ *
+ * Runs in <50ms for ~650 roads / ~1300 endpoints.
+ */
+function buildJunctionDiscs(roads) {
+  const t0 = performance.now();
+  const MERGE_RADIUS = 4.0;
+  const MERGE_RADIUS_SQ = MERGE_RADIUS * MERGE_RADIUS;
+  const SEGMENTS = 14; // disc tessellation — 14 looks smooth without bloating draw
+
+  // 1. Collect endpoints
+  const endpoints = [];
+  for (const road of roads) {
+    if (road.coords.length < 2) continue;
+    const style = pickRoadStyle(road.nature);
+    const first = road.coords[0];
+    const last = road.coords[road.coords.length - 1];
+    const f = latLonToXZ(first.lat, first.lon);
+    const l = latLonToXZ(last.lat, last.lon);
+    endpoints.push({ x: f.x, z: f.z, lat: first.lat, lon: first.lon, halfWidth: style.halfWidth, color: style.color, cluster: -1 });
+    endpoints.push({ x: l.x, z: l.z, lat: last.lat, lon: last.lon, halfWidth: style.halfWidth, color: style.color, cluster: -1 });
+  }
+
+  // 2. Spatial hash grid for cluster BFS
+  const grid = new Map();
+  const cellOf = (x, z) => `${Math.floor(x / MERGE_RADIUS)},${Math.floor(z / MERGE_RADIUS)}`;
+  for (let i = 0; i < endpoints.length; i++) {
+    const k = cellOf(endpoints[i].x, endpoints[i].z);
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(i);
+  }
+
+  // BFS clustering
+  const clusters = [];
+  for (let i = 0; i < endpoints.length; i++) {
+    if (endpoints[i].cluster !== -1) continue;
+    const id = clusters.length;
+    const members = [];
+    const queue = [i];
+    endpoints[i].cluster = id;
+    while (queue.length > 0) {
+      const idx = queue.pop();
+      members.push(idx);
+      const cx = Math.floor(endpoints[idx].x / MERGE_RADIUS);
+      const cz = Math.floor(endpoints[idx].z / MERGE_RADIUS);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const cell = grid.get(`${cx + dx},${cz + dz}`);
+          if (!cell) continue;
+          for (const j of cell) {
+            if (endpoints[j].cluster !== -1) continue;
+            const ddx = endpoints[j].x - endpoints[idx].x;
+            const ddz = endpoints[j].z - endpoints[idx].z;
+            if (ddx * ddx + ddz * ddz <= MERGE_RADIUS_SQ) {
+              endpoints[j].cluster = id;
+              queue.push(j);
+            }
+          }
+        }
+      }
+    }
+    clusters.push(members);
+  }
+
+  // 3. Per cluster: centroid, max halfWidth, dominant color (largest radius wins)
+  // 4. Group by color → merged BufferGeometry per color
+  const positionsByColor = new Map();
+  const indicesByColor = new Map();
+  const yOffset = 0.18; // a hair above the road quads (yOffset=0.15) so caps sit on top
+
+  for (const cluster of clusters) {
+    let cx = 0, cz = 0;
+    let maxR = 0;
+    let dominantColor = 0;
+    let cLat = 0, cLon = 0;
+    for (const idx of cluster) {
+      const ep = endpoints[idx];
+      cx += ep.x;
+      cz += ep.z;
+      cLat += ep.lat;
+      cLon += ep.lon;
+      if (ep.halfWidth > maxR) {
+        maxR = ep.halfWidth;
+        dominantColor = ep.color;
+      }
+    }
+    cx /= cluster.length;
+    cz /= cluster.length;
+    cLat /= cluster.length;
+    cLon /= cluster.length;
+    const cy = sampleAltTri(cLat, cLon) + yOffset;
+
+    if (!positionsByColor.has(dominantColor)) {
+      positionsByColor.set(dominantColor, []);
+      indicesByColor.set(dominantColor, []);
+    }
+    const pos = positionsByColor.get(dominantColor);
+    const idx = indicesByColor.get(dominantColor);
+
+    // Triangle fan: center vertex + SEGMENTS rim vertices
+    const baseIdx = pos.length / 3;
+    pos.push(cx, cy, cz); // center
+    for (let s = 0; s < SEGMENTS; s++) {
+      const a = (s / SEGMENTS) * Math.PI * 2;
+      pos.push(cx + Math.cos(a) * maxR, cy, cz + Math.sin(a) * maxR);
+    }
+    for (let s = 0; s < SEGMENTS; s++) {
+      const a = baseIdx + 1 + s;
+      const b = baseIdx + 1 + ((s + 1) % SEGMENTS);
+      idx.push(baseIdx, a, b);
+    }
+  }
+
+  // 5. Build one mesh per color
+  const meshes = [];
+  for (const [color, pos] of positionsByColor) {
+    const idx = indicesByColor.get(color);
+    if (pos.length === 0) continue;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geom.setIndex(idx);
+    geom.computeVertexNormals();
+    const mat = new THREE.MeshLambertMaterial({
+      color,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.name = 'road-junctions-' + color.toString(16);
+    meshes.push(mesh);
+  }
+
+  const dt = performance.now() - t0;
+  console.log(`[world3d] road junctions: ${clusters.length} discs in ${meshes.length} meshes (${dt.toFixed(0)}ms)`);
+  return meshes;
+}
+
+/**
+ * Subdivise les segments de route trop longs pour que le quad strip suive
+ * le relief triangulé du terrain. IGN livre des sommets espacés de 10-30m,
+ * mais le terrain a des cellules de 25m → entre deux sommets IGN, la route
+ * peut survoler une bosse. Avec MAX_SEG_LEN_M = 4m, on a ~6 sub-points par
+ * cellule terrain et le quad strip colle de très près au mesh.
+ *
+ * Note : on garde TOUS les sommets IGN d'origine et on ajoute uniquement
+ * des points intermédiaires. Les endpoints (utilisés par buildJunctionDiscs)
+ * restent strictement les premiers/derniers coords.
+ */
+function subdivideRoadCoords(coords, maxSegLenM) {
+  if (coords.length < 2) return coords;
+  const result = [coords[0]];
+  for (let i = 1; i < coords.length; i++) {
+    const a = coords[i - 1];
+    const b = coords[i];
+    const xzA = latLonToXZ(a.lat, a.lon);
+    const xzB = latLonToXZ(b.lat, b.lon);
+    const dist = Math.hypot(xzB.x - xzA.x, xzB.z - xzA.z);
+    if (dist > maxSegLenM) {
+      const n = Math.ceil(dist / maxSegLenM);
+      for (let k = 1; k < n; k++) {
+        const t = k / n;
+        result.push({
+          lat: a.lat + (b.lat - a.lat) * t,
+          lon: a.lon + (b.lon - a.lon) * t,
+        });
+      }
+    }
+    result.push(b);
+  }
+  return result;
+}
+
 /** Build a textured road quad strip following the polyline, draped on terrain. */
 function buildRoadMesh(coords, style) {
+  // Subdivision pour coller au relief : sub-points tous les 4m max.
+  // Chaque sub-point ré-échantillonne l'altitude via sampleAltTri (qui matche
+  // le mesh terrain au flottant près) → la route suit la triangulation au lieu
+  // de tendre une corde rectiligne au-dessus des bosses.
+  const dense = subdivideRoadCoords(coords, 4.0);
+
   // Triangulated sample — matches EXACTLY the rendered terrain mesh (zero mismatch).
   // Pure math, same cost as bilinear, no raycast needed.
-  const pts = coords.map((c) => {
+  const pts = dense.map((c) => {
     const { x, z } = latLonToXZ(c.lat, c.lon);
     const y = sampleAltTri(c.lat, c.lon);
     return { x, y, z };
@@ -651,6 +929,10 @@ function applyVegetation(zones) {
   }
   vegetationGroup = new THREE.Group();
   vegetationGroup.name = 'vegetation';
+
+  // Recolor terrain vertices according to vegetation zones (if terrain mesh exists).
+  // No-op if terrain hasn't arrived yet — applyTerrain will handle it via lastVegetationPayload.
+  recolorTerrainFromVegetation(zones);
 
   // Two rendering paths:
   //   - "vine" zones (Vigne): low green bushes in tighter spacing, no trunk

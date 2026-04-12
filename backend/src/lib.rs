@@ -7,6 +7,7 @@ pub mod error;
 pub mod geo_utils;
 pub mod gpx_export;
 pub mod graph;
+pub mod lodgings;
 pub mod loops;
 pub mod models;
 pub mod partial_graph;

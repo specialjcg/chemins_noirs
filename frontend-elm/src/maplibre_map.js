@@ -856,8 +856,11 @@ export function updateRoute(coords) {
   lastAnimationMode = null;
   terrainSampleWarned = false;
 
-  // Place kilometer markers along the route
-  updateKmMarkers(coords);
+  // Km markers désactivés sur demande utilisateur — encombraient le circuit.
+  // Le code de updateKmMarkers reste disponible si on veut les réactiver via
+  // une option future. On nettoie ici les markers existants au cas où.
+  kmMarkers.forEach(m => m.remove());
+  kmMarkers = [];
 }
 
 export function updateSelectionMarkers(start, end) {
@@ -1496,6 +1499,9 @@ function updateKmMarkers(coords) {
       const el = document.createElement('div');
       el.className = 'km-marker';
       el.textContent = nextKm + 'km';
+      // If topo overlay is currently active (course en cours), don't show new
+      // km markers either — they encombrent le circuit en mode CO.
+      if (topoOverlayActive) el.style.display = 'none';
 
       const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
         .setLngLat([lon, lat])
@@ -1976,6 +1982,9 @@ export function showTopoOverlayMode(show) {
         el.firstChild.textContent = i === 0 ? 'D' : i.toString();
       }
     });
+    // Hide km markers on topo overlay — they clutter the circuit display.
+    // (Useful in planning mode to see route distances, useless in CO mode.)
+    kmMarkers.forEach(m => m.getElement().style.display = 'none');
     // Hide player marker on topo (CO purist rule: no GPS).
     if (playerMarker) playerMarker.getElement().style.display = 'none';
   } else {
@@ -1992,9 +2001,18 @@ export function showTopoOverlayMode(show) {
     mapInstance.touchZoomRotate.disable();
     // Hide balise markers again (no cheating!)
     waypointMarkers.forEach(m => m.getElement().style.display = 'none');
+    // Restore km markers visibility (planning mode shows them)
+    kmMarkers.forEach(m => m.getElement().style.display = '');
     // Player marker stays visible if it exists (the Three.js view also shows position
     // but the topo marker is the source of truth for orientation against the map).
   }
+}
+
+// Force MapLibre to recompute its viewport — used after a CSS-driven size change
+// (ex : toggle plein écran). Sans ça la map garde son ancien viewport.
+export function resizeMap() {
+  if (!mapInstance) return;
+  mapInstance.resize();
 }
 
 // Center map on a coordinate (used for topo overlay centering on player)

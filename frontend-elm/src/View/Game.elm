@@ -13,6 +13,18 @@ view model gs =
         , timer gs.elapsedMs
         , controlPointList gs
         , nextBaliseHint gs
+        , -- Bouton Accueil persistant — visible en mode 3D ET en mode topo overlay,
+          -- z-index ultra haut pour passer au-dessus du canvas MapLibre.
+          if gs.gameStatus == GameRunning then
+            button
+                [ class "game-home-btn"
+                , onClick ExitOrienteeringMode
+                , Html.Attributes.title "Quitter la course et revenir à la planification"
+                ]
+                [ text "🏠 Accueil" ]
+
+          else
+            text ""
         , case gs.gameStatus of
             GameSetup ->
                 div [ class "game-start-overlay" ]

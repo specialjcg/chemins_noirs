@@ -109,6 +109,40 @@ fn pad_bbox(bbox: &BoundingBox) -> BoundingBox {
     }
 }
 
+/// Handler for /api/lodgings-along-route — find OSM tourism accommodations
+/// within a buffer distance of a route polyline. Returns lodgings annotated
+/// with their position along the route (cumulative km from start) and their
+/// perpendicular distance to the closest segment.
+async fn lodgings_along_route_handler(
+    Json(req): Json<backend::lodgings::LodgingsRequest>,
+) -> Result<Json<backend::lodgings::LodgingsResponse>, (StatusCode, String)> {
+    if req.coords.len() < 2 {
+        return Err((StatusCode::BAD_REQUEST, "coords must contain at least 2 points".to_string()));
+    }
+    if req.buffer_m <= 0.0 || req.buffer_m > 20_000.0 {
+        return Err((StatusCode::BAD_REQUEST, "buffer_m must be in (0, 20000]".to_string()));
+    }
+    tracing::info!(
+        "Lodgings request: {} coords, buffer={}m",
+        req.coords.len(),
+        req.buffer_m
+    );
+    match backend::lodgings::find_lodgings_along_route(&req.coords, req.buffer_m).await {
+        Ok(resp) => {
+            tracing::info!(
+                "Lodgings: {} found along {:.1}km route",
+                resp.count,
+                resp.total_route_km
+            );
+            Ok(Json(resp))
+        }
+        Err(e) => {
+            tracing::warn!("Lodgings query failed: {e}");
+            Err((StatusCode::BAD_GATEWAY, e))
+        }
+    }
+}
+
 /// Handler for /api/log - write frontend log to file
 async fn frontend_log_handler(
     Json(req): Json<serde_json::Value>,
@@ -1094,6 +1128,7 @@ async fn main() {
         .route("/api/log", axum::routing::post(frontend_log_handler))
         .route("/api/click_mode", axum::routing::get(click_mode_handler))
         .route("/api/pois", axum::routing::get(pois_handler))
+        .route("/api/lodgings-along-route", axum::routing::post(lodgings_along_route_handler))
         .layer(cors.clone())
         .with_state(config)
         // Saved routes endpoints (PostgreSQL) - separate state

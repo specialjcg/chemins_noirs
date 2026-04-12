@@ -825,6 +825,53 @@ small {
   overflow: hidden;
 }
 
+/* Mode plein écran : la map prend toute la fenêtre. Activé via JS qui ajoute
+   la classe et appelle map.resize() pour que MapLibre s'adapte. */
+#map.map-fullscreen {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  border: none !important;
+  z-index: 9999 !important;
+}
+
+/* Bouton plein écran — coin haut-droit de la map, visible dans les deux états. */
+#map-fullscreen-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 16, 13, 0.92);
+  color: #ffd180;
+  border: 1px solid #ffd180;
+  border-radius: 6px;
+  font-size: 18px;
+  font-family: 'Courier New', monospace;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  transition: background 0.15s, transform 0.1s;
+  user-select: none;
+}
+
+#map-fullscreen-btn:hover {
+  background: rgba(40, 30, 10, 0.95);
+  transform: translateY(-1px);
+}
+
+#map-fullscreen-btn:active {
+  transform: translateY(0);
+}
+
 #three3dContainer {
   position: relative;
   background: #000;
@@ -2021,6 +2068,37 @@ small {
   color: #ff4444;
   font-size: 12px;
   padding: 6px 12px;
+}
+
+/* Bouton Accueil persistant — top-right, visible pendant TOUTE la course
+   (mode 3D et mode topo overlay). z-index très haut pour passer au-dessus
+   du canvas MapLibre lorsque la topo est ouverte. */
+.game-home-btn {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 100001;
+  pointer-events: auto;
+  background: rgba(12, 16, 13, 0.92);
+  color: #ffd180;
+  border: 1px solid #ffd180;
+  border-radius: 6px;
+  padding: 10px 16px;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  transition: background 0.15s, transform 0.1s;
+}
+
+.game-home-btn:hover {
+  background: rgba(40, 30, 10, 0.95);
+  transform: translateY(-1px);
+}
+
+.game-home-btn:active {
+  transform: translateY(0);
 }
 
 /* Player marker */

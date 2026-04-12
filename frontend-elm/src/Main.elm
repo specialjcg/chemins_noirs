@@ -961,6 +961,17 @@ update msg model =
                         , routeMode = MultiPoint
                         , error = Nothing
                     }
+
+                -- Calcule le bbox des points importés et recadre la carte dessus.
+                -- Sans ça, l'utilisateur reste sur la vue précédente (ex : Beaujolais)
+                -- et ne voit pas ses points GPX qui sont parfois à 100+ km de là.
+                centerCmd =
+                    case bboxOfCoords coords of
+                        Just ( sw, ne ) ->
+                            Ports.centerOnMarkers { start = sw, end = ne }
+
+                        Nothing ->
+                            Cmd.none
             in
             if List.length coords >= 2 then
                 let
@@ -970,13 +981,17 @@ update msg model =
                 ( routedModel
                 , Cmd.batch
                     [ Ports.updateWaypointMarkers coords
+                    , centerCmd
                     , routeCmd
                     ]
                 )
 
             else
                 ( newModel
-                , Ports.updateWaypointMarkers coords
+                , Cmd.batch
+                    [ Ports.updateWaypointMarkers coords
+                    , centerCmd
+                    ]
                 )
 
         MapRouteHoverIndex idx ->
@@ -2435,6 +2450,36 @@ centerOnRouteCmd route =
 
         _ ->
             Cmd.none
+
+
+{-| Renvoie le bbox englobant de tous les coords sous forme (SW, NE).
+Nothing si la liste est vide. Utilisé pour recadrer la carte sur un import GPX
+sans dépendre du fait que premier/dernier point soient des extrêmes du tracé.
+-}
+bboxOfCoords : List Coordinate -> Maybe ( Coordinate, Coordinate )
+bboxOfCoords coords =
+    case coords of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            let
+                folded =
+                    List.foldl
+                        (\c acc ->
+                            { minLat = min acc.minLat c.lat
+                            , maxLat = max acc.maxLat c.lat
+                            , minLon = min acc.minLon c.lon
+                            , maxLon = max acc.maxLon c.lon
+                            }
+                        )
+                        { minLat = first.lat, maxLat = first.lat, minLon = first.lon, maxLon = first.lon }
+                        rest
+            in
+            Just
+                ( { lat = folded.minLat, lon = folded.minLon }
+                , { lat = folded.maxLat, lon = folded.maxLon }
+                )
 
 
 applyRoute : Model -> RouteResponse -> Model

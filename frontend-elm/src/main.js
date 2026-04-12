@@ -92,7 +92,47 @@ window._elmApp = app;
 app.ports.initMap.subscribe(() => {
   console.log('[Elm→JS] initMap');
   MapLibreMap.initMap();
+  installFullscreenButton();
 });
+
+/**
+ * Installe un bouton ⛶ dans le coin haut-droit de #map qui toggle la classe
+ * .map-fullscreen pour faire passer la map en plein écran. Pas de port Elm
+ * nécessaire — pure manipulation DOM côté JS.
+ *
+ * Le bouton est créé une seule fois (idempotent).
+ */
+function installFullscreenButton() {
+  const mapEl = document.getElementById('map');
+  if (!mapEl) return;
+  if (document.getElementById('map-fullscreen-btn')) return; // déjà installé
+
+  const btn = document.createElement('button');
+  btn.id = 'map-fullscreen-btn';
+  btn.type = 'button';
+  btn.title = 'Plein écran';
+  btn.textContent = '⛶';
+
+  btn.addEventListener('click', () => {
+    const isFs = mapEl.classList.toggle('map-fullscreen');
+    btn.textContent = isFs ? '⛶✕' : '⛶';
+    btn.title = isFs ? 'Quitter le plein écran' : 'Plein écran';
+    // MapLibre doit être notifié du resize pour recalculer le viewport
+    setTimeout(() => {
+      window.dispatchEvent(new Event('resize'));
+      MapLibreMap.resizeMap && MapLibreMap.resizeMap();
+    }, 50);
+  });
+
+  // Permettre Échap pour sortir du plein écran
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && mapEl.classList.contains('map-fullscreen')) {
+      btn.click();
+    }
+  });
+
+  mapEl.appendChild(btn);
+}
 
 // Mettre à jour la route affichée
 app.ports.updateRoute.subscribe((coords) => {
