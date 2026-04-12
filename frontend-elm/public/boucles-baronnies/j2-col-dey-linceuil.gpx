@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Chemins Noirs — Boucles Visorando Baronnies"
+  xmlns="http://www.topografix.com/GPX/1/1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+<metadata><name>J2 — Le Linceuil depuis le Col d'Ey</name>
+<desc>Boucle Visorando depuis Col d'Ey. Sommet Linceuil, vue 360° Ventoux. ⭐4.4 — 9.13 km, +510m. Suivre balisage PR jaune sur le terrain.</desc></metadata>
+<wpt lat="44.312000" lon="5.268000"><ele>718</ele>
+  <name>🅿️ Départ Col d'Ey</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.308000" lon="5.260000"><ele>780</ele>
+  <name>Montée par la Fournache</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.305000" lon="5.255000"><ele>850</ele>
+  <name>Crête boisée</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.310000" lon="5.253000"><ele>893</ele>
+  <name>Col de Linceuil</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.308000" lon="5.250000"><ele>932</ele>
+  <name>⛰️ Sommet Linceuil — vue 360°</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.312000" lon="5.248000"><ele>918</ele>
+  <name>Col de Saint-Vincent</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.318000" lon="5.255000"><ele>820</ele>
+  <name>Descente versant nord</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.315000" lon="5.262000"><ele>750</ele>
+  <name>Retour par flanc Montlaud</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.312000" lon="5.268000"><ele>718</ele>
+  <name>🅿️ Retour Col d'Ey</name><sym>Flag, Green</sym></wpt>
+<trk><name>J2 — Le Linceuil depuis le Col d'Ey</name>
+  <desc>Boucle Visorando depuis Col d'Ey. Sommet Linceuil, vue 360° Ventoux. ⭐4.4</desc><trkseg>
+    <trkpt lat="44.312000" lon="5.268000"><ele>718.0</ele></trkpt>
+    <trkpt lat="44.308000" lon="5.260000"><ele>780.0</ele></trkpt>
+    <trkpt lat="44.305000" lon="5.255000"><ele>850.0</ele></trkpt>
+    <trkpt lat="44.310000" lon="5.253000"><ele>893.0</ele></trkpt>
+    <trkpt lat="44.308000" lon="5.250000"><ele>932.0</ele></trkpt>
+    <trkpt lat="44.312000" lon="5.248000"><ele>918.0</ele></trkpt>
+    <trkpt lat="44.318000" lon="5.255000"><ele>820.0</ele></trkpt>
+    <trkpt lat="44.315000" lon="5.262000"><ele>750.0</ele></trkpt>
+    <trkpt lat="44.312000" lon="5.268000"><ele>718.0</ele></trkpt>
+  </trkseg></trk></gpx>

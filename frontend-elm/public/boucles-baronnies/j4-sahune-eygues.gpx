@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Chemins Noirs — Boucles Visorando Baronnies"
+  xmlns="http://www.topografix.com/GPX/1/1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+<metadata><name>J4 — Gorges de l'Eygues (Sahune ↔ Villeperdrix)</name>
+<desc>Boucle Visorando depuis Sahune. Gorges Eygues, Villeperdrix, GRP Baronnies. Très belle. — 13.01 km, +674m. Suivre balisage PR jaune sur le terrain.</desc></metadata>
+<wpt lat="44.414014" lon="5.267272"><ele>354</ele>
+  <name>🅿️ Départ Sahune</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.418000" lon="5.270000"><ele>360</ele>
+  <name>Pont Ruisseau de Merderie</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.425000" lon="5.278000"><ele>371</ele>
+  <name>Chemin de Saint-Jean</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.430000" lon="5.275000"><ele>548</ele>
+  <name>Ferme de Laup</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.438000" lon="5.280000"><ele>378</ele>
+  <name>Pont de la Tune</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.440000" lon="5.283000"><ele>470</ele>
+  <name>Plateau herbeux</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.441000" lon="5.285000"><ele>459</ele>
+  <name>Bifurcation</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.442000" lon="5.287000"><ele>469</ele>
+  <name>Villeperdrix</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.435000" lon="5.278000"><ele>502</ele>
+  <name>Chemin des Naysses</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.430000" lon="5.272000"><ele>510</ele>
+  <name>GRP Tour des Baronnies</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.420000" lon="5.268000"><ele>380</ele>
+  <name>Retour vallée Eygues</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.414014" lon="5.267272"><ele>354</ele>
+  <name>🅿️ Retour Sahune</name><sym>Flag, Green</sym></wpt>
+<trk><name>J4 — Gorges de l'Eygues (Sahune ↔ Villeperdrix)</name>
+  <desc>Boucle Visorando depuis Sahune. Gorges Eygues, Villeperdrix, GRP Baronnies. Très belle.</desc><trkseg>
+    <trkpt lat="44.414014" lon="5.267272"><ele>354.0</ele></trkpt>
+    <trkpt lat="44.418000" lon="5.270000"><ele>360.0</ele></trkpt>
+    <trkpt lat="44.425000" lon="5.278000"><ele>371.0</ele></trkpt>
+    <trkpt lat="44.430000" lon="5.275000"><ele>548.0</ele></trkpt>
+    <trkpt lat="44.438000" lon="5.280000"><ele>378.0</ele></trkpt>
+    <trkpt lat="44.440000" lon="5.283000"><ele>470.0</ele></trkpt>
+    <trkpt lat="44.441000" lon="5.285000"><ele>459.0</ele></trkpt>
+    <trkpt lat="44.442000" lon="5.287000"><ele>469.0</ele></trkpt>
+    <trkpt lat="44.435000" lon="5.278000"><ele>502.0</ele></trkpt>
+    <trkpt lat="44.430000" lon="5.272000"><ele>510.0</ele></trkpt>
+    <trkpt lat="44.420000" lon="5.268000"><ele>380.0</ele></trkpt>
+    <trkpt lat="44.414014" lon="5.267272"><ele>354.0</ele></trkpt>
+  </trkseg></trk></gpx>

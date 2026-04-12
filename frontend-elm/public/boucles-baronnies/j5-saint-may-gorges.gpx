@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Chemins Noirs — Boucles Visorando Baronnies"
+  xmlns="http://www.topografix.com/GPX/1/1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+<metadata><name>J5 — Gorges de Saint-May + Abbaye de Bodon</name>
+<desc>Boucle Visorando depuis Saint-May. Cascades, gorges Léoux, vautours, abbaye ruines. — 12.09 km, +528m. Suivre balisage PR jaune sur le terrain.</desc></metadata>
+<wpt lat="44.427890" lon="5.318499"><ele>448</ele>
+  <name>🅿️ Départ Saint-May</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.430000" lon="5.320000"><ele>433</ele>
+  <name>Chemin forestier, rivière Eygues</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.432000" lon="5.325000"><ele>487</ele>
+  <name>🏊 Plage calcaire du Léoux</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.438000" lon="5.332000"><ele>646</ele>
+  <name>Montée gorges</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.440000" lon="5.330000"><ele>739</ele>
+  <name>Gué du Léoux</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.438000" lon="5.335000"><ele>774</ele>
+  <name>Chemin de la Botte</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.432000" lon="5.340000"><ele>822</ele>
+  <name>Direction Abbaye de Bodon</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.428000" lon="5.342000"><ele>816</ele>
+  <name>Sentier crête</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.425000" lon="5.335000"><ele>729</ele>
+  <name>Col de Saint-May</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.430000" lon="5.328000"><ele>702</ele>
+  <name>Sentier forestier</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.432000" lon="5.322000"><ele>624</ele>
+  <name>Descente vers Saint-May</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.427890" lon="5.318499"><ele>448</ele>
+  <name>🅿️ Retour Saint-May</name><sym>Flag, Green</sym></wpt>
+<trk><name>J5 — Gorges de Saint-May + Abbaye de Bodon</name>
+  <desc>Boucle Visorando depuis Saint-May. Cascades, gorges Léoux, vautours, abbaye ruines.</desc><trkseg>
+    <trkpt lat="44.427890" lon="5.318499"><ele>448.0</ele></trkpt>
+    <trkpt lat="44.430000" lon="5.320000"><ele>433.0</ele></trkpt>
+    <trkpt lat="44.432000" lon="5.325000"><ele>487.0</ele></trkpt>
+    <trkpt lat="44.438000" lon="5.332000"><ele>646.0</ele></trkpt>
+    <trkpt lat="44.440000" lon="5.330000"><ele>739.0</ele></trkpt>
+    <trkpt lat="44.438000" lon="5.335000"><ele>774.0</ele></trkpt>
+    <trkpt lat="44.432000" lon="5.340000"><ele>822.0</ele></trkpt>
+    <trkpt lat="44.428000" lon="5.342000"><ele>816.0</ele></trkpt>
+    <trkpt lat="44.425000" lon="5.335000"><ele>729.0</ele></trkpt>
+    <trkpt lat="44.430000" lon="5.328000"><ele>702.0</ele></trkpt>
+    <trkpt lat="44.432000" lon="5.322000"><ele>624.0</ele></trkpt>
+    <trkpt lat="44.427890" lon="5.318499"><ele>448.0</ele></trkpt>
+  </trkseg></trk></gpx>

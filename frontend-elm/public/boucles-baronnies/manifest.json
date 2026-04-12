@@ -1,72 +1,72 @@
 [
   {
     "file": "j1-buis-gorges-cols.gpx",
-    "name": "J1 — Buis — Gorges et Cols",
-    "desc": "Boucle depuis Buis-les-Baronnies. Gorges calcaires, rocher St-Julien, 3 cols. Balisage PR jaune.",
-    "km": 18.8,
-    "dplus": 825,
+    "name": "J1 — Gorges et Cols dans les Baronnies",
+    "desc": "Boucle Visorando depuis Buis. Gorges, 3 cols, panoramas. Balisage PR jaune. ⭐4.4",
+    "km": 15.87,
+    "dplus": 571,
     "parking": "Allée des Platanes, Buis-les-Baronnies",
-    "lat": 44.275238,
-    "lon": 5.274063
+    "lat": 44.277166,
+    "lon": 5.276786
   },
   {
-    "file": "j2-sainte-jalle-linceuil.gpx",
-    "name": "J2 — Sainte-Jalle — Crêtes du Linceuil",
-    "desc": "Boucle depuis Sainte-Jalle. Vue 360° Ventoux + Baronnies, cols, bergerie. Balisage PR.",
-    "km": 18.2,
-    "dplus": 760,
-    "parking": "Parking mairie, Sainte-Jalle",
-    "lat": 44.345051,
-    "lon": 5.283401
+    "file": "j2-col-dey-linceuil.gpx",
+    "name": "J2 — Le Linceuil depuis le Col d'Ey",
+    "desc": "Boucle Visorando depuis Col d'Ey. Sommet Linceuil, vue 360° Ventoux. ⭐4.4",
+    "km": 9.13,
+    "dplus": 510,
+    "parking": "Col d'Ey (D108, entre Sainte-Jalle et Buis)",
+    "lat": 44.312,
+    "lon": 5.268
   },
   {
-    "file": "j3-villeperdrix-eygues.gpx",
-    "name": "J3 — Villeperdrix — Vallée de l'Eygues",
-    "desc": "Boucle depuis Villeperdrix. Gorges sauvages Eygues, village perché, mont Angèle. Balisage GRP.",
-    "km": 23.9,
-    "dplus": 1673,
-    "parking": "Parking village, Villeperdrix",
-    "lat": 44.422673,
-    "lon": 5.272449
+    "file": "j3-rochebrune-6cols.gpx",
+    "name": "J3 — Les 6 Cols à partir de Rochebrune",
+    "desc": "Boucle Visorando depuis Rochebrune. 6 cols enchaînés, bergerie, lavandes.",
+    "km": 15.04,
+    "dplus": 564,
+    "parking": "Parking face à la mairie, Rochebrune",
+    "lat": 44.336286,
+    "lon": 5.244982
   },
   {
-    "file": "j4-remuzat-vautours.gpx",
-    "name": "J4 — Rémuzat — Vautours et Rocher du Caire",
-    "desc": "Boucle depuis Rémuzat. Falaises des vautours fauves, Rocher du Caire, belvédère. Balisage PR + GRP.",
-    "km": 19.3,
-    "dplus": 1224,
-    "parking": "Parking centre, Rémuzat",
-    "lat": 44.442588,
-    "lon": 5.34681
+    "file": "j4-sahune-eygues.gpx",
+    "name": "J4 — Gorges de l'Eygues (Sahune ↔ Villeperdrix)",
+    "desc": "Boucle Visorando depuis Sahune. Gorges Eygues, Villeperdrix, GRP Baronnies. Très belle.",
+    "km": 13.01,
+    "dplus": 674,
+    "parking": "Sahune, parking centre",
+    "lat": 44.414014,
+    "lon": 5.267272
   },
   {
-    "file": "j5-rosans-cols.gpx",
-    "name": "J5 — Rosans — Village médiéval et cols",
-    "desc": "Boucle depuis Rosans. Village fortifié médiéval, cols sauvages, panoramas. Balisage GRP.",
-    "km": 20.2,
-    "dplus": 721,
-    "parking": "Parking place, Rosans",
-    "lat": 44.384066,
-    "lon": 5.43157
+    "file": "j5-saint-may-gorges.gpx",
+    "name": "J5 — Gorges de Saint-May + Abbaye de Bodon",
+    "desc": "Boucle Visorando depuis Saint-May. Cascades, gorges Léoux, vautours, abbaye ruines.",
+    "km": 12.09,
+    "dplus": 528,
+    "parking": "Parking village Saint-May",
+    "lat": 44.42789,
+    "lon": 5.318499
   },
   {
-    "file": "j6-vergol-aulan.gpx",
-    "name": "J6 — Vergol — Château d'Aulan et Montbrun",
-    "desc": "Boucle depuis Vergol/Montbrun-les-Bains. Château d'Aulan, thermes, lavandes. Balisage GRP.",
-    "km": 24.3,
-    "dplus": 1027,
-    "parking": "Parking Vergol ou Montbrun-les-Bains",
-    "lat": 44.247778,
-    "lon": 5.400295
+    "file": "j6-rocher-caire.gpx",
+    "name": "J6 — Plateau Saint-Laurent + Rocher du Caire",
+    "desc": "Boucle Visorando depuis Saint-May. Rocher du Caire (belvédère vautours), crêtes 1033m.",
+    "km": 12.83,
+    "dplus": 613,
+    "parking": "Parking entrée Saint-May",
+    "lat": 44.428068,
+    "lon": 5.318627
   },
   {
-    "file": "j7-plaisians-lavandes.gpx",
-    "name": "J7 — Plaisians — Lavandes et Mont Ventoux",
-    "desc": "Boucle depuis Plaisians. Champs de lavande, vue Mont Ventoux, cols. Balisage PR.",
-    "km": 23.2,
-    "dplus": 1141,
-    "parking": "Parking village, Plaisians",
-    "lat": 44.19945,
-    "lon": 5.336437
+    "file": "j7-sahune-bramard.gpx",
+    "name": "J7 — Rocher du Bramard depuis Sahune",
+    "desc": "Boucle Visorando depuis Sahune. Montée intense, sommet 925m, paysages à couper le souffle.",
+    "km": 10.85,
+    "dplus": 632,
+    "parking": "Parking du stade, Sahune",
+    "lat": 44.418422,
+    "lon": 5.27508
   }
 ]

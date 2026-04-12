@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Chemins Noirs — Boucles Visorando Baronnies"
+  xmlns="http://www.topografix.com/GPX/1/1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+<metadata><name>J7 — Rocher du Bramard depuis Sahune</name>
+<desc>Boucle Visorando depuis Sahune. Montée intense, sommet 925m, paysages à couper le souffle. — 10.85 km, +632m. Suivre balisage PR jaune sur le terrain.</desc></metadata>
+<wpt lat="44.418422" lon="5.275080"><ele>357</ele>
+  <name>🅿️ Départ stade Sahune</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.419000" lon="5.277000"><ele>359</ele>
+  <name>Pont Ruisseau de Merderie</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.420000" lon="5.278000"><ele>373</ele>
+  <name>Carrefour de la boucle</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.422000" lon="5.280000"><ele>383</ele>
+  <name>Début montée marnes</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.428000" lon="5.282000"><ele>568</ele>
+  <name>Arrivée plateau</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.430000" lon="5.275000"><ele>544</ele>
+  <name>Ferme du Laup</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.434000" lon="5.280000"><ele>718</ele>
+  <name>Ruines — Ferme du plus Haut Laup</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.436000" lon="5.283000"><ele>766</ele>
+  <name>Piste à gauche</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.438000" lon="5.285000"><ele>925</ele>
+  <name>⛰️ SOMMET Rocher du Bramard</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.432000" lon="5.278000"><ele>605</ele>
+  <name>Jonction piste — descente</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.425000" lon="5.273000"><ele>483</ele>
+  <name>Ferme du Bramard</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.420000" lon="5.275000"><ele>373</ele>
+  <name>Retour carrefour</name><sym>Flag, Green</sym></wpt>
+<wpt lat="44.418422" lon="5.275080"><ele>357</ele>
+  <name>🅿️ Retour stade Sahune</name><sym>Flag, Green</sym></wpt>
+<trk><name>J7 — Rocher du Bramard depuis Sahune</name>
+  <desc>Boucle Visorando depuis Sahune. Montée intense, sommet 925m, paysages à couper le souffle.</desc><trkseg>
+    <trkpt lat="44.418422" lon="5.275080"><ele>357.0</ele></trkpt>
+    <trkpt lat="44.419000" lon="5.277000"><ele>359.0</ele></trkpt>
+    <trkpt lat="44.420000" lon="5.278000"><ele>373.0</ele></trkpt>
+    <trkpt lat="44.422000" lon="5.280000"><ele>383.0</ele></trkpt>
+    <trkpt lat="44.428000" lon="5.282000"><ele>568.0</ele></trkpt>
+    <trkpt lat="44.430000" lon="5.275000"><ele>544.0</ele></trkpt>
+    <trkpt lat="44.434000" lon="5.280000"><ele>718.0</ele></trkpt>
+    <trkpt lat="44.436000" lon="5.283000"><ele>766.0</ele></trkpt>
+    <trkpt lat="44.438000" lon="5.285000"><ele>925.0</ele></trkpt>
+    <trkpt lat="44.432000" lon="5.278000"><ele>605.0</ele></trkpt>
+    <trkpt lat="44.425000" lon="5.273000"><ele>483.0</ele></trkpt>
+    <trkpt lat="44.420000" lon="5.275000"><ele>373.0</ele></trkpt>
+    <trkpt lat="44.418422" lon="5.275080"><ele>357.0</ele></trkpt>
+  </trkseg></trk></gpx>
