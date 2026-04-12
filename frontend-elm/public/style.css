@@ -872,6 +872,38 @@ small {
   transform: translateY(0);
 }
 
+/* Bouton gîtes — sous le bouton plein écran sur la carte */
+#map-lodgings-btn {
+  position: absolute;
+  top: 60px;
+  right: 12px;
+  z-index: 10;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 16, 13, 0.92);
+  color: #ffd180;
+  border: 1px solid #c97a3a;
+  border-radius: 6px;
+  font-size: 20px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  transition: background 0.15s, transform 0.1s;
+  user-select: none;
+}
+
+#map-lodgings-btn:hover {
+  background: rgba(40, 30, 10, 0.95);
+  transform: translateY(-1px);
+}
+
+#map-lodgings-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 #three3dContainer {
   position: relative;
   background: #000;

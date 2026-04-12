@@ -93,6 +93,7 @@ app.ports.initMap.subscribe(() => {
   console.log('[Elm→JS] initMap');
   MapLibreMap.initMap();
   installFullscreenButton();
+  installLodgingsButton();
 });
 
 /**
@@ -128,6 +129,44 @@ function installFullscreenButton() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && mapEl.classList.contains('map-fullscreen')) {
       btn.click();
+    }
+  });
+
+  mapEl.appendChild(btn);
+}
+
+/**
+ * Bouton 🏠 sur la carte qui déclenche FindLodgings via Elm.
+ * Positionné juste en dessous du bouton plein écran.
+ */
+function installLodgingsButton() {
+  const mapEl = document.getElementById('map');
+  if (!mapEl) return;
+  if (document.getElementById('map-lodgings-btn')) return;
+
+  const btn = document.createElement('button');
+  btn.id = 'map-lodgings-btn';
+  btn.type = 'button';
+  btn.title = 'Chercher gîtes le long du tracé';
+  btn.textContent = '🏠';
+
+  btn.addEventListener('click', () => {
+    // Trigger Elm FindLodgings via the port
+    app.ports.mapClickReceived.send({ lat: 0, lon: 0, action: 'find-lodgings' });
+    // Also trigger directly if we have a simpler path: send a custom event
+    // that Main.elm listens to. But simplest: just call Elm FindLodgings
+    // through a dedicated port.
+    // For now: use a workaround — click the hidden preview button if it exists
+    const previewBtn = document.querySelector('.btn-lodgings');
+    if (previewBtn) {
+      previewBtn.click();
+      btn.textContent = '⏳';
+      btn.disabled = true;
+      setTimeout(() => { btn.textContent = '🏠'; btn.disabled = false; }, 5000);
+    } else {
+      console.warn('[map] No route loaded yet — import a GPX first');
+      btn.textContent = '❌';
+      setTimeout(() => { btn.textContent = '🏠'; }, 2000);
     }
   });
 
