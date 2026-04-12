@@ -169,3 +169,6 @@ port gameDragReceived : (Float -> msg) -> Sub msg
 
 
 port displayLodgingMarkers : Json.Decode.Value -> Cmd msg
+
+
+port displayStagesPanel : Json.Decode.Value -> Cmd msg

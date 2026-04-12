@@ -2266,6 +2266,35 @@ export function displayLodgingMarkers(lodgings) {
   console.log(`[maplibre] Placed ${lodgingMarkers.length} lodging markers`);
 }
 
+export function displayStagesPanel(data) {
+  // Remove existing panel
+  const existing = document.getElementById('stages-panel');
+  if (existing) existing.remove();
+
+  if (!data || !data.stages || data.stages.length === 0) return;
+
+  const panel = document.createElement('div');
+  panel.id = 'stages-panel';
+
+  const avgKm = data.avg_km_per_day ? data.avg_km_per_day.toFixed(1) : '?';
+  let html = `<h3>Plan d'étapes (${data.num_stages} jours · ${avgKm} km/j moy.)</h3>`;
+  html += `<table><thead><tr><th>Jour</th><th>km</th><th>Gîte</th><th>Score</th><th>📞</th></tr></thead><tbody>`;
+
+  for (const s of data.stages) {
+    const name = s.lodging ? s.lodging.name : '(arrivée)';
+    const score = s.lodging_score ? `⭐${Math.round(s.lodging_score)}` : '-';
+    const phone = s.lodging && s.lodging.phone
+      ? `<a href="tel:${s.lodging.phone}" title="${s.lodging.phone}">☎</a>`
+      : '';
+    html += `<tr><td>J${s.day}</td><td>${s.distance_km.toFixed(1)}</td><td>${name}</td><td>${score}</td><td>${phone}</td></tr>`;
+  }
+
+  html += `</tbody></table>`;
+  html += `<button class="stages-close-btn" onclick="this.parentElement.remove()">Fermer</button>`;
+  panel.innerHTML = html;
+  document.body.appendChild(panel);
+}
+
 export function updateGameControlPoints(points) {
   if (!mapInstance) return;
 

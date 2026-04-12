@@ -42,6 +42,8 @@ type alias Model =
     , appMode : AppMode
     , lodgingsLoading : Bool
     , lodgingsResult : Maybe Json.Decode.Value
+    , stagesResult : Maybe Json.Decode.Value
+    , stagesLoading : Bool
     }
 
 
@@ -132,6 +134,8 @@ initialModel =
     , appMode = Planning
     , lodgingsLoading = False
     , lodgingsResult = Nothing
+    , stagesResult = Nothing
+    , stagesLoading = False
     }
 
 
@@ -233,6 +237,8 @@ type Msg
     | GameMapClicked { lat : Float, lon : Float }
     | FindLodgings
     | LodgingsFetched (Result Http.Error Json.Decode.Value)
+    | PlanStages
+    | StagesPlanFetched (Result Http.Error Json.Decode.Value)
 
 
 

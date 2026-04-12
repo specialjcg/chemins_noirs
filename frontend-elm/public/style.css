@@ -2333,3 +2333,71 @@ small {
   color: #4caf50 !important;
 }
 
+/* ─── Stages Panel ─── */
+#stages-panel {
+  position: fixed;
+  top: 80px;
+  left: 20px;
+  z-index: 10000;
+  background: var(--bg-card, #182019);
+  border: 1px solid var(--accent-brass, #c9a84c);
+  border-radius: 8px;
+  padding: 16px;
+  max-width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  color: var(--text-primary, #e4ddd0);
+  font-family: var(--font-body, sans-serif);
+}
+#stages-panel h3 {
+  margin: 0 0 12px 0;
+  font-family: var(--font-display, serif);
+  color: var(--accent-brass, #c9a84c);
+  font-size: 1.1rem;
+}
+#stages-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+#stages-panel th,
+#stages-panel td {
+  padding: 5px 8px;
+  text-align: left;
+  border-bottom: 1px solid rgba(201,168,76,0.15);
+}
+#stages-panel th {
+  color: var(--accent-brass, #c9a84c);
+  font-weight: 600;
+}
+#stages-panel td a {
+  color: var(--accent-forest-light, #7a9e6e);
+  text-decoration: none;
+}
+.stages-close-btn {
+  margin-top: 12px;
+  padding: 6px 16px;
+  background: transparent;
+  border: 1px solid var(--accent-brass, #c9a84c);
+  color: var(--accent-brass, #c9a84c);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.stages-close-btn:hover {
+  background: var(--accent-brass-dim, rgba(201,168,76,0.12));
+}
+.btn-stages {
+  background: transparent;
+  border: 1px solid var(--accent-forest, #5a7a4e);
+  color: var(--accent-forest-light, #7a9e6e);
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.btn-stages:hover {
+  background: rgba(90,122,78,0.15);
+}
+

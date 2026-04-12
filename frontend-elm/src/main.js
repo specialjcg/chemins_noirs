@@ -587,4 +587,12 @@ app.ports.displayLodgingMarkers.subscribe((data) => {
   MapLibreMap.displayLodgingMarkers(data.lodgings || []);
 });
 
+// ============================================================
+// STAGES PLANNER
+// ============================================================
+app.ports.displayStagesPanel.subscribe((data) => {
+  console.log('[Elm→JS] displayStagesPanel', data.num_stages, 'stages');
+  MapLibreMap.displayStagesPanel(data);
+});
+
 console.log('✅ Elm application initialized with MapLibre ports');

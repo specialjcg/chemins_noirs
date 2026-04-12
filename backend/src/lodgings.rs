@@ -373,6 +373,152 @@ pub async fn find_lodgings_along_route(
     })
 }
 
+// ─── Stage Planner ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct PlanStagesRequest {
+    pub lodgings: Vec<Lodging>,
+    pub total_route_km: f64,
+    pub target_km_per_day: f64,
+    pub min_km_per_day: f64,
+    pub max_km_per_day: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Stage {
+    pub day: usize,
+    pub start_km: f64,
+    pub end_km: f64,
+    pub distance_km: f64,
+    pub lodging: Option<Lodging>,
+    pub lodging_score: f64,
+    pub alternatives: Vec<Lodging>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PlanStagesResponse {
+    pub stages: Vec<Stage>,
+    pub num_stages: usize,
+    pub avg_km_per_day: f64,
+}
+
+fn score_lodging(l: &Lodging) -> f64 {
+    let kind_score = if matches!(l.kind.as_str(), "guest_house" | "hostel" | "alpine_hut") {
+        30.0
+    } else {
+        15.0
+    };
+    let phone_score = if l.phone.is_some() { 20.0 } else { 0.0 };
+    let website_score = if l.website.is_some() { 15.0 } else { 0.0 };
+    let capacity_score = if l.capacity.is_some() { 10.0 } else { 0.0 };
+    let proximity_score = 25.0 * (1.0 - l.perpendicular_dist_m / 2000.0).max(0.0);
+    kind_score + phone_score + website_score + capacity_score + proximity_score
+}
+
+pub fn plan_stages(req: &PlanStagesRequest) -> PlanStagesResponse {
+    let n = (req.total_route_km / req.target_km_per_day).round().max(1.0) as usize;
+    let ideal_length = req.total_route_km / n as f64;
+
+    let mut stages = Vec::with_capacity(n);
+    let mut start_km = 0.0_f64;
+
+    for i in 0..n {
+        if i == n - 1 {
+            // Last stage: no lodging needed (arrival)
+            let distance = req.total_route_km - start_km;
+            stages.push(Stage {
+                day: i + 1,
+                start_km,
+                end_km: req.total_route_km,
+                distance_km: distance,
+                lodging: None,
+                lodging_score: 0.0,
+                alternatives: vec![],
+            });
+            break;
+        }
+
+        let target_km = start_km + ideal_length;
+        let min_cut = start_km + req.min_km_per_day;
+        let max_cut = start_km + req.max_km_per_day;
+
+        // Find lodgings within [min_cut, max_cut]
+        let mut candidates: Vec<&Lodging> = req
+            .lodgings
+            .iter()
+            .filter(|l| l.along_route_km >= min_cut && l.along_route_km <= max_cut)
+            .collect();
+
+        // If none in range, pick closest to target overall
+        if candidates.is_empty() {
+            candidates = req.lodgings.iter().filter(|l| l.along_route_km > start_km).collect();
+        }
+
+        if candidates.is_empty() {
+            // No lodgings left, make this the last stage
+            let distance = req.total_route_km - start_km;
+            stages.push(Stage {
+                day: i + 1,
+                start_km,
+                end_km: req.total_route_km,
+                distance_km: distance,
+                lodging: None,
+                lodging_score: 0.0,
+                alternatives: vec![],
+            });
+            break;
+        }
+
+        // Sort by distance to target, then for ties (within 2km) prefer higher score
+        candidates.sort_by(|a, b| {
+            let da = (a.along_route_km - target_km).abs();
+            let db = (b.along_route_km - target_km).abs();
+            if (da - db).abs() <= 2.0 {
+                let sa = score_lodging(a);
+                let sb = score_lodging(b);
+                sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
+
+        let chosen = candidates[0].clone();
+        let chosen_score = score_lodging(&chosen);
+        let alternatives: Vec<Lodging> = candidates[1..candidates.len().min(4)]
+            .iter()
+            .map(|l| (*l).clone())
+            .collect();
+
+        let end_km = chosen.along_route_km;
+        let distance = end_km - start_km;
+
+        stages.push(Stage {
+            day: i + 1,
+            start_km,
+            end_km,
+            distance_km: distance,
+            lodging: Some(chosen),
+            lodging_score: chosen_score,
+            alternatives,
+        });
+
+        start_km = end_km;
+    }
+
+    let num_stages = stages.len();
+    let avg_km_per_day = if num_stages > 0 {
+        req.total_route_km / num_stages as f64
+    } else {
+        0.0
+    };
+
+    PlanStagesResponse {
+        stages,
+        num_stages,
+        avg_km_per_day,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

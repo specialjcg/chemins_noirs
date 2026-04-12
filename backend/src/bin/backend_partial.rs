@@ -109,6 +109,27 @@ fn pad_bbox(bbox: &BoundingBox) -> BoundingBox {
     }
 }
 
+/// Handler for /api/plan-stages — compute optimal daily stages from lodgings
+async fn plan_stages_handler(
+    Json(req): Json<backend::lodgings::PlanStagesRequest>,
+) -> Result<Json<backend::lodgings::PlanStagesResponse>, (StatusCode, String)> {
+    if req.lodgings.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "lodgings list is empty".to_string()));
+    }
+    if req.total_route_km <= 0.0 {
+        return Err((StatusCode::BAD_REQUEST, "total_route_km must be > 0".to_string()));
+    }
+    tracing::info!(
+        "Plan stages: {} lodgings, {:.1}km total, target={:.0}km/day",
+        req.lodgings.len(),
+        req.total_route_km,
+        req.target_km_per_day
+    );
+    let resp = backend::lodgings::plan_stages(&req);
+    tracing::info!("Plan stages: {} stages, avg {:.1}km/day", resp.num_stages, resp.avg_km_per_day);
+    Ok(Json(resp))
+}
+
 /// Handler for /api/lodgings-along-route — find OSM tourism accommodations
 /// within a buffer distance of a route polyline. Returns lodgings annotated
 /// with their position along the route (cumulative km from start) and their
@@ -1129,6 +1150,7 @@ async fn main() {
         .route("/api/click_mode", axum::routing::get(click_mode_handler))
         .route("/api/pois", axum::routing::get(pois_handler))
         .route("/api/lodgings-along-route", axum::routing::post(lodgings_along_route_handler))
+        .route("/api/plan-stages", axum::routing::post(plan_stages_handler))
         .layer(cors.clone())
         .with_state(config)
         // Saved routes endpoints (PostgreSQL) - separate state

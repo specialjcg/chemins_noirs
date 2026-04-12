@@ -1909,6 +1909,50 @@ update msg model =
                     , Cmd.none
                     )
 
+        PlanStages ->
+            case model.lodgingsResult of
+                Just lodgingsJson ->
+                    let
+                        body =
+                            Json.Encode.object
+                                [ ( "lodgings"
+                                  , case Json.Decode.decodeValue (Json.Decode.field "lodgings" Json.Decode.value) lodgingsJson of
+                                        Ok v -> v
+                                        Err _ -> Json.Encode.list (\_ -> Json.Encode.null) []
+                                  )
+                                , ( "total_route_km"
+                                  , case Json.Decode.decodeValue (Json.Decode.field "total_route_km" Json.Decode.float) lodgingsJson of
+                                        Ok km -> Json.Encode.float km
+                                        Err _ -> Json.Encode.float 0
+                                  )
+                                , ( "target_km_per_day", Json.Encode.float 20 )
+                                , ( "min_km_per_day", Json.Encode.float 12 )
+                                , ( "max_km_per_day", Json.Encode.float 28 )
+                                ]
+                    in
+                    ( { model | stagesLoading = True }
+                    , Http.post
+                        { url = "/api/plan-stages"
+                        , body = Http.jsonBody body
+                        , expect = Http.expectJson StagesPlanFetched Json.Decode.value
+                        }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        StagesPlanFetched result ->
+            case result of
+                Ok json ->
+                    ( { model | stagesLoading = False, stagesResult = Just json }
+                    , Ports.displayStagesPanel json
+                    )
+
+                Err _ ->
+                    ( { model | stagesLoading = False }
+                    , Cmd.none
+                    )
+
 
 
 {-| Convert Coord3D list to Coordinate list (drop altitude for GameEngine).

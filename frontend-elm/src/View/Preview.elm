@@ -17,7 +17,7 @@ view model =
             div [ class "preview" ]
                 [ viewLoopCandidates model
                 , viewStats route
-                , viewActionButtons
+                , viewActionButtons model
                 , viewSegmentStats route.segments
                 , viewMetadata route.metadata
                 , viewElevationProfile route.elevationProfile
@@ -32,10 +32,10 @@ view model =
                 ]
 
 
-viewActionButtons : Html Msg
-viewActionButtons =
+viewActionButtons : Model -> Html Msg
+viewActionButtons model =
     div [ class "action-buttons" ]
-        [ button
+        ([ button
             [ class "btn-gpx-export"
             , onClick ExportGpx
             ]
@@ -51,6 +51,17 @@ viewActionButtons =
             ]
             [ text "🏠 Gîtes" ]
         ]
+        ++ (if model.lodgingsResult /= Nothing then
+                [ button
+                    [ class "btn-stages"
+                    , onClick PlanStages
+                    ]
+                    [ text "📊 Planifier étapes" ]
+                ]
+            else
+                []
+           )
+        )
 
 
 viewStats : RouteResponse -> Html Msg
