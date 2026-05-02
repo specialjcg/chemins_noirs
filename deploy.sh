@@ -24,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
 
 # Fichier PBF pour le routage (à placer sur le VPS dans /opt/cheminsnoirs/data/)
-PBF_FILENAME="rhone-alpes-251111.osm.pbf"
+PBF_FILENAME="france-latest.osm.pbf"
 
 # ============================================================================
 # COULEURS
@@ -138,7 +138,7 @@ RestartSec=5
 
 # Environnement
 Environment=RUST_LOG=info
-Environment=PBF_PATH=/opt/cheminsnoirs/data/rhone-alpes-251111.osm.pbf
+Environment=PBF_PATH=/opt/cheminsnoirs/data/france-latest.osm.pbf
 Environment=CACHE_DIR=/opt/cheminsnoirs/data/cache
 
 # ── Sécurité : sandbox systemd complet ──
@@ -306,11 +306,11 @@ chmod 750 /opt/cheminsnoirs/data
 chmod 750 /opt/cheminsnoirs/data/cache
 
 # ── Vérifier que le PBF est présent ──
-if [ ! -f /opt/cheminsnoirs/data/rhone-alpes-251111.osm.pbf ]; then
+if [ ! -f /opt/cheminsnoirs/data/france-latest.osm.pbf ]; then
     echo ""
     echo "IMPORTANT: Le fichier PBF n'est pas encore présent."
     echo "   Transférez-le manuellement sur le VPS :"
-    echo "   scp rhone-alpes-251111.osm.pbf root@VPS:/opt/cheminsnoirs/data/"
+    echo "   scp france-latest.osm.pbf root@VPS:/opt/cheminsnoirs/data/"
     echo ""
 fi
 
@@ -370,7 +370,7 @@ F2B_EOF
 fi
 
 # ── Démarrer le service (seulement si PBF présent) ──
-if [ -f /opt/cheminsnoirs/data/rhone-alpes-251111.osm.pbf ]; then
+if [ -f /opt/cheminsnoirs/data/france-latest.osm.pbf ]; then
     systemctl restart cheminsnoirs
     echo ""
     echo "=== Installation terminée (service démarré) ==="
@@ -437,7 +437,7 @@ setup_vps_prerequisites() {
     ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" << 'REMOTE_EOF'
 set -e
 apt update
-apt install -y nginx ufw fail2ban
+apt install -y nginx ufw fail2ban osmium-tool
 
 # PostgreSQL (optionnel, pour sauvegarder les tracés)
 apt install -y postgresql postgresql-contrib || true
@@ -458,20 +458,21 @@ REMOTE_EOF
 upload_pbf() {
     check_config
 
-    PBF_LOCAL="$PROJECT_DIR/backend/data/$PBF_FILENAME"
+    # France PBF is 4.7 GB — faster to download directly on VPS than upload via scp
+    log_info "Téléchargement de france-latest.osm.pbf directement sur le VPS (~4.7 GB)..."
+    log_info "Cela prend ~5-15 min selon la connexion du VPS."
 
-    if [ ! -f "$PBF_LOCAL" ]; then
-        log_error "Fichier PBF non trouvé: $PBF_LOCAL"
-    fi
+    ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "
+        mkdir -p /opt/cheminsnoirs/data
+        cd /opt/cheminsnoirs/data
+        wget -c --show-progress -O france-latest.osm.pbf \
+            https://download.geofabrik.de/europe/france-latest.osm.pbf
+        chown cheminsnoirs:cheminsnoirs france-latest.osm.pbf
+        chmod 640 france-latest.osm.pbf
+        ls -lh france-latest.osm.pbf
+    "
 
-    PBF_SIZE=$(du -h "$PBF_LOCAL" | cut -f1)
-    log_info "Transfert du PBF ($PBF_SIZE) — cela peut prendre plusieurs minutes..."
-
-    ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p /opt/cheminsnoirs/data"
-    scp -P "$VPS_PORT" "$PBF_LOCAL" "$VPS_USER@$VPS_HOST:/opt/cheminsnoirs/data/$PBF_FILENAME"
-    ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "chown cheminsnoirs:cheminsnoirs /opt/cheminsnoirs/data/$PBF_FILENAME && chmod 640 /opt/cheminsnoirs/data/$PBF_FILENAME"
-
-    log_success "PBF transféré!"
+    log_success "PBF téléchargé sur le VPS!"
 }
 
 # ============================================================================

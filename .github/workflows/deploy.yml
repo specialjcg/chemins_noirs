@@ -100,7 +100,7 @@ jobs:
           find /opt/cheminsnoirs/frontend -type f -exec chmod 644 {} \;
 
           # Start service
-          if [ -f /opt/cheminsnoirs/data/rhone-alpes-251111.osm.pbf ]; then
+          if [ -f /opt/cheminsnoirs/data/france-latest.osm.pbf ]; then
             systemctl start cheminsnoirs
             sleep 3
             systemctl is-active cheminsnoirs
