@@ -772,40 +772,24 @@ impl GraphBuilder {
 
         tracing::info!("Cache miss, generating partial graph for bbox {:?}", bbox);
 
-        // For large PBF files (> 500 MB), use osmium extract to pre-filter the bbox.
-        // This reduces build time from ~2 min (scanning France 4.2 GB) to ~15s.
         let pbf_path_ref = pbf_path.as_ref();
-        let pbf_size = std::fs::metadata(pbf_path_ref)
-            .map(|m| m.len())
-            .unwrap_or(0);
 
-        let effective_pbf: std::path::PathBuf = if pbf_size > 500 * 1024 * 1024
-            && which_osmium().is_some()
-        {
-            match osmium_extract(pbf_path_ref, &bbox, &cache_key) {
-                Ok(p) => {
-                    tracing::info!("osmium extract → {:?} ({} B)", p, std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0));
-                    p
-                }
-                Err(e) => {
-                    tracing::warn!("osmium extract failed ({}), falling back to full scan", e);
-                    pbf_path_ref.to_path_buf()
-                }
-            }
-        } else {
-            pbf_path_ref.to_path_buf()
-        };
+        // Try to find a regional PBF smaller than the configured one.
+        // Regional PBFs (300-800 MB) build in ~5-15s vs ~2 min for France 4.7 GB.
+        let effective_pbf: std::path::PathBuf =
+            if let Some(parent) = pbf_path_ref.parent() {
+                resolve_regional_pbf(&bbox, parent)
+                    .unwrap_or_else(|| pbf_path_ref.to_path_buf())
+            } else {
+                pbf_path_ref.to_path_buf()
+            };
 
-        let is_temp = effective_pbf != pbf_path_ref;
+        tracing::info!("Building graph from: {}", effective_pbf.display());
 
         // Build graph with bbox filter
         let config = GraphBuilderConfig { bbox: Some(bbox) };
         let builder = GraphBuilder::new(config);
         let graph = builder.build_from_pbf(&effective_pbf)?;
-
-        if is_temp {
-            let _ = std::fs::remove_file(&effective_pbf);
-        }
 
         // Cache to disk (binary postcard format)
         std::fs::create_dir_all(cache_dir.as_ref())?;
@@ -1968,5 +1952,104 @@ fn osmium_extract(
         Ok(out)
     } else {
         Err(format!("osmium exit {:?}", status.code()))
+    }
+}
+
+// ─── Multi-PBF regional routing ──────────────────────────────────────────────
+
+struct RegionPbf {
+    name: &'static str,
+    filename: &'static str,
+    url: &'static str,
+    min_lat: f64,
+    max_lat: f64,
+    min_lon: f64,
+    max_lon: f64,
+}
+
+// Geofabrik France regions with approximate bounding boxes
+const FRANCE_REGIONS: &[RegionPbf] = &[
+    RegionPbf { name: "Auvergne-Rhône-Alpes",       filename: "auvergne-rhone-alpes-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/auvergne-rhone-alpes-latest.osm.pbf", min_lat: 44.12, max_lat: 46.82, min_lon: 2.05, max_lon: 7.18 },
+    RegionPbf { name: "Provence-Alpes-Côte d'Azur",  filename: "provence-alpes-cote-d-azur-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/provence-alpes-cote-d-azur-latest.osm.pbf", min_lat: 43.10, max_lat: 45.20, min_lon: 4.20, max_lon: 7.70 },
+    RegionPbf { name: "Occitanie",                   filename: "occitanie-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/occitanie-latest.osm.pbf", min_lat: 42.33, max_lat: 45.05, min_lon: -0.02, max_lon: 4.84 },
+    RegionPbf { name: "Nouvelle-Aquitaine",          filename: "nouvelle-aquitaine-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/nouvelle-aquitaine-latest.osm.pbf", min_lat: 42.78, max_lat: 46.85, min_lon: -1.88, max_lon: 3.40 },
+    RegionPbf { name: "Bourgogne-Franche-Comté",     filename: "bourgogne-franche-comte-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/bourgogne-franche-comte-latest.osm.pbf", min_lat: 45.82, max_lat: 48.50, min_lon: 2.84, max_lon: 6.93 },
+    RegionPbf { name: "Grand Est",                   filename: "grand-est-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/grand-est-latest.osm.pbf", min_lat: 47.40, max_lat: 49.70, min_lon: 3.35, max_lon: 8.24 },
+    RegionPbf { name: "Île-de-France",               filename: "ile-de-france-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/ile-de-france-latest.osm.pbf", min_lat: 48.12, max_lat: 49.24, min_lon: 1.45, max_lon: 3.56 },
+    RegionPbf { name: "Pays de la Loire",            filename: "pays-de-la-loire-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/pays-de-la-loire-latest.osm.pbf", min_lat: 46.27, max_lat: 48.55, min_lon: -2.56, max_lon: 0.97 },
+    RegionPbf { name: "Bretagne",                    filename: "bretagne-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/bretagne-latest.osm.pbf", min_lat: 47.28, max_lat: 48.90, min_lon: -5.15, max_lon: -1.00 },
+    RegionPbf { name: "Normandie",                   filename: "normandie-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/normandie-latest.osm.pbf", min_lat: 48.10, max_lat: 50.00, min_lon: -2.00, max_lon: 1.92 },
+    RegionPbf { name: "Hauts-de-France",             filename: "hauts-de-france-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/hauts-de-france-latest.osm.pbf", min_lat: 49.40, max_lat: 51.10, min_lon: 1.40, max_lon: 4.30 },
+    RegionPbf { name: "Centre-Val de Loire",         filename: "centre-val-de-loire-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/centre-val-de-loire-latest.osm.pbf", min_lat: 46.34, max_lat: 48.52, min_lon: 0.05, max_lon: 3.40 },
+    RegionPbf { name: "Corse",                       filename: "corse-latest.osm.pbf", url: "https://download.geofabrik.de/europe/france/corse-latest.osm.pbf", min_lat: 41.33, max_lat: 43.04, min_lon: 8.53, max_lon: 9.57 },
+];
+
+/// Find the smallest region PBF that fully covers the bbox.
+/// Returns (region name, pbf path) if a suitable region exists on disk.
+/// If not on disk but bbox matches, triggers download.
+pub fn resolve_regional_pbf(bbox: &BoundingBox, pbf_dir: &Path) -> Option<std::path::PathBuf> {
+    // Find all regions that contain the bbox
+    let mut candidates: Vec<&RegionPbf> = FRANCE_REGIONS
+        .iter()
+        .filter(|r| {
+            r.min_lat <= bbox.min_lat
+                && r.max_lat >= bbox.max_lat
+                && r.min_lon <= bbox.min_lon
+                && r.max_lon >= bbox.max_lon
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // Prefer the smallest region (by area) to minimize scan time
+    candidates.sort_by(|a, b| {
+        let area_a = (a.max_lat - a.min_lat) * (a.max_lon - a.min_lon);
+        let area_b = (b.max_lat - b.min_lat) * (b.max_lon - b.min_lon);
+        area_a.partial_cmp(&area_b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for region in &candidates {
+        let path = pbf_dir.join(region.filename);
+        if path.exists() {
+            tracing::info!("Using regional PBF: {} ({})", region.name, path.display());
+            return Some(path);
+        }
+    }
+
+    // No regional PBF on disk — download the smallest matching region
+    let region = candidates[0];
+    let path = pbf_dir.join(region.filename);
+    tracing::info!(
+        "Regional PBF not found, downloading {} from {}",
+        region.name,
+        region.url
+    );
+    match download_pbf(region.url, &path) {
+        Ok(_) => {
+            tracing::info!("Downloaded regional PBF: {}", path.display());
+            Some(path)
+        }
+        Err(e) => {
+            tracing::warn!("Failed to download regional PBF: {}", e);
+            None
+        }
+    }
+}
+
+fn download_pbf(url: &str, dest: &Path) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let status = std::process::Command::new("wget")
+        .args(["-c", "-q", "-O", dest.to_str().ok_or("bad path")?, url])
+        .status()
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("wget exit {:?}", status.code()))
     }
 }
