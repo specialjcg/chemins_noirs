@@ -1167,22 +1167,8 @@ export function updateWaypointMarkers(waypoints) {
   }
 
   // Create numbered, draggable markers with delete button
-  // If a route is displayed, snap markers onto the route line
   waypoints.forEach((coord, index) => {
-    // The coord may already be a backend-snapped position (on the road).
-    // Apply JS snap as safety net to ensure marker sits exactly on the route line.
-    const hasRoute = currentRoute && currentRoute.length >= 2;
-    let displayCoord = coord;
-    if (hasRoute) {
-      const snapped = snapToPolyline(coord, currentRoute);
-      const dLat = (snapped.lat - coord.lat) * 111000;
-      const dLon = (snapped.lon - coord.lon) * 111000 * Math.cos(coord.lat * Math.PI / 180);
-      const distM = Math.sqrt(dLat * dLat + dLon * dLon);
-      console.log(`[snap] wp${index + 1}: (${coord.lat.toFixed(6)},${coord.lon.toFixed(6)}) → (${snapped.lat.toFixed(6)},${snapped.lon.toFixed(6)}) Δ${distM.toFixed(1)}m ${distM < 50 ? '✓' : '✗ >50m'}`);
-      if (distM < 50) {
-        displayCoord = snapped;
-      }
-    }
+    const displayCoord = coord;
     // Circle element = marker root (no wrapper div to avoid anchor miscalculation)
     const el = document.createElement('div');
     el.style.boxSizing = 'border-box';
