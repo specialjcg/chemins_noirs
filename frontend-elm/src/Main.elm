@@ -2175,13 +2175,6 @@ handleMapClick lat lon model =
                     Nothing ->
                         ( model, Cmd.none )
 
-    else if wpCount >= 2 && model.lastResponse /= Nothing && model.routeMode == MultiPoint then
-        let
-            idx =
-                findInsertionIndex coord model.waypoints
-        in
-        update (InsertWaypoint idx coord) model
-
     else if wpCount < maxWp then
         update (AddWaypoint coord) model
 
