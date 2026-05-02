@@ -2225,6 +2225,32 @@ small {
   color: #ff4444;
   border-color: #ff4444;
 }
+/* Route loading spinner */
+.route-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--accent-brass);
+  font-family: var(--font-mono);
+}
+
+.route-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(201, 168, 76, 0.25);
+  border-top-color: var(--accent-brass);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Speed controls */
 .game-speed-controls {
   display: flex;

@@ -302,7 +302,22 @@ view model =
             , onClick Submit
             , disabled model.pending
             ]
-            [ text "Tracer l'itinéraire" ]
+            [ text
+                (if model.pending then
+                    "Calcul en cours…"
+
+                 else
+                    "Tracer l'itinéraire"
+                )
+            ]
+        , if model.pending then
+            div [ class "route-loading" ]
+                [ span [ class "route-spinner" ] []
+                , span [] [ text "Calcul du tracé (peut prendre ~15s la 1ère fois)" ]
+                ]
+
+          else
+            text ""
         , case model.error of
             Just error ->
                 p [ class "error" ] [ text error ]
