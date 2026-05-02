@@ -772,10 +772,40 @@ impl GraphBuilder {
 
         tracing::info!("Cache miss, generating partial graph for bbox {:?}", bbox);
 
+        // For large PBF files (> 500 MB), use osmium extract to pre-filter the bbox.
+        // This reduces build time from ~2 min (scanning France 4.2 GB) to ~15s.
+        let pbf_path_ref = pbf_path.as_ref();
+        let pbf_size = std::fs::metadata(pbf_path_ref)
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        let effective_pbf: std::path::PathBuf = if pbf_size > 500 * 1024 * 1024
+            && which_osmium().is_some()
+        {
+            match osmium_extract(pbf_path_ref, &bbox, &cache_key) {
+                Ok(p) => {
+                    tracing::info!("osmium extract → {:?} ({} B)", p, std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0));
+                    p
+                }
+                Err(e) => {
+                    tracing::warn!("osmium extract failed ({}), falling back to full scan", e);
+                    pbf_path_ref.to_path_buf()
+                }
+            }
+        } else {
+            pbf_path_ref.to_path_buf()
+        };
+
+        let is_temp = effective_pbf != pbf_path_ref;
+
         // Build graph with bbox filter
         let config = GraphBuilderConfig { bbox: Some(bbox) };
         let builder = GraphBuilder::new(config);
-        let graph = builder.build_from_pbf(pbf_path)?;
+        let graph = builder.build_from_pbf(&effective_pbf)?;
+
+        if is_temp {
+            let _ = std::fs::remove_file(&effective_pbf);
+        }
 
         // Cache to disk (binary postcard format)
         std::fs::create_dir_all(cache_dir.as_ref())?;
@@ -1881,5 +1911,62 @@ mod tests {
         );
 
         assert!(edge.is_none());
+    }
+}
+
+// ─── osmium helpers ──────────────────────────────────────────────────────────
+
+fn which_osmium() -> Option<std::path::PathBuf> {
+    for candidate in &["osmium", "/usr/bin/osmium", "/usr/local/bin/osmium"] {
+        let p = std::path::Path::new(candidate);
+        if p.is_absolute() {
+            if p.exists() {
+                return Some(p.to_path_buf());
+            }
+        } else if let Ok(output) = std::process::Command::new("which").arg(candidate).output() {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !s.is_empty() {
+                    return Some(std::path::PathBuf::from(s));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Run `osmium extract --bbox` to produce a small PBF covering only the bbox.
+/// Returns path to temp file. Caller must delete it after use.
+fn osmium_extract(
+    pbf: &Path,
+    bbox: &BoundingBox,
+    cache_key: &str,
+) -> Result<std::path::PathBuf, String> {
+    let osmium = which_osmium().ok_or("osmium not found")?;
+    let out = std::env::temp_dir().join(format!("chemins_extract_{}.osm.pbf", cache_key));
+
+    // osmium extract --bbox=left,bottom,right,top
+    let bbox_arg = format!(
+        "{},{},{},{}",
+        bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat
+    );
+
+    let status = std::process::Command::new(&osmium)
+        .args([
+            "extract",
+            "--bbox",
+            &bbox_arg,
+            "--overwrite",
+            "-o",
+            out.to_str().ok_or("bad path")?,
+            pbf.to_str().ok_or("bad pbf path")?,
+        ])
+        .status()
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok(out)
+    } else {
+        Err(format!("osmium exit {:?}", status.code()))
     }
 }

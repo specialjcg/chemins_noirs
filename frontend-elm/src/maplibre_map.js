@@ -420,6 +420,7 @@ function ensureMap() {
 
   // Add boucles Baronnies control
   mapInstance.addControl(createBouclesControl(), 'top-right');
+  mapInstance.addControl(createHautsLieuxControl(), 'top-right');
 
   // Add map style switcher (topo / satellite / hybrid)
   const styleControl = createStyleSwitcherControl();
@@ -945,6 +946,128 @@ function clearBouclesBaronnies() {
   bouclesLayers = [];
   bouclesMarkers.forEach(m => m.remove());
   bouclesMarkers = [];
+}
+
+// ─── Hauts-lieux des Baronnies provençales ───
+const HAUTS_LIEUX = [
+  // Paysages de gorges & passages naturels
+  { name: 'Gorges de l\'Eygues', cat: 'gorges', lat: 44.4147, lon: 5.2679, desc: 'Entre Sahune et Saint-May, cluses et falaises de calcaire tithonique' },
+  { name: 'Gorges de la Méouge', cat: 'gorges', lat: 44.2777, lon: 5.7874, desc: 'Entre Châteauneuf-de-Chabre et Barret-sur-Méouge, site naturel classé' },
+  { name: 'Col de Perty', cat: 'gorges', lat: 44.2872, lon: 5.5498, desc: 'Panorama du Mont Ventoux au Dévoluy et aux Écrins, route des Princes d\'Orange' },
+  // Sites perchés remarquables
+  { name: 'Château de Cornillon-sur-l\'Oule', cat: 'perche', lat: 44.4587, lon: 5.3679, desc: 'Site perché remarquable, héritage féodal médiéval' },
+  { name: 'Château d\'Arzeliers', cat: 'perche', lat: 44.3185, lon: 5.8230, desc: 'Vieux village et château perché à Laragne-Montéglin' },
+  { name: 'Vieux village de Béconne', cat: 'perche', lat: 44.4918, lon: 5.0384, desc: 'Village perché à La Roche-Saint-Secret-Béconne' },
+  { name: 'St-Cyrice', cat: 'perche', lat: 44.3162, lon: 5.6279, desc: 'Église et vieux village perché à Étoile-Saint-Cyrice' },
+  { name: 'Château de La Roche-sur-le-Buis', cat: 'perche', lat: 44.2766, lon: 5.3138, desc: 'Site perché remarquable des Baronnies' },
+  // Villes & bourgs à fort caractère patrimonial
+  { name: 'Nyons', cat: 'bourg', lat: 44.3612, lon: 5.1409, desc: 'Vieille ville, pont roman, moulins à huile d\'olive' },
+  { name: 'Buis-les-Baronnies', cat: 'bourg', lat: 44.2768, lon: 5.2748, desc: 'Bourg médiéval, capital historique des Baronnies, tilleuls' },
+  { name: 'Serres', cat: 'bourg', lat: 44.4297, lon: 5.7169, desc: 'Vieille ville fortifiée, route ancienne Espagne–Italie' },
+  { name: 'Orpierre', cat: 'bourg', lat: 44.3132, lon: 5.6919, desc: 'Village médiéval, site d\'escalade renommé' },
+  { name: 'Taulignan', cat: 'bourg', lat: 44.4436, lon: 4.9810, desc: 'Village fortifié, remparts circulaires préservés' },
+  { name: 'Saint-Euphémie-sur-Ouvèze', cat: 'bourg', lat: 44.3007, lon: 5.3790, desc: 'Village pittoresque au cœur des Baronnies' },
+  // Sites archéologiques
+  { name: 'Bâtie-Montsaléon (Mons Seleucus)', cat: 'archeo', lat: 44.4568, lon: 5.7517, desc: 'Agglomération gallo-romaine à vocation religieuse' },
+  { name: 'Abbaye de Clausonne', cat: 'archeo', lat: 44.4523, lon: 5.8418, desc: 'Abbaye médiévale au Saix, Hautes-Alpes' },
+];
+
+const HAUT_LIEU_COLORS = {
+  gorges: '#2a9d8f',
+  perche: '#e9c46a',
+  bourg: '#e76f51',
+  archeo: '#a855f7',
+};
+
+const HAUT_LIEU_ICONS = {
+  gorges: '🏔️',
+  perche: '🏰',
+  bourg: '🏘️',
+  archeo: '🏛️',
+};
+
+let hautsLieuxMarkers = [];
+
+function createHautsLieuxControl() {
+  class HautsLieuxCtrl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      this._button = document.createElement('button');
+      this._button.textContent = '🏛️';
+      this._button.title = 'Hauts-lieux des Baronnies provençales';
+      this._button.onclick = () => this.toggle();
+      this._container.appendChild(this._button);
+      this._active = false;
+      return this._container;
+    }
+    toggle() {
+      this._active = !this._active;
+      if (this._active) {
+        this._button.style.backgroundColor = '#a855f7';
+        this._button.style.color = 'white';
+        showHautsLieux();
+      } else {
+        this._button.style.backgroundColor = '';
+        this._button.style.color = '';
+        clearHautsLieux();
+      }
+    }
+    onRemove() {
+      this._container.parentNode?.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+  return new HautsLieuxCtrl();
+}
+
+function showHautsLieux() {
+  clearHautsLieux();
+  const bounds = new maplibregl.LngLatBounds();
+
+  for (const lieu of HAUTS_LIEUX) {
+    const color = HAUT_LIEU_COLORS[lieu.cat] || '#c9a84c';
+    const icon = HAUT_LIEU_ICONS[lieu.cat] || '📍';
+
+    const el = document.createElement('div');
+    el.className = 'haut-lieu-marker';
+    el.textContent = icon;
+    el.style.borderColor = color;
+
+    const popup = new maplibregl.Popup({ offset: 25, maxWidth: '300px' }).setHTML(
+      `<div class="haut-lieu-popup">` +
+      `<strong>${lieu.name}</strong><br/>` +
+      `<span class="haut-lieu-cat" style="color:${color}">${catLabel(lieu.cat)}</span><br/>` +
+      `<em>${lieu.desc}</em></div>`
+    );
+
+    const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+      .setLngLat([lieu.lon, lieu.lat])
+      .setPopup(popup)
+      .addTo(mapInstance);
+
+    hautsLieuxMarkers.push(marker);
+    bounds.extend([lieu.lon, lieu.lat]);
+  }
+
+  mapInstance.fitBounds(bounds, { padding: 60, duration: 1000 });
+  console.log(`[maplibre] Showing ${HAUTS_LIEUX.length} hauts-lieux`);
+}
+
+function clearHautsLieux() {
+  hautsLieuxMarkers.forEach(m => m.remove());
+  hautsLieuxMarkers = [];
+}
+
+function catLabel(cat) {
+  switch (cat) {
+    case 'gorges': return '🏔️ Gorges & passages naturels';
+    case 'perche': return '🏰 Site perché remarquable';
+    case 'bourg': return '🏘️ Bourg à fort caractère patrimonial';
+    case 'archeo': return '🏛️ Site archéologique';
+    default: return cat;
+  }
 }
 
 export function initMap() {

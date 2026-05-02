@@ -2254,6 +2254,43 @@ small {
   font-size: 14px;
 }
 
+/* Hauts-lieux markers */
+.haut-lieu-marker {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  background: rgba(12, 16, 13, 0.85);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  border: 2.5px solid #c9a84c;
+  transition: transform 0.15s ease;
+}
+.haut-lieu-marker:hover {
+  transform: scale(1.2);
+}
+
+.haut-lieu-popup {
+  font-family: var(--font-body, 'Barlow', sans-serif);
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1a1a14;
+}
+.haut-lieu-popup strong {
+  font-size: 14px;
+  display: block;
+  margin-bottom: 2px;
+}
+.haut-lieu-cat {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 /* Speed controls */
 .game-speed-controls {
   display: flex;

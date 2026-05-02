@@ -20,7 +20,7 @@ for arg in "$@"; do
 done
 
 # PBF data for routing graph
-DEFAULT_PBF="$ROOT_DIR/backend/data/rhone-alpes-251111.osm.pbf"
+DEFAULT_PBF="$ROOT_DIR/data/france-latest.osm.pbf"
 export PBF_PATH="${GRAPH_PBF:-$DEFAULT_PBF}"
 export CACHE_DIR="${CACHE_DIR:-data/cache}"
 
