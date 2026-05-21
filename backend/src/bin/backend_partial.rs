@@ -689,8 +689,8 @@ async fn route_handler(
     let engine = get_or_build_engine(&config, bbox).await?;
 
     let t_path = std::time::Instant::now();
-    match engine.find_path(&req) {
-        Some(path) => {
+    match engine.find_path_with_surfaces(&req) {
+        Some((path, point_surfaces)) => {
             tracing::info!("PERF pathfinding: {:.0}ms ({} points)", t_path.elapsed().as_secs_f64() * 1000.0, path.len());
 
             // Calculate distance
@@ -742,6 +742,7 @@ async fn route_handler(
                 difficulty,
                 surface_breakdown: None,
                 segments: None,
+                point_surfaces: Some(point_surfaces),
             };
 
             tracing::info!("PERF TOTAL /api/route: {:.0}ms ({:.2}km)", t_total.elapsed().as_secs_f64() * 1000.0, distance_km);
@@ -872,6 +873,7 @@ async fn multi_route_handler(
     // We also collect the snapped waypoint positions (on-road projections) so the
     // frontend can place markers exactly on the route line.
     let mut all_coords: Vec<Coordinate> = Vec::new();
+    let mut all_surfaces: Vec<bool> = Vec::new();
     let mut snapped_waypoints: Vec<Coordinate> = Vec::new();
     let mut total_distance = 0.0;
     // Track segment boundaries: (start_idx, end_idx) in all_coords
@@ -887,8 +889,8 @@ async fn multi_route_handler(
         };
 
         let t_seg = std::time::Instant::now();
-        match engine.find_path(&segment_req) {
-            Some(path) => {
+        match engine.find_path_with_surfaces(&segment_req) {
+            Some((path, seg_surfaces)) => {
                 tracing::info!(
                     "PERF segment {}/{}: {:.0}ms ({} pts)",
                     i + 1,
@@ -910,8 +912,12 @@ async fn multi_route_handler(
                 let actual_start = if all_coords.is_empty() { 0 } else { all_coords.len() - 1 };
 
                 // Add the routed path (dedup avoids duplicate at segment boundaries)
-                for &coord in &path {
+                for (&coord, &surf) in path.iter().zip(seg_surfaces.iter()) {
+                    let prev_len = all_coords.len();
                     push_dedup(&mut all_coords, coord);
+                    if all_coords.len() > prev_len {
+                        all_surfaces.push(surf);
+                    }
                 }
 
                 let end_idx = all_coords.len() - 1;
@@ -1044,6 +1050,7 @@ async fn multi_route_handler(
         difficulty,
         surface_breakdown: None,
         segments,
+        point_surfaces: Some(all_surfaces),
     };
 
     tracing::info!("PERF TOTAL /api/route/multi: {:.0}ms ({} wps, {:.2}km)", t_total.elapsed().as_secs_f64() * 1000.0, req.waypoints.len(), total_distance);

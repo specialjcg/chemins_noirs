@@ -62,6 +62,8 @@ view model gs =
                                 "Carte topo"
                             )
                         ]
+                    , button [ class "game-btn drone-btn", onClick ToggleCameraViewMode ]
+                        [ text "Vue Drone" ]
                     , button [ class "game-btn abandon-btn", onClick ExitOrienteeringMode ] [ text "Stop" ]
                     ]
 

@@ -102,6 +102,11 @@ app.ports.updateRoute.subscribe((coords) => {
   MapLibreMap.updateRoute(coords);
 });
 
+// Mettre à jour les surfaces (paved/unpaved) de la route
+app.ports.setRouteSurfaces.subscribe((surfaces) => {
+  MapLibreMap.setRouteSurfaces(surfaces);
+});
+
 // Mettre à jour les marqueurs de waypoints
 app.ports.updateWaypointMarkers.subscribe((waypoints) => {
   console.log('[Elm→JS] updateWaypointMarkers', waypoints.length, 'waypoints');
@@ -482,6 +487,11 @@ app.ports.updateGameCamera.subscribe(({ lat, lon, bearing }) => {
   }
   // Update Three.js camera (high-frequency, kept light)
   World3D.updateCamera({ lat, lon, bearing });
+});
+
+// Toggle drone/FPV camera mode
+app.ports.toggleCameraViewMode.subscribe(() => {
+  World3D.toggleViewMode();
 });
 
 // Exit game, restore normal map

@@ -32,7 +32,8 @@ import {
   sampleAltTriangulated as geomSampleAltTriangulated,
   planeJToDemRow,
 } from './world3d_geom.js';
-const EYE_HEIGHT = 1.7;       // meters above terrain
+const EYE_HEIGHT = 1.7;       // meters above terrain (FPV mode)
+const DRONE_HEIGHT = 120;     // meters above terrain (drone/overview mode)
 const VIEW_DISTANCE = 1500;   // far clip
 const FOV = 75;
 
@@ -52,6 +53,9 @@ let origin = { lat: 0, lon: 0 };
 
 // Latest player state (driven by updateCamera)
 let player = { lat: 0, lon: 0, bearing: 0 };
+
+// Camera view mode: 'fpv' (1st person) or 'drone' (overhead)
+let viewMode = 'fpv';
 
 // Latest terrain (kept so we can sample altitude when (re)building roads/veg/buildings)
 let terrain = null;  // { gridArray, originLat, originLon, cellSizeM, rows, cols, minAlt, mesh }
@@ -291,22 +295,30 @@ export function updateCamera({ lat, lon, bearing }) {
 function updateCameraTransform() {
   if (!camera) return;
   const { x, z } = latLonToXZ(player.lat, player.lon);
-  // Use raycast against terrain mesh for exact eye level.
-  // Falls back to bilinear sampleAlt if mesh not yet ready.
   const groundY = terrainMesh ? surfaceAltAt(x, z) : sampleAlt(player.lat, player.lon);
-  const eyeY = groundY + EYE_HEIGHT;
 
-  camera.position.set(x, eyeY, z);
-
-  // Bearing in degrees, clockwise from north (compass).
-  // Convert to a look-at direction in scene XZ.
-  // North = -Z, East = +X. So:
-  //   dx = sin(bearing), dz = -cos(bearing)
   const rad = player.bearing * Math.PI / 180;
   const dx = Math.sin(rad);
   const dz = -Math.cos(rad);
-  const target = new THREE.Vector3(x + dx * 30, eyeY - 0.5, z + dz * 30);
-  camera.lookAt(target);
+
+  if (viewMode === 'drone') {
+    const eyeY = groundY + DRONE_HEIGHT;
+    camera.position.set(x, eyeY, z);
+    // Look 200m ahead at ground level → ~31° pitch down, shows relief clearly
+    const target = new THREE.Vector3(x + dx * 200, groundY, z + dz * 200);
+    camera.lookAt(target);
+  } else {
+    const eyeY = groundY + EYE_HEIGHT;
+    camera.position.set(x, eyeY, z);
+    const target = new THREE.Vector3(x + dx * 30, eyeY - 0.5, z + dz * 30);
+    camera.lookAt(target);
+  }
+}
+
+export function toggleViewMode() {
+  viewMode = viewMode === 'fpv' ? 'drone' : 'fpv';
+  updateCameraTransform();
+  return viewMode;
 }
 
 // ============================================================

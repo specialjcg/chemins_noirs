@@ -130,6 +130,7 @@ async fn route_handler(
         difficulty: None,
         surface_breakdown: None,
         segments: None,
+        point_surfaces: None,
     };
 
     Ok(Json(response))

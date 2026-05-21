@@ -215,6 +215,7 @@ type Msg
     | GameSpeedDown
     | SetTargetBearing Float
     | ClearTargetBearing
+    | ToggleCameraViewMode
     | GameKeyLeft
     | GameKeyRight
     | GameKeyForward
@@ -398,6 +399,7 @@ type alias RouteResponse =
     , difficulty : Maybe String
     , surfaceBreakdown : Maybe (List ( String, Float ))
     , segments : Maybe (List SegmentStats)
+    , pointSurfaces : Maybe (List Bool)
     }
 
 

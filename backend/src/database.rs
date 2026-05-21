@@ -289,6 +289,7 @@ mod tests {
             difficulty: None,
             surface_breakdown: None,
             segments: None,
+            point_surfaces: None,
         };
 
         SaveRouteRequest {
@@ -460,6 +461,7 @@ mod tests {
             difficulty: None,
             surface_breakdown: None,
             segments: None,
+            point_surfaces: None,
         };
 
         let request = SaveRouteRequest {

@@ -171,6 +171,7 @@ pub async fn generate_loops(
                 difficulty,
                 surface_breakdown: None,
                 segments: None,
+                point_surfaces: None,
             };
 
             candidates.push(LoopCandidate {

@@ -17,6 +17,9 @@ port initMap : () -> Cmd msg
 port updateRoute : List Coordinate -> Cmd msg
 
 
+port setRouteSurfaces : Maybe (List Bool) -> Cmd msg
+
+
 port updateSelectionMarkers :
     { start : Maybe Coordinate
     , end : Maybe Coordinate
@@ -92,6 +95,9 @@ port updateGameCamera : { lat : Float, lon : Float, bearing : Float } -> Cmd msg
 
 
 port exitGameView : () -> Cmd msg
+
+
+port toggleCameraViewMode : () -> Cmd msg
 
 
 

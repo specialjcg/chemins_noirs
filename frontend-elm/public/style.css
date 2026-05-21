@@ -2186,6 +2186,15 @@ small {
   background: rgba(33, 150, 243, 0.2) !important;
 }
 
+.drone-btn {
+  border-color: #9c27b0 !important;
+  color: #9c27b0 !important;
+}
+
+.drone-btn:hover {
+  background: rgba(156, 39, 176, 0.2) !important;
+}
+
 /* Game rules text */
 .game-rules {
   font-size: 13px;

@@ -53,7 +53,7 @@ decodeRouteResponse : Decoder RouteResponse
 decodeRouteResponse =
     Decode.map8
         (\path dist gpx meta elev snapped time diff ->
-            \surface segments ->
+            \surface segments pointSurfaces ->
                 { path = path
                 , distanceKm = dist
                 , gpxBase64 = gpx
@@ -64,6 +64,7 @@ decodeRouteResponse =
                 , difficulty = diff
                 , surfaceBreakdown = surface
                 , segments = segments
+                , pointSurfaces = pointSurfaces
                 }
         )
         (Decode.field "path" (Decode.list decodeCoordinate))
@@ -76,9 +77,10 @@ decodeRouteResponse =
         (Decode.maybe (Decode.field "difficulty" Decode.string))
         |> Decode.andThen
             (\fn ->
-                Decode.map2 fn
+                Decode.map3 fn
                     (Decode.maybe (Decode.field "surface_breakdown" decodeSurfaceBreakdown))
                     (Decode.maybe (Decode.field "segments" (Decode.list decodeSegmentStats)))
+                    (Decode.maybe (Decode.field "point_surfaces" (Decode.list Decode.bool)))
             )
 
 

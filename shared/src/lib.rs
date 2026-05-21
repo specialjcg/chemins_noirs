@@ -114,6 +114,10 @@ pub struct RouteResponse {
     /// Per-segment statistics for multi-point routes
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segments: Option<Vec<SegmentStats>>,
+    /// Per-point paved flag (true = paved, false = unpaved trail/dirt).
+    /// Same length as `path`. Used by frontend to color unpaved segments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point_surfaces: Option<Vec<bool>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

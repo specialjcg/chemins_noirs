@@ -25,9 +25,10 @@ let kmMarkers = []; // Kilometer markers along route
 let poiMarkers = []; // POI markers on map
 let poisVisible = false; // POI toggle state
 let lastPoiBbox = null; // Last fetched POI bbox to avoid re-fetching
+let waterMarkers = []; // Water point markers along current route
 
 // Terrain configuration - Using Terrarium format tiles from AWS
-const TERRAIN_EXAGGERATION = 1.5; // Amplify terrain for better visibility
+const TERRAIN_EXAGGERATION = 2.5; // Amplify terrain for better visibility
 const EARTH_RADIUS_M = 6371000;
 const DRONE_PITCH = 60; // Default pitch for 3D drone view
 
@@ -359,7 +360,7 @@ function ensureMap() {
       }
     });
 
-    // Add main route layer on top
+    // Add main route layer on top (paved = green)
     mapInstance.addLayer({
       id: 'route-line',
       type: 'line',
@@ -372,6 +373,39 @@ function ensureMap() {
         'line-color': '#4dab7b',
         'line-width': 4
       }
+    });
+
+    // Unpaved OSM background overlay (all tracks/paths on map)
+    mapInstance.addSource('osm-unpaved', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+    mapInstance.addLayer({
+      id: 'osm-unpaved-line',
+      type: 'line',
+      source: 'osm-unpaved',
+      layout: { 'line-join': 'round', 'line-cap': 'round', visibility: 'none' },
+      paint: { 'line-color': '#9c27b0', 'line-width': 2, 'line-opacity': 0.7, 'line-dasharray': [3, 2] }
+    });
+
+    // Unpaved route overlay (purple), drawn above paved layer
+    mapInstance.addSource('route-unpaved', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+    mapInstance.addLayer({
+      id: 'route-line-unpaved-outline',
+      type: 'line',
+      source: 'route-unpaved',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#ffffff', 'line-width': 6, 'line-opacity': 0.6 }
+    });
+    mapInstance.addLayer({
+      id: 'route-line-unpaved',
+      type: 'line',
+      source: 'route-unpaved',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#9c27b0', 'line-width': 4 }
     });
 
     // Game walk mode: forward clicks to callback
@@ -411,14 +445,15 @@ function ensureMap() {
   const pitchControl = createPitchControl();
   mapInstance.addControl(pitchControl, 'top-right');
 
+  // Add unpaved paths overlay toggle
+  mapInstance.addControl(createUnpavedControl(), 'top-right');
+
   // Add POI toggle control
   const poiControl = createPoiControl();
   mapInstance.addControl(poiControl, 'top-right');
 
   // Add fullscreen toggle control
   mapInstance.addControl(createFullscreenControl(), 'top-right');
-
-  // Add boucles Baronnies control
 
   // Add map style switcher (topo / satellite / hybrid)
   const styleControl = createStyleSwitcherControl();
@@ -482,9 +517,20 @@ function createPitchControl() {
 
     togglePitch() {
       const currentPitch = this._map.getPitch();
-      const targetPitch = currentPitch < 10 ? 45 : 0;
-      this._map.easeTo({ pitch: targetPitch, duration: 800 });
-      this._button.textContent = targetPitch === 0 ? '45°' : '0°';
+      if (currentPitch < 10) {
+        // Enable terrain + tilt to 55° for visible relief
+        if (!terrainEnabled) {
+          terrainEnabled = true;
+          this._map.setTerrain({ source: 'terrainSource', exaggeration: TERRAIN_EXAGGERATION });
+        }
+        this._map.easeTo({ pitch: 55, duration: 800 });
+        this._button.textContent = '0°';
+      } else {
+        this._map.setTerrain(null);
+        terrainEnabled = false;
+        this._map.easeTo({ pitch: 0, duration: 800 });
+        this._button.textContent = '45°';
+      }
     }
 
     onRemove() {
@@ -493,6 +539,104 @@ function createPitchControl() {
     }
   }
   return new PitchControl();
+}
+
+// ── Unpaved paths overlay (Overpass API) ──────────────────────────────────
+let unpavedEnabled = false;
+let unpavedFetchTimer = null;
+let unpavedFetching = false;
+
+async function fetchUnpavedPaths() {
+  if (!mapInstance || !unpavedEnabled) return;
+  if (mapInstance.getZoom() < 11) {
+    // Too zoomed out — clear and show hint
+    const src = mapInstance.getSource('osm-unpaved');
+    if (src) src.setData({ type: 'FeatureCollection', features: [] });
+    return;
+  }
+  if (unpavedFetching) return;
+  unpavedFetching = true;
+
+  const b = mapInstance.getBounds();
+  const bbox = `${b.getSouth().toFixed(4)},${b.getWest().toFixed(4)},${b.getNorth().toFixed(4)},${b.getEast().toFixed(4)}`;
+  const query = `[out:json][timeout:20];(way["highway"~"^(track|path|footway|bridleway)$"](${bbox}););out geom qt;`;
+
+  try {
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      body: 'data=' + encodeURIComponent(query),
+      signal: AbortSignal.timeout(22000)
+    });
+    if (!res.ok) throw new Error('Overpass ' + res.status);
+    const data = await res.json();
+
+    const features = (data.elements || [])
+      .filter(el => el.type === 'way' && el.geometry)
+      .map(el => ({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: el.geometry.map(p => [p.lon, p.lat]) },
+        properties: { highway: el.tags && el.tags.highway }
+      }));
+
+    const src = mapInstance.getSource('osm-unpaved');
+    if (src && unpavedEnabled) src.setData({ type: 'FeatureCollection', features });
+    console.log('[unpaved] loaded', features.length, 'paths');
+  } catch (e) {
+    console.warn('[unpaved] fetch failed:', e.message);
+  } finally {
+    unpavedFetching = false;
+  }
+}
+
+function scheduleUnpavedFetch() {
+  if (!unpavedEnabled) return;
+  clearTimeout(unpavedFetchTimer);
+  unpavedFetchTimer = setTimeout(fetchUnpavedPaths, 800);
+}
+
+function createUnpavedControl() {
+  class UnpavedControl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      this._btn = document.createElement('button');
+      this._btn.className = 'maplibregl-ctrl-unpaved';
+      this._btn.textContent = '🟣';
+      this._btn.title = 'Afficher/masquer les chemins non-goudronnés';
+      this._btn.onclick = () => this.toggle();
+      this._container.appendChild(this._btn);
+      return this._container;
+    }
+
+    toggle() {
+      unpavedEnabled = !unpavedEnabled;
+      const vis = unpavedEnabled ? 'visible' : 'none';
+      if (this._map.getLayer('osm-unpaved-line')) {
+        this._map.setLayoutProperty('osm-unpaved-line', 'visibility', vis);
+      }
+      this._btn.style.backgroundColor = unpavedEnabled ? '#9c27b0' : '';
+      this._btn.style.color = unpavedEnabled ? 'white' : '';
+
+      if (unpavedEnabled) {
+        fetchUnpavedPaths();
+        this._map.on('moveend', scheduleUnpavedFetch);
+        this._map.on('zoomend', scheduleUnpavedFetch);
+      } else {
+        this._map.off('moveend', scheduleUnpavedFetch);
+        this._map.off('zoomend', scheduleUnpavedFetch);
+        clearTimeout(unpavedFetchTimer);
+        const src = this._map.getSource('osm-unpaved');
+        if (src) src.setData({ type: 'FeatureCollection', features: [] });
+      }
+    }
+
+    onRemove() {
+      this._container.parentNode.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+  return new UnpavedControl();
 }
 
 function createTerrainControl() {
@@ -519,7 +663,7 @@ function createTerrainControl() {
         // Enable 3D terrain with realistic 45° perspective
         this._map.setTerrain({ source: 'terrainSource', exaggeration: TERRAIN_EXAGGERATION });
         this._map.easeTo({
-          pitch: 45,  // Realistic viewing angle
+          pitch: 55,
           duration: 1000
         });
         this._button.classList.add('active');
@@ -778,6 +922,53 @@ function clearPoiMarkers() {
   poiMarkers = [];
 }
 
+function clearWaterMarkers() {
+  waterMarkers.forEach(m => m.remove());
+  waterMarkers = [];
+}
+
+function fetchWaterAlongRoute(coords) {
+  if (!coords || coords.length === 0) return;
+
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  for (const c of coords) {
+    if (c.lat < minLat) minLat = c.lat;
+    if (c.lat > maxLat) maxLat = c.lat;
+    if (c.lon < minLon) minLon = c.lon;
+    if (c.lon > maxLon) maxLon = c.lon;
+  }
+
+  const url = `/api/pois?min_lat=${minLat}&max_lat=${maxLat}&min_lon=${minLon}&max_lon=${maxLon}`;
+  fetch(url)
+    .then(r => r.json())
+    .then(pois => {
+      clearWaterMarkers();
+      const waterPois = pois.filter(p => p.poi_type === 'water');
+      waterPois.forEach(poi => {
+        const el = document.createElement('div');
+        el.style.fontSize = '18px';
+        el.style.cursor = 'pointer';
+        el.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.5))';
+        el.textContent = '💧';
+
+        const label = poi.name || 'Point d\'eau';
+        const popup = new maplibregl.Popup({ offset: 15, closeButton: false })
+          .setText(label);
+
+        const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+          .setLngLat([poi.lon, poi.lat])
+          .setPopup(popup)
+          .addTo(mapInstance);
+
+        waterMarkers.push(marker);
+      });
+      if (waterPois.length > 0) {
+        console.log(`[maplibre] ${waterPois.length} point(s) d'eau le long du parcours`);
+      }
+    })
+    .catch(err => console.warn('[maplibre] water fetch error:', err));
+}
+
 function createFullscreenControl() {
   class FullscreenCtrl {
     onAdd(map) {
@@ -859,6 +1050,54 @@ export function centerOnMarkers(start, end) {
   });
 }
 
+// Latest surface flags, set by setRouteSurfaces port (null = no data)
+let currentRouteSurfaces = null;
+
+export function setRouteSurfaces(surfaces) {
+  currentRouteSurfaces = surfaces; // null or Array<bool>
+  if (surfaces) {
+    const unpavedCount = surfaces.filter(s => s === false).length;
+    console.log('[maplibre] setRouteSurfaces', surfaces.length, 'pts,', unpavedCount, 'unpaved');
+  } else {
+    console.log('[maplibre] setRouteSurfaces null');
+  }
+  _applyUnpavedOverlay();
+}
+
+function _applyUnpavedOverlay() {
+  if (!mapInstance) return;
+  const src = mapInstance.getSource('route-unpaved');
+  if (!src) return;
+
+  if (!currentRouteSurfaces || !currentRoute || currentRoute.length === 0) {
+    src.setData({ type: 'FeatureCollection', features: [] });
+    return;
+  }
+
+  // Build multi-linestring from consecutive unpaved (false) points
+  const features = [];
+  let seg = null;
+
+  for (let i = 0; i < currentRoute.length; i++) {
+    const paved = currentRouteSurfaces[i] !== false; // treat missing as paved
+    if (!paved) {
+      if (!seg) seg = [[currentRoute[i].lon, currentRoute[i].lat]];
+      else seg.push([currentRoute[i].lon, currentRoute[i].lat]);
+      // Connect at boundaries: include last paved point as segment start
+    } else {
+      if (seg && seg.length >= 2) {
+        features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: seg }, properties: {} });
+      }
+      // Start next segment at current paved point so segments connect cleanly
+      seg = [[currentRoute[i].lon, currentRoute[i].lat]];
+    }
+  }
+  if (seg && seg.length >= 2) {
+    features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: seg }, properties: {} });
+  }
+  src.setData({ type: 'FeatureCollection', features });
+}
+
 export function updateRoute(coords) {
   ensureMap();
   console.debug('[maplibre] updateRoute', coords);
@@ -870,9 +1109,12 @@ export function updateRoute(coords) {
       routeSource.setData({ type: 'FeatureCollection', features: [] });
     }
     currentRoute = null;
+    currentRouteSurfaces = null;
+    _applyUnpavedOverlay();
     // Clear km markers when route is cleared
     kmMarkers.forEach(m => m.remove());
     kmMarkers = [];
+    clearWaterMarkers();
     return;
   }
 
@@ -892,6 +1134,7 @@ export function updateRoute(coords) {
   if (routeSource) {
     routeSource.setData({ type: 'FeatureCollection', features: [lineString] });
   }
+  _applyUnpavedOverlay();
 
   updateRouteMetrics(coords);
   animationStartTimestamp = null;
@@ -904,6 +1147,8 @@ export function updateRoute(coords) {
   // une option future. On nettoie ici les markers existants au cas où.
   kmMarkers.forEach(m => m.remove());
   kmMarkers = [];
+
+  fetchWaterAlongRoute(coords);
 }
 
 export function updateSelectionMarkers(start, end) {
@@ -1677,6 +1922,12 @@ export function enterFirstPersonMode(lat, lon, bearing) {
   }
   if (mapInstance.getLayer('route-line-outline')) {
     mapInstance.setLayoutProperty('route-line-outline', 'visibility', 'none');
+  }
+  if (mapInstance.getLayer('route-line-unpaved')) {
+    mapInstance.setLayoutProperty('route-line-unpaved', 'visibility', 'none');
+  }
+  if (mapInstance.getLayer('route-line-unpaved-outline')) {
+    mapInstance.setLayoutProperty('route-line-unpaved-outline', 'visibility', 'none');
   }
   waypointMarkers.forEach(m => m.getElement().style.display = 'none');
 

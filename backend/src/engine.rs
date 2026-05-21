@@ -91,6 +91,8 @@ struct RoadSnap {
     /// Polyline from the projected point on the road to the snap node,
     /// following the road geometry. Empty if target is right at a node.
     road_prefix: Vec<Coordinate>,
+    /// Surface type of the edge this snap landed on (used for coloring).
+    prefix_surface: SurfaceType,
 }
 
 #[derive(Clone)]
@@ -316,6 +318,73 @@ impl RouteEngine {
     /// - `None`: No path exists between start and end
     pub fn find_path(&self, req: &RouteRequest) -> Option<Vec<Coordinate>> {
         self.find_path_with_excluded_edges(req, &HashSet::new())
+    }
+
+    /// Like find_path but also returns per-point paved flags (true = paved).
+    pub fn find_path_with_surfaces(&self, req: &RouteRequest) -> Option<(Vec<Coordinate>, Vec<bool>)> {
+        let start_snap = self.snap_to_road(req.start)?;
+        let end_snap = self.snap_to_road(req.end)?;
+        let start = start_snap.node;
+        let end = end_snap.node;
+
+        let (start, end) = if start == end
+            && start_snap.road_prefix.is_empty()
+            && end_snap.road_prefix.is_empty()
+        {
+            let start_candidates = self.closest_nodes(req.start, 3);
+            let end_candidates = self.closest_nodes(req.end, 3);
+            let mut best = (start, end);
+            let mut best_total = f64::MAX;
+            for &s in &start_candidates {
+                for &e in &end_candidates {
+                    if s != e {
+                        let s_coord = self.nodes[s.index()].coord;
+                        let e_coord = self.nodes[e.index()].coord;
+                        let total = ((s_coord.lat - req.start.lat).powi(2) + (s_coord.lon - req.start.lon).powi(2)).sqrt()
+                            + ((e_coord.lat - req.end.lat).powi(2) + (e_coord.lon - req.end.lon).powi(2)).sqrt();
+                        if total < best_total { best_total = total; best = (s, e); }
+                    }
+                }
+            }
+            best
+        } else {
+            (start, end)
+        };
+
+        let (astar_coords, astar_surfaces) = {
+            let excluded = HashSet::new();
+            let (_, route) = self.run_astar(start, end, req, &excluded)?;
+            expand_path_with_waypoints_and_surfaces(&route, &self.graph, &self.nodes, &self.edge_map)
+        };
+
+        let start_paved = matches!(start_snap.prefix_surface, SurfaceType::Paved);
+        let end_paved = matches!(end_snap.prefix_surface, SurfaceType::Paved);
+
+        let mut full_coords: Vec<Coordinate> = Vec::new();
+        let mut full_surfaces: Vec<bool> = Vec::new();
+
+        let push = |coords: &mut Vec<Coordinate>, surfs: &mut Vec<bool>, c: Coordinate, s: bool| {
+            if coords.last().map_or(true, |last: &Coordinate| {
+                (last.lat - c.lat).abs() > 1e-7 || (last.lon - c.lon).abs() > 1e-7
+            }) {
+                coords.push(c);
+                surfs.push(s);
+            }
+        };
+
+        for &c in &start_snap.road_prefix {
+            push(&mut full_coords, &mut full_surfaces, c, start_paved);
+        }
+        for (&c, &s) in astar_coords.iter().zip(astar_surfaces.iter()) {
+            push(&mut full_coords, &mut full_surfaces, c, s);
+        }
+        let mut end_suffix: Vec<Coordinate> = end_snap.road_prefix;
+        end_suffix.reverse();
+        for &c in &end_suffix {
+            push(&mut full_coords, &mut full_surfaces, c, end_paved);
+        }
+
+        Some((full_coords, full_surfaces))
     }
 
     pub fn find_path_with_excluded_edges(
@@ -665,6 +734,7 @@ impl RouteEngine {
                 return Some(RoadSnap {
                     node: NodeIndex::new(node_idx),
                     road_prefix: vec![],
+                    prefix_surface: SurfaceType::Paved,
                 });
             }
         }
@@ -734,7 +804,7 @@ impl RouteEngine {
             road_prefix.len()
         );
 
-        Some(RoadSnap { node: snap_node, road_prefix })
+        Some(RoadSnap { node: snap_node, road_prefix, prefix_surface: edge_data.surface })
     }
 
     /// Extract all road polylines within a bounding box
@@ -804,6 +874,62 @@ fn point_to_segment_distance(p: Coordinate, a: Coordinate, b: Coordinate) -> (f6
 
     let d = ((p.lat - proj_lat).powi(2) + (p.lon - proj_lon).powi(2)).sqrt();
     (d, t)
+}
+
+/// Like expand_path_with_waypoints but also returns is_paved per coordinate.
+fn expand_path_with_waypoints_and_surfaces(
+    route: &[NodeIndex],
+    graph: &UnGraph<NodeData, EdgeData>,
+    nodes: &[NodeData],
+    edge_map: &HashMap<(usize, usize), petgraph::graph::EdgeIndex>,
+) -> (Vec<Coordinate>, Vec<bool>) {
+    if route.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    if route.len() == 1 {
+        return (vec![nodes[route[0].index()].coord], vec![true]);
+    }
+
+    let mut coords = Vec::with_capacity(route.len() * 3);
+    let mut surfaces = Vec::with_capacity(route.len() * 3);
+    coords.push(nodes[route[0].index()].coord);
+    surfaces.push(true); // first node, surface determined by first edge
+
+    for window in route.windows(2) {
+        let from_idx = window[0];
+        let to_idx = window[1];
+        let is_paved = if let Some(&edge_idx) = edge_map.get(&(from_idx.index(), to_idx.index())) {
+            matches!(graph[edge_idx].surface, SurfaceType::Paved)
+        } else {
+            true
+        };
+
+        if let Some(&edge_idx) = edge_map.get(&(from_idx.index(), to_idx.index())) {
+            let edge_data = &graph[edge_idx];
+            let waypoints = if let Some((edge_source, _)) = graph.edge_endpoints(edge_idx) {
+                if edge_source == from_idx {
+                    edge_data.waypoints.iter().copied().collect::<Vec<_>>()
+                } else {
+                    edge_data.waypoints.iter().rev().copied().collect::<Vec<_>>()
+                }
+            } else {
+                edge_data.waypoints.to_vec()
+            };
+            for wp in waypoints {
+                coords.push(wp);
+                surfaces.push(is_paved);
+            }
+        }
+        coords.push(nodes[to_idx.index()].coord);
+        surfaces.push(is_paved);
+    }
+
+    // Backfill first node's surface from first edge
+    if surfaces.len() > 1 {
+        surfaces[0] = surfaces[1];
+    }
+
+    (coords, surfaces)
 }
 
 /// Expand path with OSM waypoints from edges.

@@ -242,6 +242,7 @@ update msg model =
                         ( { updatedModel | waypoints = markerPositions, originalResponse = Just route }
                         , Cmd.batch
                             [ Ports.updateRoute displayRoute.path
+                            , Ports.setRouteSurfaces displayRoute.pointSurfaces
                             , Ports.updateWaypointMarkers markerPositions
                             ]
                         )
@@ -250,6 +251,7 @@ update msg model =
                         ( applyRoute model route
                         , Cmd.batch
                             [ Ports.updateRoute route.path
+                            , Ports.setRouteSurfaces route.pointSurfaces
                             , Ports.updateWaypointMarkers model.waypoints
                             , case route.metadata of
                                 Just meta ->
@@ -306,6 +308,7 @@ update msg model =
                                     |> (\m -> applyRoute m candidate.route)
                                 , Cmd.batch
                                     [ Ports.updateRoute candidate.route.path
+                                    , Ports.setRouteSurfaces candidate.route.pointSurfaces
                                     , case candidate.route.metadata of
                                         Just metadata ->
                                             Ports.updateBbox metadata.bounds
@@ -335,6 +338,7 @@ update msg model =
                         |> (\m -> applyRoute m candidate.route)
                     , Cmd.batch
                         [ Ports.updateRoute candidate.route.path
+                        , Ports.setRouteSurfaces candidate.route.pointSurfaces
                         , case candidate.route.metadata of
                             Just meta ->
                                 Ports.updateBbox meta.bounds
@@ -767,6 +771,7 @@ update msg model =
                     ( applySavedRoute { model | pending = False, error = Nothing } route waypoints
                     , Cmd.batch
                         ([ Ports.updateRoute route.path
+                         , Ports.setRouteSurfaces route.pointSurfaces
                          , case route.metadata of
                             Just meta ->
                                 Ports.centerOnMarkers { start = meta.start, end = meta.end }
@@ -868,6 +873,7 @@ update msg model =
                     ( applyRoute { model | error = Nothing } route
                     , Cmd.batch
                         [ Ports.updateRoute route.path
+                        , Ports.setRouteSurfaces route.pointSurfaces
                         , case route.metadata of
                             Just meta ->
                                 Ports.centerOnMarkers { start = meta.start, end = meta.end }
@@ -1533,6 +1539,9 @@ update msg model =
 
                 _ ->
                     ( model, Cmd.none )
+
+        ToggleCameraViewMode ->
+            ( model, Ports.toggleCameraViewMode () )
 
         GameKeyLeft ->
             case model.appMode of
@@ -2335,7 +2344,10 @@ rebuildAndDisplayRoute model =
                     applyFreehandOverrides model.freehandSegments model.freehandDrawing model.waypoints origResponse
             in
             ( { model | lastResponse = Just displayRoute }
-            , Ports.updateRoute displayRoute.path
+            , Cmd.batch
+                [ Ports.updateRoute displayRoute.path
+                , Ports.setRouteSurfaces displayRoute.pointSurfaces
+                ]
             )
 
         Nothing ->
