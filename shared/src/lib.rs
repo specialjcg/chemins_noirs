@@ -96,8 +96,6 @@ pub struct RouteResponse {
     pub metadata: Option<RouteMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elevation_profile: Option<ElevationProfile>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub terrain: Option<TerrainMesh>,
     /// Snapped waypoint positions (on-road) for multi-point routes.
     /// Frontend uses these to place markers exactly on the route line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,20 +133,6 @@ pub struct ApiError {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TerrainMesh {
-    pub positions: Vec<f32>, // flat array xyz
-    pub uvs: Vec<f32>,       // flat array uv
-    pub indices: Vec<u32>,   // triangle indices
-    pub min_elevation: f32,
-    pub max_elevation: f32,
-    pub center_lat: f64,
-    pub center_lon: f64,
-    pub scale_factor: f32,
-    pub elevation_scale: f32,
-    pub bounds: RouteBounds, // padded bounds used for mesh
-    pub segments: u32,       // segments per axis
-}
 
 pub fn default_weight() -> f64 {
     1.0

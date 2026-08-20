@@ -5,7 +5,7 @@ Approche fonctionnelle pure : les ports sont des effets controles.
 -}
 
 import Json.Encode as Encode
-import Types exposing (Coordinate, ElevationGrid, IgnBuilding, RouteBounds, StyledRoad, VegetationZone)
+import Types exposing (Coordinate, RouteBounds)
 
 
 -- PORTS OUT (Elm -> JavaScript) — MapLibre map
@@ -79,49 +79,6 @@ port setElevationHoverMarker : Maybe { lat : Float, lon : Float } -> Cmd msg
 port centerMapOn : { lat : Float, lon : Float } -> Cmd msg
 
 
--- Game ports (Elm -> JavaScript) — minimal
-
-
-port setMapVisible : Bool -> Cmd msg
-
-
-port showTopoOverlay : { show : Bool, lat : Float, lon : Float } -> Cmd msg
-
-
-port enterGameView : { lat : Float, lon : Float, bearing : Float } -> Cmd msg
-
-
-port updateGameCamera : { lat : Float, lon : Float, bearing : Float } -> Cmd msg
-
-
-port exitGameView : () -> Cmd msg
-
-
-port toggleCameraViewMode : () -> Cmd msg
-
-
-
--- Three.js renderer ports (Elm -> JS)
--- Note : init / camera / destroy passent par enterGameView / updateGameCamera / exitGameView ci-dessus
--- (le subscriber main.js route vers Three.js + MapLibre simultanément).
-
-
-port world3dSetTerrain : ElevationGrid -> Cmd msg
-
-
-port world3dSetRoads : List StyledRoad -> Cmd msg
-
-
-port world3dSetVegetation : List VegetationZone -> Cmd msg
-
-
-port world3dSetBuildings : List IgnBuilding -> Cmd msg
-
-
-port world3dSetControlPoints : List { lat : Float, lon : Float, label : String, found : Bool } -> Cmd msg
-
-
-
 -- PORTS IN (JavaScript -> Elm) — MapLibre events
 
 
@@ -153,23 +110,3 @@ port mapRouteHover : ({ index : Int } -> msg) -> Sub msg
 
 
 port closeLoopRequested : (Bool -> msg) -> Sub msg
-
-
--- Game ports (JavaScript -> Elm) — minimal
-
-
-port gameWheelReceived : (Float -> msg) -> Sub msg
-
-
-port gameMapClicked : ({ lat : Float, lon : Float } -> msg) -> Sub msg
-
-
-port pixelToLatLon : { x : Float, y : Float } -> Cmd msg
-
-
-port pixelToLatLonResult : ({ lat : Float, lon : Float } -> msg) -> Sub msg
-
-
-port gameDragReceived : (Float -> msg) -> Sub msg
-
-

@@ -199,35 +199,6 @@ type Msg
     | ClearFreehandSegment Int
     | NoOp
       -- Orienteering game
-    | EnterOrienteeringMode
-    | ExitOrienteeringMode
-    | StartGame
-    | GameTick Int
-    | PlayerClickedDestination Float Float
-    | PlayerPositionUpdate Float Float
-    | PlayerBearingChanged Float
-    | PlayerMovementFinished
-    | GameRouteFetched (Result Http.Error RouteResponse)
-    | ToggleTopoOverlay
-    | PauseGame
-    | ResumeGame
-    | GameSpeedUp
-    | GameSpeedDown
-    | SetTargetBearing Float
-    | ClearTargetBearing
-    | ToggleCameraViewMode
-    | GameKeyLeft
-    | GameKeyRight
-    | GameKeyForward
-    | RoadsFetched (Result Http.Error (List StyledRoad))
-    | VegetationFetched (Result Http.Error (List VegetationZone))
-    | IgnBuildingsFetched (Result Http.Error (List IgnBuilding))
-    | ElevationGridFetched (Result Http.Error ElevationGrid)
-    | BuildingsFetched (Result Http.Error (List { center : Coordinate, polygon : List Coordinate }))
-    | GameMouseDrag Float
-    | GameMouseDown Float
-    | GameMouseUp Float
-    | GameMapClicked { lat : Float, lon : Float }
 
 
 
@@ -259,50 +230,6 @@ type AnimationState
 
 type AppMode
     = Planning
-    | Orienteering GameState
-
-
-type alias GameState =
-    { controlPoints : List ControlPoint
-    , currentPointIndex : Int
-    , playerPosition : Coordinate
-    , playerBearing : Float
-    , elapsedMs : Int
-    , gameStatus : GameStatus
-    , movePath : Maybe (List Coordinate)
-    , moveProgress : Float
-    , totalDistanceM : Float
-    , showTopoOverlay : Bool
-    , nearestCpDistance : Maybe Float
-    , foundFlash : Bool
-    , paused : Bool
-    , speedMultiplier : Float
-    , targetBearing : Maybe Float
-    , roads : List StyledRoad
-    , vegetation : List VegetationZone
-    , ign_buildings : List IgnBuilding
-    , elevationGrid : Maybe ElevationGrid
-    , buildings : List { center : Coordinate, polygon : List Coordinate }
-    , routePath : Array.Array Coordinate
-    , routeIndex : Int
-    , isDragging : Bool
-    , lastMouseX : Float
-    , dragStartX : Float
-    , debugLog : List String
-    }
-
-
-type alias ControlPoint =
-    { position : Coordinate
-    , label : String
-    , found : Bool
-    }
-
-
-type GameStatus
-    = GameSetup
-    | GameRunning
-    | GameFinished
 
 
 
@@ -312,44 +239,6 @@ type GameStatus
 type alias Coordinate =
     { lat : Float
     , lon : Float
-    }
-
-
-type alias Coord3D =
-    { lat : Float
-    , lon : Float
-    , alt : Float
-    }
-
-
-type alias ElevationGrid =
-    { grid : List (List Float)
-    , minAlt : Float
-    , maxAlt : Float
-    , originLat : Float
-    , originLon : Float
-    , cellSizeM : Float
-    , rows : Int
-    , cols : Int
-    }
-
-
-type alias StyledRoad =
-    { nature : String
-    , coords : List Coord3D
-    }
-
-
-type alias VegetationZone =
-    { nature : String
-    , coords : List Coord3D
-    }
-
-
-type alias IgnBuilding =
-    { nature : String
-    , hauteur : Float
-    , coords : List Coord3D
     }
 
 
@@ -546,62 +435,6 @@ haversineMeters a b =
             sinDLat * sinDLat + cos lat1 * cos lat2 * sinDLon * sinDLon
     in
     2 * r * asin (sqrt h)
-
-
-isNearControlPoint : Coordinate -> ControlPoint -> Bool
-isNearControlPoint playerPos cp =
-    haversineMeters playerPos cp.position < 30
-
-
-initialGameState : List Coordinate -> GameState
-initialGameState waypoints =
-    let
-        -- First waypoint is start (not a control point to find)
-        -- Remaining waypoints are control points
-        cps =
-            List.drop 1 waypoints
-
-        controlPoints =
-            List.indexedMap
-                (\i coord ->
-                    { position = coord
-                    , label = String.fromInt (i + 1)
-                    , found = False
-                    }
-                )
-                cps
-
-        startPos =
-            List.head waypoints
-                |> Maybe.withDefault { lat = 0, lon = 0 }
-    in
-    { controlPoints = controlPoints
-    , currentPointIndex = 0
-    , playerPosition = startPos
-    , playerBearing = 0
-    , elapsedMs = 0
-    , gameStatus = GameSetup
-    , movePath = Nothing
-    , moveProgress = 0
-    , totalDistanceM = 0
-    , showTopoOverlay = False
-    , nearestCpDistance = Nothing
-    , foundFlash = False
-    , paused = False
-    , speedMultiplier = 1.0
-    , targetBearing = Nothing
-    , roads = []
-    , vegetation = []
-    , ign_buildings = []
-    , elevationGrid = Nothing
-    , buildings = []
-    , routePath = Array.empty
-    , routeIndex = 0
-    , isDragging = False
-    , lastMouseX = 0
-    , dragStartX = 0
-    , debugLog = []
-    }
 
 
 routeBounds : RouteResponse -> RouteBounds

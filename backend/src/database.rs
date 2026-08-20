@@ -283,7 +283,6 @@ mod tests {
                 total_ascent: 100.0,
                 total_descent: 0.0,
             }),
-            terrain: None,
             snapped_waypoints: None,
             estimated_time_minutes: None,
             difficulty: None,
@@ -455,7 +454,6 @@ mod tests {
             gpx_base64: "bW9jaw==".to_string(),
             metadata: None,
             elevation_profile: None, // No elevation data
-            terrain: None,
             snapped_waypoints: None,
             estimated_time_minutes: None,
             difficulty: None,

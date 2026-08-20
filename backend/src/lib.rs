@@ -1,4 +1,3 @@
-pub mod buildings;
 pub mod database;
 pub mod dem;
 pub mod elevation;
@@ -14,7 +13,6 @@ pub mod partial_graph;
 pub mod poi;
 pub mod routing;
 pub mod saved_routes_handlers;
-pub mod terrain;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -124,7 +122,6 @@ async fn route_handler(
         gpx_base64,
         metadata: Some(metadata),
         elevation_profile: None, // Not available in this handler (legacy backend)
-        terrain: None,
         snapped_waypoints: None,
         estimated_time_minutes: None,
         difficulty: None,

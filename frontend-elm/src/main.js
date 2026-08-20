@@ -75,13 +75,11 @@ import { Elm } from './Main.elm';
 import * as MapLibreMap from './maplibre_map.js';
 
 // Renderer Three.js pour la Course d'Orientation
-import * as World3D from './world3d.js';
 
 // Initialiser l'application Elm
 const app = Elm.Main.init({
   node: document.getElementById('app')
 });
-// Expose app globally for maplibre_map.js game walk click handler
 window._elmApp = app;
 
 // ============================================================
@@ -190,9 +188,8 @@ app.ports.centerMapOn.subscribe(({ lat, lon }) => {
 // PORTS IN : JavaScript → Elm
 // ============================================================
 
-// Écouter les clics sur la carte (pas en mode jeu walk)
+// Écouter les clics sur la carte
 window.addEventListener('map-click', (event) => {
-  if (gameWalkActive) return; // Game walk mode handles clicks via gameMapClicked port
   console.log('[JS→Elm] map-click', event.detail);
   app.ports.mapClickReceived.send({
     lat: event.detail.lat,
@@ -380,176 +377,5 @@ window.addEventListener('route-hover', (event) => {
     }
   }
 })();
-
-// ============================================================
-// ORIENTEERING GAME PORTS (minimal — most logic is in Elm)
-// ============================================================
-
-// Show topo overlay centered on player position (overhead view)
-app.ports.showTopoOverlay.subscribe(({ show, lat, lon }) => {
-  if (!show) return;
-  const mapEl = document.getElementById('map');
-  if (mapEl) showMapOverlay(mapEl);
-  // Make game container transparent to clicks so map receives them,
-  // but keep HUD buttons clickable (they have pointer-events: auto)
-  const gameContainer = document.querySelector('.app-container.game-mode');
-  if (gameContainer) {
-    gameContainer.style.setProperty('z-index', '100001', 'important');
-    gameContainer.style.setProperty('pointer-events', 'none', 'important');
-  }
-  // Register topo click handler for azimut (once)
-  MapLibreMap.onTopoOverlayClick((lat, lon) => {
-    console.log('[main.js] Topo click → Elm azimut:', lat, lon);
-    app.ports.gameMapClicked.send({ lat, lon });
-  });
-  MapLibreMap.showTopoOverlayMode(true);
-  setTimeout(() => {
-    MapLibreMap.centerMapOnCoord(lat, lon);
-  }, 200);
-});
-
-function showMapOverlay(mapEl) {
-  mapEl.style.position = 'fixed';
-  mapEl.style.top = '0';
-  mapEl.style.left = '0';
-  mapEl.style.width = '100vw';
-  mapEl.style.height = '100vh';
-  mapEl.style.zIndex = '99999';
-  mapEl.style.maxWidth = 'none';
-  mapEl.style.borderRadius = '0';
-  mapEl.style.border = 'none';
-  mapEl.style.margin = '0';
-  mapEl.style.visibility = 'visible';
-  mapEl.style.display = '';
-  setTimeout(() => {
-    window.dispatchEvent(new Event('resize'));
-  }, 50);
-}
-
-function hideMapOverlay(mapEl) {
-  mapEl.style.visibility = 'hidden';
-  mapEl.style.position = 'absolute';
-  mapEl.style.zIndex = '-1';
-}
-
-// Game scroll wheel → Elm (only when map overlay is not visible)
-document.addEventListener('wheel', (e) => {
-  const mapEl = document.getElementById('map');
-  if (mapEl && mapEl.style.visibility !== 'hidden' && mapEl.style.zIndex === '99999') return; // topo overlay active
-  app.ports.gameWheelReceived.send(e.deltaY);
-}, { passive: true });
-
-// Enter game walk mode (topo map at ground level)
-let gameWalkActive = false;
-let mapDragStartX = null;
-
-let gameClickRegistered = false;
-
-app.ports.enterGameView.subscribe(({ lat, lon, bearing }) => {
-  console.log('[main.js] enterGameView received', lat, lon, bearing);
-  const mapEl = document.getElementById('map');
-  if (mapEl) hideMapOverlay(mapEl);
-  gameWalkActive = true;
-
-  // Register click handler once
-  if (!gameClickRegistered) {
-    gameClickRegistered = true;
-    MapLibreMap.onGameWalkClick((lat, lon) => {
-      console.log('[main.js] Forwarding click to Elm:', lat, lon);
-      app.ports.gameMapClicked.send({ lat, lon });
-    });
-  }
-
-  // Mount Three.js renderer. Elm renders the <div id="world3d-root"> in the same
-  // frame as StartGame, so the div is in the DOM by the time this port subscriber runs.
-  // Any payloads (terrain/roads/...) that arrived BEFORE init() are cached in world3d.js
-  // and replayed on init.
-  World3D.init({ lat, lon, bearing });
-});
-
-// Update game camera (each step/rotation)
-let cameraUpdateCount = 0;
-app.ports.updateGameCamera.subscribe(({ lat, lon, bearing }) => {
-  cameraUpdateCount++;
-  // Hide MapLibre when in 3D mode (returning from topo overlay)
-  if (gameWalkActive) {
-    const mapEl = document.getElementById('map');
-    if (mapEl && mapEl.style.visibility !== 'hidden') {
-      hideMapOverlay(mapEl);
-      // Restore game container after topo overlay (only if it was modified)
-      const gameContainer = document.querySelector('.app-container.game-mode');
-      if (gameContainer) {
-        gameContainer.style.setProperty('z-index', '10', 'important');
-        gameContainer.style.setProperty('pointer-events', '', '');
-      }
-      MapLibreMap.showTopoOverlayMode(false);
-    }
-  }
-  // Update Three.js camera (high-frequency, kept light)
-  World3D.updateCamera({ lat, lon, bearing });
-});
-
-// Toggle drone/FPV camera mode
-app.ports.toggleCameraViewMode.subscribe(() => {
-  World3D.toggleViewMode();
-});
-
-// Exit game, restore normal map
-app.ports.exitGameView.subscribe(() => {
-  gameWalkActive = false;
-  const mapEl = document.getElementById('map');
-  if (mapEl) showMapOverlay(mapEl);
-  World3D.destroy();
-});
-
-// ============================================================
-// Three.js scene data ports (Elm → world3d.js)
-// ============================================================
-app.ports.world3dSetTerrain.subscribe((grid) => {
-  console.log('[Elm→JS] world3dSetTerrain', grid.rows, 'x', grid.cols);
-  World3D.setTerrain(grid);
-});
-
-app.ports.world3dSetRoads.subscribe((roads) => {
-  console.log('[Elm→JS] world3dSetRoads', roads.length);
-  World3D.setRoads(roads);
-});
-
-app.ports.world3dSetVegetation.subscribe((zones) => {
-  console.log('[Elm→JS] world3dSetVegetation', zones.length);
-  World3D.setVegetation(zones);
-});
-
-app.ports.world3dSetBuildings.subscribe((buildings) => {
-  console.log('[Elm→JS] world3dSetBuildings', buildings.length);
-  World3D.setBuildings(buildings);
-});
-
-app.ports.world3dSetControlPoints.subscribe((cps) => {
-  console.log('[Elm→JS] world3dSetControlPoints', cps.length);
-  World3D.setControlPoints(cps);
-});
-
-// ============================================================
-// MOUSE DRAG → Elm (rAF throttled for smooth camera rotation)
-// ============================================================
-// Batches mousemove events at display refresh rate (~60fps)
-// instead of raw event rate (100+ per second)
-let pendingMouseX = null;
-let dragRafId = null;
-
-document.addEventListener('mousemove', (e) => {
-  pendingMouseX = e.clientX;
-  if (!dragRafId) {
-    dragRafId = requestAnimationFrame(() => {
-      if (pendingMouseX !== null) {
-        app.ports.gameDragReceived.send(pendingMouseX);
-        pendingMouseX = null;
-      }
-      dragRafId = null;
-    });
-  }
-});
-
 
 console.log('✅ Elm application initialized with MapLibre ports');
