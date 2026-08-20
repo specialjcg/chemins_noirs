@@ -307,6 +307,68 @@ async fn loop_route_handler(
     }
 }
 
+/// Bounding box covering `points`, widened by a ~5km margin.
+fn bbox_with_margin(points: &[Coordinate]) -> BoundingBox {
+    let mut min_lat = f64::MAX;
+    let mut max_lat = f64::MIN;
+    let mut min_lon = f64::MAX;
+    let mut max_lon = f64::MIN;
+
+    for coord in points {
+        min_lat = min_lat.min(coord.lat);
+        max_lat = max_lat.max(coord.lat);
+        min_lon = min_lon.min(coord.lon);
+        max_lon = max_lon.max(coord.lon);
+    }
+
+    let margin_deg = 5.0 / 111.0; // ~5km in degrees
+    BoundingBox {
+        min_lat: (min_lat - margin_deg).max(-90.0),
+        max_lat: (max_lat + margin_deg).min(90.0),
+        min_lon: (min_lon - margin_deg).clamp(-180.0, 180.0),
+        max_lon: (max_lon + margin_deg).clamp(-180.0, 180.0),
+    }
+}
+
+/// Split waypoints into contiguous chunks whose bounding box stays within the
+/// graph size limit. Long imported traces (a GPX crossing several regions) would
+/// otherwise be rejected outright: one graph covering the whole trace is both
+/// refused by `BoundingBox::validate` and far too costly to build.
+///
+/// Each chunk restarts on the last point of the previous one, so consecutive
+/// chunks share a waypoint and the routed path stays continuous.
+///
+/// Returns inclusive `(start, end)` index pairs into `points`, or an error when a
+/// single pair of consecutive waypoints is already too far apart to ever fit —
+/// no split can rescue that case.
+fn chunk_points(points: &[Coordinate]) -> Result<Vec<(usize, usize)>, String> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+
+    while start + 1 < points.len() {
+        // Grow the chunk while the bbox of points[start..=end] stays valid.
+        let mut end = start + 1;
+        if bbox_with_margin(&points[start..=end]).validate().is_err() {
+            return Err(format!(
+                "waypoints {} and {} are too far apart to route (bbox exceeds the graph size limit)",
+                start + 1,
+                end + 1
+            ));
+        }
+
+        while end + 1 < points.len()
+            && bbox_with_margin(&points[start..=end + 1]).validate().is_ok()
+        {
+            end += 1;
+        }
+
+        chunks.push((start, end));
+        start = end;
+    }
+
+    Ok(chunks)
+}
+
 /// Handler for /api/route/multi - optimized multi-waypoint routing with single graph generation
 async fn multi_route_handler(
     State(config): State<Arc<PartialGraphConfig>>,
@@ -332,37 +394,16 @@ async fn multi_route_handler(
         points.push(req.waypoints[0]);
     }
 
-    // Calculate bounding box that encompasses ALL waypoints
-    let mut min_lat = f64::MAX;
-    let mut max_lat = f64::MIN;
-    let mut min_lon = f64::MAX;
-    let mut max_lon = f64::MIN;
+    // Split into chunks small enough to build a graph for. A short trace yields a
+    // single chunk and the behaviour is unchanged; a long one is routed piecewise.
+    let chunks = chunk_points(&points)
+        .map_err(|err_msg| (StatusCode::BAD_REQUEST, format!("Invalid request: {}", err_msg)))?;
 
-    for coord in &points {
-        min_lat = min_lat.min(coord.lat);
-        max_lat = max_lat.max(coord.lat);
-        min_lon = min_lon.min(coord.lon);
-        max_lon = max_lon.max(coord.lon);
-    }
-
-    // Add 5km margin around all points (optimized for user's use case)
-    let margin_deg = 5.0 / 111.0; // ~5km in degrees
-    let bbox = BoundingBox {
-        min_lat: (min_lat - margin_deg).max(-90.0),
-        max_lat: (max_lat + margin_deg).min(90.0),
-        min_lon: (min_lon - margin_deg).clamp(-180.0, 180.0),
-        max_lon: (max_lon + margin_deg).clamp(-180.0, 180.0),
-    };
-
-    // Validate bbox size to prevent DoS attacks
-    if let Err(err_msg) = bbox.validate() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("Invalid request: {}", err_msg),
-        ));
-    }
-
-    let engine = get_or_build_engine(&config, bbox).await?;
+    tracing::info!(
+        "Routing {} waypoints in {} chunk(s)",
+        points.len(),
+        chunks.len()
+    );
 
     // Helper: push coordinate only if it differs from the last one (dedup)
     let push_dedup = |coords: &mut Vec<Coordinate>, c: Coordinate| {
@@ -388,67 +429,81 @@ async fn multi_route_handler(
     let mut segment_boundaries: Vec<(usize, usize)> = Vec::new();
 
     let t_pathfinding = std::time::Instant::now();
-    for i in 0..points.len() - 1 {
-        let segment_req = RouteRequest {
-            start: points[i],
-            end: points[i + 1],
-            w_pop: req.w_pop,
-            w_paved: req.w_paved,
-        };
+    for (chunk_idx, &(chunk_start, chunk_end)) in chunks.iter().enumerate() {
+        // One graph per chunk. ENGINE_CACHE holds a single entry, so each chunk
+        // evicts the previous one; chunks are routed in order and appended.
+        let bbox = bbox_with_margin(&points[chunk_start..=chunk_end]);
+        tracing::info!(
+            "Chunk {}/{}: waypoints {}..={}",
+            chunk_idx + 1,
+            chunks.len(),
+            chunk_start + 1,
+            chunk_end + 1
+        );
+        let engine = get_or_build_engine(&config, bbox).await?;
 
-        let t_seg = std::time::Instant::now();
-        match engine.find_path_with_surfaces(&segment_req) {
-            Some((path, seg_surfaces)) => {
-                tracing::info!(
-                    "PERF segment {}/{}: {:.0}ms ({} pts)",
-                    i + 1,
-                    points.len() - 1,
-                    t_seg.elapsed().as_secs_f64() * 1000.0,
-                    path.len()
-                );
+        for i in chunk_start..chunk_end {
+            let segment_req = RouteRequest {
+                start: points[i],
+                end: points[i + 1],
+                w_pop: req.w_pop,
+                w_paved: req.w_paved,
+            };
 
-                // Collect snapped positions: path starts at snap(points[i]),
-                // ends at snap(points[i+1])
-                if i == 0 {
-                    snapped_waypoints.push(path[0]);
-                }
-                if let Some(&last) = path.last() {
-                    snapped_waypoints.push(last);
-                }
-
-                // Record start index for this segment
-                let actual_start = if all_coords.is_empty() { 0 } else { all_coords.len() - 1 };
-
-                // Add the routed path (dedup avoids duplicate at segment boundaries)
-                for (&coord, &surf) in path.iter().zip(seg_surfaces.iter()) {
-                    let prev_len = all_coords.len();
-                    push_dedup(&mut all_coords, coord);
-                    if all_coords.len() > prev_len {
-                        all_surfaces.push(surf);
-                    }
-                }
-
-                let end_idx = all_coords.len() - 1;
-                segment_boundaries.push((if i == 0 { 0 } else { actual_start }, end_idx));
-
-                // Calculate total distance so far
-                let segment_distance: f64 = all_coords
-                    .windows(2)
-                    .map(|pair| haversine_km(pair[0], pair[1]))
-                    .sum();
-                total_distance = segment_distance;
-            }
-            None => {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    format!(
-                        "No path found for segment {} -> {} (waypoints {}-{})",
+            let t_seg = std::time::Instant::now();
+            match engine.find_path_with_surfaces(&segment_req) {
+                Some((path, seg_surfaces)) => {
+                    tracing::info!(
+                        "PERF segment {}/{}: {:.0}ms ({} pts)",
                         i + 1,
-                        i + 2,
-                        points[i].lat,
-                        points[i + 1].lat
-                    ),
-                ));
+                        points.len() - 1,
+                        t_seg.elapsed().as_secs_f64() * 1000.0,
+                        path.len()
+                    );
+
+                    // Collect snapped positions: path starts at snap(points[i]),
+                    // ends at snap(points[i+1])
+                    if i == 0 {
+                        snapped_waypoints.push(path[0]);
+                    }
+                    if let Some(&last) = path.last() {
+                        snapped_waypoints.push(last);
+                    }
+
+                    // Record start index for this segment
+                    let actual_start = if all_coords.is_empty() { 0 } else { all_coords.len() - 1 };
+
+                    // Add the routed path (dedup avoids duplicate at segment boundaries)
+                    for (&coord, &surf) in path.iter().zip(seg_surfaces.iter()) {
+                        let prev_len = all_coords.len();
+                        push_dedup(&mut all_coords, coord);
+                        if all_coords.len() > prev_len {
+                            all_surfaces.push(surf);
+                        }
+                    }
+
+                    let end_idx = all_coords.len() - 1;
+                    segment_boundaries.push((if i == 0 { 0 } else { actual_start }, end_idx));
+
+                    // Calculate total distance so far
+                    let segment_distance: f64 = all_coords
+                        .windows(2)
+                        .map(|pair| haversine_km(pair[0], pair[1]))
+                        .sum();
+                    total_distance = segment_distance;
+                }
+                None => {
+                    return Err((
+                        StatusCode::NOT_FOUND,
+                        format!(
+                            "No path found for segment {} -> {} (waypoints {}-{})",
+                            i + 1,
+                            i + 2,
+                            points[i].lat,
+                            points[i + 1].lat
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -799,4 +854,54 @@ fn bbox_from_center(center: Coordinate, radius_km: f64) -> BoundingBox {
 
     // Note: validation should be done by the caller if needed
     bbox
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn c(lat: f64, lon: f64) -> Coordinate {
+        Coordinate { lat, lon }
+    }
+
+    /// A trace small enough for one graph must stay a single chunk, so short
+    /// routes keep the exact behaviour they had before chunking.
+    #[test]
+    fn short_trace_is_one_chunk() {
+        let points = vec![
+            c(45.930, 4.577),
+            c(45.933, 4.578),
+            c(45.940, 4.577),
+        ];
+        assert_eq!(chunk_points(&points).unwrap(), vec![(0, 2)]);
+    }
+
+    /// A trace spanning several regions is split, and consecutive chunks share a
+    /// waypoint so the concatenated path has no gap.
+    #[test]
+    fn long_trace_is_split_on_shared_waypoints() {
+        // Charente -> Beaujolais, the span that used to be rejected outright.
+        let points: Vec<Coordinate> = (0..15)
+            .map(|i| c(45.93 + 0.05 * i as f64, 0.82 + 0.27 * i as f64))
+            .collect();
+
+        let chunks = chunk_points(&points).unwrap();
+        assert!(chunks.len() > 1, "expected a split, got {:?}", chunks);
+        assert_eq!(chunks.first().unwrap().0, 0);
+        assert_eq!(chunks.last().unwrap().1, points.len() - 1);
+        for pair in chunks.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0, "chunks must share a waypoint");
+        }
+        for &(start, end) in &chunks {
+            assert!(start < end, "a chunk must span at least one segment");
+            assert!(bbox_with_margin(&points[start..=end]).validate().is_ok());
+        }
+    }
+
+    /// Two consecutive waypoints too far apart cannot be rescued by any split.
+    #[test]
+    fn unroutable_pair_is_rejected() {
+        let points = vec![c(45.93, 0.82), c(46.64, 4.58)];
+        assert!(chunk_points(&points).is_err());
+    }
 }
