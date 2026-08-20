@@ -330,6 +330,71 @@ fn bbox_with_margin(points: &[Coordinate]) -> BoundingBox {
     }
 }
 
+/// Insert intermediate coordinates so that every consecutive pair fits within the
+/// graph size limit on its own.
+///
+/// Two clicks far apart — Paris and Lyon, say — form a single pair whose bounding
+/// box exceeds the limit, and no grouping of waypoints can fix that. Splitting the
+/// pair along the straight line between them turns it into several routable hops.
+/// The inserted anchors constrain the route to roughly follow that line.
+///
+/// Returns the densified coordinates alongside a flag per coordinate marking the
+/// ones the caller actually asked for, so snapped positions and per-segment stats
+/// stay aligned with the original waypoints.
+fn densify_points(points: &[Coordinate]) -> Result<(Vec<Coordinate>, Vec<bool>), String> {
+    // A pair needing more splits than this is beyond anything a hiking route needs;
+    // bail out rather than spin.
+    const MAX_SPLITS: usize = 64;
+
+    let mut dense = Vec::with_capacity(points.len());
+    let mut is_original = Vec::with_capacity(points.len());
+
+    for (i, pair) in points.windows(2).enumerate() {
+        let (a, b) = (pair[0], pair[1]);
+
+        // Smallest split count whose sub-pairs all fit. Sub-pairs are evenly spaced,
+        // so checking the first one covers them all.
+        let mut splits = 1;
+        while splits <= MAX_SPLITS {
+            let step = Coordinate {
+                lat: a.lat + (b.lat - a.lat) / splits as f64,
+                lon: a.lon + (b.lon - a.lon) / splits as f64,
+            };
+            if bbox_with_margin(&[a, step]).validate().is_ok() {
+                break;
+            }
+            splits += 1;
+        }
+
+        if splits > MAX_SPLITS {
+            return Err(format!(
+                "waypoints {} and {} are too far apart to route",
+                i + 1,
+                i + 2
+            ));
+        }
+
+        dense.push(a);
+        is_original.push(true);
+
+        for k in 1..splits {
+            let t = k as f64 / splits as f64;
+            dense.push(Coordinate {
+                lat: a.lat + (b.lat - a.lat) * t,
+                lon: a.lon + (b.lon - a.lon) * t,
+            });
+            is_original.push(false);
+        }
+    }
+
+    if let Some(&last) = points.last() {
+        dense.push(last);
+        is_original.push(true);
+    }
+
+    Ok((dense, is_original))
+}
+
 /// Split waypoints into contiguous chunks whose bounding box stays within the
 /// graph size limit. Long imported traces (a GPX crossing several regions) would
 /// otherwise be rejected outright: one graph covering the whole trace is both
@@ -348,9 +413,11 @@ fn chunk_points(points: &[Coordinate]) -> Result<Vec<(usize, usize)>, String> {
     while start + 1 < points.len() {
         // Grow the chunk while the bbox of points[start..=end] stays valid.
         let mut end = start + 1;
+        // densify_points guarantees every consecutive pair fits; this only fires on
+        // degenerate input (identical or non-finite coordinates).
         if bbox_with_margin(&points[start..=end]).validate().is_err() {
             return Err(format!(
-                "waypoints {} and {} are too far apart to route (bbox exceeds the graph size limit)",
+                "waypoints {} and {} cannot be routed (invalid bounding box)",
                 start + 1,
                 end + 1
             ));
@@ -394,10 +461,23 @@ async fn multi_route_handler(
         points.push(req.waypoints[0]);
     }
 
-    // Split into chunks small enough to build a graph for. A short trace yields a
-    // single chunk and the behaviour is unchanged; a long one is routed piecewise.
+    // Split pairs that are too far apart on their own, then group what remains into
+    // chunks small enough to build a graph for. A short trace yields a single chunk
+    // and the behaviour is unchanged; a long one is routed piecewise.
+    let requested_count = points.len();
+    let (points, is_original) = densify_points(&points)
+        .map_err(|err_msg| (StatusCode::BAD_REQUEST, format!("Invalid request: {}", err_msg)))?;
+
     let chunks = chunk_points(&points)
         .map_err(|err_msg| (StatusCode::BAD_REQUEST, format!("Invalid request: {}", err_msg)))?;
+
+    if points.len() > requested_count {
+        tracing::info!(
+            "Densified {} waypoints to {} (inserted anchors for long legs)",
+            requested_count,
+            points.len()
+        );
+    }
 
     tracing::info!(
         "Routing {} waypoints in {} chunk(s)",
@@ -425,8 +505,10 @@ async fn multi_route_handler(
     let mut all_surfaces: Vec<bool> = Vec::new();
     let mut snapped_waypoints: Vec<Coordinate> = Vec::new();
     let mut total_distance = 0.0;
-    // Track segment boundaries: (start_idx, end_idx) in all_coords
+    // Track segment boundaries: (start_idx, end_idx) in all_coords. Boundaries are
+    // recorded at requested waypoints only, so inserted anchors stay invisible.
     let mut segment_boundaries: Vec<(usize, usize)> = Vec::new();
+    let mut current_segment_start = 0usize;
 
     let t_pathfinding = std::time::Instant::now();
     for (chunk_idx, &(chunk_start, chunk_end)) in chunks.iter().enumerate() {
@@ -462,16 +544,11 @@ async fn multi_route_handler(
                     );
 
                     // Collect snapped positions: path starts at snap(points[i]),
-                    // ends at snap(points[i+1])
+                    // ends at snap(points[i+1]). Anchors inserted by densify_points
+                    // are skipped — the frontend only knows about requested waypoints.
                     if i == 0 {
                         snapped_waypoints.push(path[0]);
                     }
-                    if let Some(&last) = path.last() {
-                        snapped_waypoints.push(last);
-                    }
-
-                    // Record start index for this segment
-                    let actual_start = if all_coords.is_empty() { 0 } else { all_coords.len() - 1 };
 
                     // Add the routed path (dedup avoids duplicate at segment boundaries)
                     for (&coord, &surf) in path.iter().zip(seg_surfaces.iter()) {
@@ -483,7 +560,13 @@ async fn multi_route_handler(
                     }
 
                     let end_idx = all_coords.len() - 1;
-                    segment_boundaries.push((if i == 0 { 0 } else { actual_start }, end_idx));
+                    if is_original[i + 1] {
+                        if let Some(&last) = path.last() {
+                            snapped_waypoints.push(last);
+                        }
+                        segment_boundaries.push((current_segment_start, end_idx));
+                        current_segment_start = end_idx;
+                    }
 
                     // Calculate total distance so far
                     let segment_distance: f64 = all_coords
@@ -864,6 +947,11 @@ mod tests {
         Coordinate { lat, lon }
     }
 
+    /// Coordinate has no PartialEq; compare the components.
+    fn same(a: Coordinate, b: Coordinate) -> bool {
+        (a.lat - b.lat).abs() < 1e-9 && (a.lon - b.lon).abs() < 1e-9
+    }
+
     /// A trace small enough for one graph must stay a single chunk, so short
     /// routes keep the exact behaviour they had before chunking.
     #[test]
@@ -898,10 +986,62 @@ mod tests {
         }
     }
 
-    /// Two consecutive waypoints too far apart cannot be rescued by any split.
+    /// A pair close enough to route on its own is left untouched.
     #[test]
-    fn unroutable_pair_is_rejected() {
+    fn short_pair_is_not_densified() {
+        let points = vec![c(45.930, 4.577), c(45.940, 4.578)];
+        let (dense, is_original) = densify_points(&points).unwrap();
+        assert_eq!(dense.len(), 2);
+        assert!(same(dense[0], points[0]) && same(dense[1], points[1]));
+        assert_eq!(is_original, vec![true, true]);
+    }
+
+    /// Two clicks far apart — the case that used to be rejected — gain anchors along
+    /// the straight line between them, and every resulting hop is routable.
+    #[test]
+    fn long_pair_gains_anchors() {
         let points = vec![c(45.93, 0.82), c(46.64, 4.58)];
-        assert!(chunk_points(&points).is_err());
+        let (dense, is_original) = densify_points(&points).unwrap();
+
+        assert!(dense.len() > 2, "expected inserted anchors, got {:?}", dense);
+        assert!(same(dense[0], points[0]));
+        assert!(same(*dense.last().unwrap(), *points.last().unwrap()));
+        assert_eq!(is_original.first(), Some(&true));
+        assert_eq!(is_original.last(), Some(&true));
+        assert_eq!(
+            is_original.iter().filter(|&&o| o).count(),
+            2,
+            "only the two clicks are original"
+        );
+        for pair in dense.windows(2) {
+            assert!(bbox_with_margin(pair).validate().is_ok());
+        }
+        // Densified input is always chunkable.
+        assert!(chunk_points(&dense).is_ok());
+    }
+
+    /// Anchors are inserted only in the legs that need them, and the flags keep
+    /// pointing at the requested waypoints.
+    #[test]
+    fn anchors_are_inserted_per_leg() {
+        let points = vec![
+            c(45.930, 4.577),
+            c(45.940, 4.578),  // short leg
+            c(46.640, 0.820),  // long leg
+        ];
+        let (dense, is_original) = densify_points(&points).unwrap();
+
+        assert_eq!(dense.len(), is_original.len());
+        let originals: Vec<Coordinate> = dense
+            .iter()
+            .zip(&is_original)
+            .filter(|(_, &o)| o)
+            .map(|(&c, _)| c)
+            .collect();
+        assert_eq!(originals.len(), points.len());
+        assert!(originals
+            .iter()
+            .zip(&points)
+            .all(|(&a, &b)| same(a, b)));
     }
 }
