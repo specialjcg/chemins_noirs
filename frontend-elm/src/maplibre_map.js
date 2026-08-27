@@ -26,6 +26,7 @@ let poiMarkers = []; // POI markers on map
 let poisVisible = false; // POI toggle state
 let lastPoiBbox = null; // Last fetched POI bbox to avoid re-fetching
 let waterMarkers = []; // Water point markers along current route
+let slopesEnabled = false; // IGN slope shading, opt-in
 let waterEnabled = false; // Opt-in: 103 markers on a 450km route drown the map
 let currentRouteCoords = null; // Kept so toggling on can fetch without a new route
 
@@ -227,6 +228,30 @@ function ensureMap() {
           tileSize: 256,
           maxzoom: 19,
           attribution: '© Esri'
+        },
+        // Géoplateforme IGN — free, no API key. SCAN 25 / SCAN Express are NOT
+        // here: they are licensed products, absent from the open WMTS.
+        'ign-plan': {
+          type: 'raster',
+          tiles: [ignWmtsUrl('GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2', 'image/png')],
+          tileSize: 256,
+          maxzoom: 19,
+          attribution: IGN_ATTRIBUTION
+        },
+        'ign-ortho': {
+          type: 'raster',
+          // Orthophotos are served as JPEG; asking for PNG returns a 400.
+          tiles: [ignWmtsUrl('ORTHOIMAGERY.ORTHOPHOTOS', 'image/jpeg')],
+          tileSize: 256,
+          maxzoom: 19,
+          attribution: IGN_ATTRIBUTION
+        },
+        'ign-slopes': {
+          type: 'raster',
+          tiles: [ignWmtsUrl('GEOGRAPHICALGRIDSYSTEMS.SLOPES.MOUNTAIN', 'image/png')],
+          tileSize: 256,
+          maxzoom: 17,
+          attribution: IGN_ATTRIBUTION
         }
       },
       layers: [
@@ -441,6 +466,9 @@ function ensureMap() {
   const poiControl = createPoiControl();
   mapInstance.addControl(poiControl, 'top-right');
 
+  // Add IGN slope map toggle control (off by default)
+  mapInstance.addControl(createSlopesControl(), 'top-right');
+
   // Add water points toggle control (off by default)
   mapInstance.addControl(createWaterControl(), 'top-right');
 
@@ -452,11 +480,72 @@ function ensureMap() {
   mapInstance.addControl(styleControl, 'bottom-left');
 }
 
+const IGN_ATTRIBUTION =
+  '&copy; <a href="https://geoservices.ign.fr/">IGN-F/G\u00e9oplateforme</a>';
+
+/** WMTS tile URL template for a Géoplateforme layer. */
+function ignWmtsUrl(layer, format) {
+  return (
+    'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
+    '&LAYER=' + layer +
+    '&STYLE=normal&TILEMATRIXSET=PM' +
+    '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}' +
+    '&FORMAT=' + encodeURIComponent(format)
+  );
+}
+
+function createSlopesControl() {
+  class SlopesControl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      this._btn = document.createElement('button');
+      this._btn.className = 'maplibregl-ctrl-slopes';
+      this._btn.textContent = '📐';
+      this._btn.title = 'Afficher/masquer la carte des pentes IGN (>30°)';
+      this._btn.onclick = () => this.toggle();
+      this._container.appendChild(this._btn);
+      return this._container;
+    }
+
+    toggle() {
+      slopesEnabled = !slopesEnabled;
+
+      // Sits above the background but below the route, which ensureRouteLayers
+      // keeps on top anyway.
+      if (slopesEnabled && !this._map.getLayer('ign-slopes-tiles')) {
+        this._map.addLayer({
+          id: 'ign-slopes-tiles',
+          type: 'raster',
+          source: 'ign-slopes',
+          minzoom: 0,
+          maxzoom: 22,
+          paint: { 'raster-opacity': 0.55 }
+        });
+        ensureRouteLayers();
+      }
+
+      setLayerVisible('ign-slopes-tiles', slopesEnabled);
+      this._btn.style.backgroundColor = slopesEnabled ? '#e65100' : '';
+      this._btn.style.color = slopesEnabled ? 'white' : '';
+    }
+
+    onRemove() {
+      this._container.parentNode.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+  return new SlopesControl();
+}
+
 function createStyleSwitcherControl() {
   const STYLES = [
     { id: 'topo',      label: 'Topo',      icon: '◈' },
-    { id: 'satellite', label: 'Satellite',  icon: '◉' },
-    { id: 'hybrid',    label: 'Hybride',    icon: '◎' }
+    { id: 'ign-plan',  label: 'Plan IGN',  icon: '◆' },
+    { id: 'ign-ortho', label: 'Ortho IGN', icon: '◈' },
+    { id: 'satellite', label: 'Satellite', icon: '◉' },
+    { id: 'hybrid',    label: 'Hybride',   icon: '◎' }
   ];
 
   class StyleSwitcherControl {
@@ -1226,6 +1315,20 @@ export function toggleSatelliteView(enabled) {
  * Switch map style between topo, satellite, and hybrid.
  * @param {string} style - 'topo' | 'satellite' | 'hybrid'
  */
+/** Create a raster layer below the OSM one, the first time it is needed. */
+function ensureRasterLayer(layerId, sourceId, needed) {
+  if (!needed || mapInstance.getLayer(layerId)) return;
+  mapInstance.addLayer(
+    { id: layerId, type: 'raster', source: sourceId, minzoom: 0, maxzoom: 22 },
+    'osm-tiles'
+  );
+}
+
+function setLayerVisible(layerId, visible) {
+  if (!mapInstance.getLayer(layerId)) return;
+  mapInstance.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
+}
+
 export function switchMapStyle(style) {
   ensureMap();
   currentMapStyle = style;
@@ -1242,6 +1345,11 @@ export function switchMapStyle(style) {
     }, 'osm-tiles'); // Insert below OSM so hybrid overlay works
   }
 
+  // Same lazy pattern for the IGN backgrounds: created on first use, below OSM.
+  ensureRasterLayer('ign-plan-tiles', 'ign-plan', style === 'ign-plan');
+  ensureRasterLayer('ign-ortho-tiles', 'ign-ortho', style === 'ign-ortho');
+
+  const isIgn = style === 'ign-plan' || style === 'ign-ortho';
   const showOsm = style === 'topo' || style === 'hybrid';
   const showSatellite = style === 'satellite' || style === 'hybrid';
 
@@ -1249,6 +1357,9 @@ export function switchMapStyle(style) {
   if (mapInstance.getLayer('satellite-tiles')) {
     mapInstance.setLayoutProperty('satellite-tiles', 'visibility', showSatellite ? 'visible' : 'none');
   }
+
+  setLayerVisible('ign-plan-tiles', style === 'ign-plan');
+  setLayerVisible('ign-ortho-tiles', style === 'ign-ortho');
 
   // Set OSM visibility and opacity
   if (mapInstance.getLayer('osm-tiles')) {
@@ -1259,11 +1370,13 @@ export function switchMapStyle(style) {
 
   // Set hillshade visibility — hide in pure satellite, show in topo/hybrid
   if (mapInstance.getLayer('hills')) {
-    mapInstance.setLayoutProperty('hills', 'visibility', style === 'satellite' ? 'none' : 'visible');
+    const flatBackground = style === 'satellite' || style === 'ign-ortho';
+    mapInstance.setLayoutProperty('hills', 'visibility', flatBackground ? 'none' : 'visible');
   }
 
   // Set contour lines visibility — show in topo and 3D, hide in pure satellite
-  const showContours = style !== 'satellite';
+  // Plan IGN already draws its own contour lines — ours would double them up.
+  const showContours = style !== 'satellite' && !isIgn;
   if (mapInstance.getLayer('contour-lines')) {
     mapInstance.setLayoutProperty('contour-lines', 'visibility', showContours ? 'visible' : 'none');
   }
@@ -1273,7 +1386,7 @@ export function switchMapStyle(style) {
 
   // Adjust terrain exaggeration for satellite mode (more dramatic relief)
   if (terrainEnabled || mapInstance.getTerrain()) {
-    const exag = style === 'satellite' ? 1.8 : TERRAIN_EXAGGERATION;
+    const exag = (style === 'satellite' || style === 'ign-ortho') ? 1.8 : TERRAIN_EXAGGERATION;
     mapInstance.setTerrain({ source: 'terrainSource', exaggeration: exag });
   }
 

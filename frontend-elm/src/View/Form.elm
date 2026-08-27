@@ -188,6 +188,12 @@ view model =
                 [ text <|
                     case model.mapViewMode of
                         Topo ->
+                            "Vue Plan IGN"
+
+                        IgnPlan ->
+                            "Vue Ortho IGN"
+
+                        IgnOrtho ->
                             "Vue Satellite"
 
                         Satellite ->

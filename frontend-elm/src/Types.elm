@@ -213,6 +213,8 @@ type RouteMode
 
 type MapViewMode
     = Topo
+    | IgnPlan
+    | IgnOrtho
     | Satellite
     | Hybrid
 

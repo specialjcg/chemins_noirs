@@ -600,6 +600,12 @@ update msg model =
                 newMode =
                     case model.mapViewMode of
                         Topo ->
+                            IgnPlan
+
+                        IgnPlan ->
+                            IgnOrtho
+
+                        IgnOrtho ->
                             Satellite
 
                         Satellite ->
@@ -612,6 +618,12 @@ update msg model =
                     case newMode of
                         Topo ->
                             "topo"
+
+                        IgnPlan ->
+                            "ign-plan"
+
+                        IgnOrtho ->
+                            "ign-ortho"
 
                         Satellite ->
                             "satellite"
