@@ -26,6 +26,8 @@ let poiMarkers = []; // POI markers on map
 let poisVisible = false; // POI toggle state
 let lastPoiBbox = null; // Last fetched POI bbox to avoid re-fetching
 let waterMarkers = []; // Water point markers along current route
+let waterEnabled = false; // Opt-in: 103 markers on a 450km route drown the map
+let currentRouteCoords = null; // Kept so toggling on can fetch without a new route
 
 // Terrain configuration - Using Terrarium format tiles from AWS
 const TERRAIN_EXAGGERATION = 2.5; // Amplify terrain for better visibility
@@ -438,6 +440,9 @@ function ensureMap() {
   // Add POI toggle control
   const poiControl = createPoiControl();
   mapInstance.addControl(poiControl, 'top-right');
+
+  // Add water points toggle control (off by default)
+  mapInstance.addControl(createWaterControl(), 'top-right');
 
   // Add fullscreen toggle control
   mapInstance.addControl(createFullscreenControl(), 'top-right');
@@ -915,6 +920,7 @@ function clearWaterMarkers() {
 }
 
 function fetchWaterAlongRoute(coords) {
+  if (!waterEnabled) return;
   if (!coords || coords.length === 0) return;
 
   let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
@@ -954,6 +960,41 @@ function fetchWaterAlongRoute(coords) {
       }
     })
     .catch(err => console.warn('[maplibre] water fetch error:', err));
+}
+
+function createWaterControl() {
+  class WaterControl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      this._btn = document.createElement('button');
+      this._btn.className = 'maplibregl-ctrl-water';
+      this._btn.textContent = '💧';
+      this._btn.title = 'Afficher/masquer les points d\'eau le long du parcours';
+      this._btn.onclick = () => this.toggle();
+      this._container.appendChild(this._btn);
+      return this._container;
+    }
+
+    toggle() {
+      waterEnabled = !waterEnabled;
+      this._btn.style.backgroundColor = waterEnabled ? '#2196f3' : '';
+      this._btn.style.color = waterEnabled ? 'white' : '';
+
+      if (waterEnabled) {
+        fetchWaterAlongRoute(currentRouteCoords);
+      } else {
+        clearWaterMarkers();
+      }
+    }
+
+    onRemove() {
+      this._container.parentNode.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+  return new WaterControl();
 }
 
 function createFullscreenControl() {
@@ -1100,6 +1141,7 @@ export function updateRoute(coords) {
     // Clear km markers when route is cleared
     kmMarkers.forEach(m => m.remove());
     kmMarkers = [];
+    currentRouteCoords = null;
     clearWaterMarkers();
     return;
   }
@@ -1134,6 +1176,7 @@ export function updateRoute(coords) {
   kmMarkers.forEach(m => m.remove());
   kmMarkers = [];
 
+  currentRouteCoords = coords;
   fetchWaterAlongRoute(coords);
 }
 
