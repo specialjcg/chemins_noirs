@@ -16,7 +16,23 @@ pub enum ElevationError {
     SizeMismatch { expected: usize, actual: usize },
 }
 
-/// Get elevation data for a batch of coordinates from local DEM
+/// Coordinates sent per request to the IGN elevation API. 5000 answers in ~6s;
+/// 2000 keeps a single slow request from stalling the whole profile.
+const IGN_BATCH_SIZE: usize = 2000;
+
+/// IGN returns this when a point falls outside its coverage (i.e. outside France).
+const IGN_NO_DATA: f64 = -1000.0;
+
+/// Get elevation data for a batch of coordinates.
+///
+/// The local DEM answers first — it is a regional file, so a trace leaving that
+/// region has holes. Those holes used to fail the whole profile, which is why a
+/// route crossing France came back with no elevation, no estimated time and no
+/// difficulty. Missing points now fall back to the IGN elevation API, which
+/// covers the whole country.
+///
+/// Set `IGN_ELEVATION_FALLBACK=0` to keep coordinates from leaving the machine;
+/// the previous behaviour (fail on incomplete coverage) is then restored.
 pub async fn get_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, ElevationError> {
     if coords.is_empty() {
         return Ok(Vec::new());
@@ -24,28 +40,148 @@ pub async fn get_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Elevati
 
     let grid = local_dem_grid().ok_or(ElevationError::DemNotAvailable)?;
 
-    let mut values = Vec::with_capacity(coords.len());
-    let mut missing_count = 0usize;
+    let mut values: Vec<Option<f64>> = Vec::with_capacity(coords.len());
+    let mut missing: Vec<usize> = Vec::new();
 
-    for &(lat, lon) in &coords {
+    for (idx, &(lat, lon)) in coords.iter().enumerate() {
         match grid.sample(lat, lon) {
-            Some(val) => values.push(val),
+            Some(val) => values.push(Some(val)),
             None => {
-                missing_count += 1;
+                values.push(None);
+                missing.push(idx);
             }
         }
     }
 
-    if missing_count > 0 {
-        tracing::warn!(
-            "Local DEM does not cover {} coordinate(s)",
-            missing_count,
-        );
-        return Err(ElevationError::IncompleteCoverage(missing_count));
+    if missing.is_empty() {
+        tracing::debug!("Fetched {} elevations from local DEM", values.len());
+        return Ok(values.into_iter().flatten().collect());
     }
 
-    tracing::debug!("Fetched {} elevations from local DEM", values.len());
-    Ok(values)
+    tracing::info!(
+        "Local DEM does not cover {} of {} coordinate(s), falling back to IGN",
+        missing.len(),
+        coords.len()
+    );
+
+    if !ign_fallback_enabled() {
+        tracing::warn!("IGN fallback disabled (IGN_ELEVATION_FALLBACK=0)");
+        return Err(ElevationError::IncompleteCoverage(missing.len()));
+    }
+
+    let wanted: Vec<(f64, f64)> = missing.iter().map(|&i| coords[i]).collect();
+    match fetch_ign_elevations(&wanted).await {
+        Ok(fetched) => {
+            for (&idx, value) in missing.iter().zip(fetched) {
+                values[idx] = value;
+            }
+        }
+        Err(err) => {
+            tracing::warn!("IGN elevation request failed: {}", err);
+        }
+    }
+
+    let still_missing = values.iter().filter(|v| v.is_none()).count();
+    if still_missing > 0 {
+        tracing::warn!("{} coordinate(s) still without elevation", still_missing);
+        return Err(ElevationError::IncompleteCoverage(still_missing));
+    }
+
+    tracing::debug!(
+        "Fetched {} elevations ({} from IGN)",
+        values.len(),
+        missing.len()
+    );
+    Ok(values.into_iter().flatten().collect())
+}
+
+fn ign_fallback_enabled() -> bool {
+    !matches!(
+        std::env::var("IGN_ELEVATION_FALLBACK").as_deref(),
+        Ok("0") | Ok("false")
+    )
+}
+
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
+/// Query the IGN elevation API, in batches. A batch that fails leaves its points
+/// without elevation rather than sinking the whole profile.
+async fn fetch_ign_elevations(coords: &[(f64, f64)]) -> Result<Vec<Option<f64>>, String> {
+    // elevation.json is point-wise. Its elevationLine sibling resamples the line
+    // and hands back a different number of points than it was given.
+    const URL: &str = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json";
+
+    let mut out = Vec::with_capacity(coords.len());
+
+    for chunk in coords.chunks(IGN_BATCH_SIZE) {
+        let lat = join_coords(chunk.iter().map(|&(lat, _)| lat));
+        let lon = join_coords(chunk.iter().map(|&(_, lon)| lon));
+
+        // measures / indent are strings here: the API rejects JSON booleans.
+        let body = serde_json::json!({
+            "resource": "ign_rge_alti_wld",
+            "delimiter": "|",
+            "measures": "false",
+            "indent": "false",
+            "lat": lat,
+            "lon": lon,
+        });
+
+        let response = http_client()
+            .post(URL)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!("IGN responded {}", response.status()));
+        }
+
+        let parsed: IgnElevationResponse = response.json().await.map_err(|e| e.to_string())?;
+        if parsed.elevations.len() != chunk.len() {
+            return Err(format!(
+                "IGN returned {} elevations for {} coordinates",
+                parsed.elevations.len(),
+                chunk.len()
+            ));
+        }
+
+        out.extend(parsed.elevations.into_iter().map(|e| keep_elevation(e.z)));
+    }
+
+    Ok(out)
+}
+
+/// IGN reports uncovered points with a large negative sentinel; treat those as
+/// missing rather than letting -99999 wreck the ascent total.
+fn keep_elevation(z: f64) -> Option<f64> {
+    (z > IGN_NO_DATA).then_some(z)
+}
+
+fn join_coords(values: impl Iterator<Item = f64>) -> String {
+    values
+        .map(|v| format!("{:.6}", v))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+#[derive(serde::Deserialize)]
+struct IgnElevationResponse {
+    elevations: Vec<IgnElevation>,
+}
+
+#[derive(serde::Deserialize)]
+struct IgnElevation {
+    z: f64,
 }
 
 fn local_dem_path() -> Option<PathBuf> {
@@ -372,5 +508,23 @@ mod tests {
         assert_eq!(profile.max_elevation, None);
         assert_eq!(profile.total_ascent, 0.0);
         assert_eq!(profile.total_descent, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod ign_tests {
+    use super::*;
+
+    #[test]
+    fn sentinel_counts_as_missing() {
+        assert_eq!(keep_elevation(412.5), Some(412.5));
+        assert_eq!(keep_elevation(0.0), Some(0.0));
+        assert_eq!(keep_elevation(-99999.0), None);
+    }
+
+    #[test]
+    fn coordinates_are_pipe_separated() {
+        let joined = join_coords([4.5, 45.930613].into_iter());
+        assert_eq!(joined, "4.500000|45.930613");
     }
 }
