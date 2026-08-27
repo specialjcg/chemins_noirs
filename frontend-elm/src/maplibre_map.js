@@ -212,10 +212,15 @@ function ensureMap() {
     container: 'map',
     style: {
       version: 8,
+      // Font server for symbol layers. Without it, every text-field is silently
+      // dropped — which is why the contour elevation labels never appeared.
+      glyphs: IGN_GLYPHS,
       sources: {
         'osm': {
           type: 'raster',
           tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          // Left at 256 on purpose: the OSM tile usage policy rules out the 4x
+          // traffic the HiDPI trick costs.
           tileSize: 256,
           maxzoom: 19,
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -225,7 +230,7 @@ function ensureMap() {
           tiles: [
             'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
           ],
-          tileSize: 256,
+          tileSize: 128,
           maxzoom: 19,
           attribution: '© Esri'
         },
@@ -234,7 +239,9 @@ function ensureMap() {
         'ign-plan': {
           type: 'raster',
           tiles: [ignWmtsUrl('GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2', 'image/png')],
-          tileSize: 256,
+          // 128 makes MapLibre fetch one zoom level deeper for the same screen
+          // area: twice the pixel density, up to the layer's native ceiling.
+          tileSize: 128,
           maxzoom: 19,
           attribution: IGN_ATTRIBUTION
         },
@@ -242,7 +249,7 @@ function ensureMap() {
           type: 'raster',
           // Orthophotos are served as JPEG; asking for PNG returns a 400.
           tiles: [ignWmtsUrl('ORTHOIMAGERY.ORTHOPHOTOS', 'image/jpeg')],
-          tileSize: 256,
+          tileSize: 128,
           maxzoom: 19,
           attribution: IGN_ATTRIBUTION
         },
@@ -348,7 +355,8 @@ function ensureMap() {
         visibility: 'visible',
         'symbol-placement': 'line',
         'text-field': ['concat', ['number-format', ['get', 'ele'], {}], ' m'],
-        'text-font': ['Noto Sans Regular'],
+        // IGN's font server has Open Sans, not Noto Sans (404).
+        'text-font': ['Open Sans Regular'],
         'text-size': 10,
         'text-max-angle': 25,
         'text-padding': 5
@@ -479,6 +487,12 @@ function ensureMap() {
   const styleControl = createStyleSwitcherControl();
   mapInstance.addControl(styleControl, 'bottom-left');
 }
+
+const IGN_GLYPHS =
+  'https://data.geopf.fr/annexes/ressources/vectorTiles/fonts/{fontstack}/{range}.pbf';
+
+const IGN_VECTOR_STYLE_URL =
+  'https://data.geopf.fr/annexes/ressources/vectorTiles/styles/PLAN.IGN/standard.json';
 
 const IGN_ATTRIBUTION =
   '&copy; <a href="https://geoservices.ign.fr/">IGN-F/G\u00e9oplateforme</a>';
@@ -1329,6 +1343,79 @@ function setLayerVisible(layerId, visible) {
   mapInstance.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
 }
 
+let ignVectorLayerIds = []; // Injected Plan IGN vector layers, empty until loaded
+let ignVectorPromise = null;
+
+/** Pull the Plan IGN vector style into the running map.
+ *
+ * Raster tiles are frozen at 256px; the vector plan redraws at any zoom and any
+ * pixel density, which is what "sharp" actually means here. We inject the style's
+ * layers into our existing map rather than calling setStyle, which would wipe the
+ * route, terrain and marker layers.
+ *
+ * The raster Plan IGN stays as the fallback if this fails.
+ */
+async function loadIgnVectorLayers() {
+  const style = await fetch(IGN_VECTOR_STYLE_URL).then((r) => {
+    if (!r.ok) throw new Error('style HTTP ' + r.status);
+    return r.json();
+  });
+
+  if (style.sprite) mapInstance.setSprite(style.sprite);
+
+  const source = style.sources && style.sources.plan_ign;
+  if (!source) throw new Error('plan_ign source missing from style');
+  if (!mapInstance.getSource('plan_ign')) {
+    mapInstance.addSource('plan_ign', { ...source, attribution: IGN_ATTRIBUTION });
+  }
+
+  // Below the hillshade so the relief still reads through the plan.
+  const before = mapInstance.getLayer('hills')
+    ? 'hills'
+    : mapInstance.getLayer('osm-tiles')
+      ? 'osm-tiles'
+      : undefined;
+
+  const ids = [];
+  for (const layer of style.layers) {
+    const id = 'ignv-' + layer.id;
+    if (!mapInstance.getLayer(id)) {
+      mapInstance.addLayer(
+        { ...layer, id, layout: { ...(layer.layout || {}), visibility: 'none' } },
+        before
+      );
+    }
+    ids.push(id);
+  }
+
+  ignVectorLayerIds = ids;
+  ensureRouteLayers();
+  console.debug('[maplibre] Plan IGN vector: ' + ids.length + ' layers injected');
+}
+
+function setIgnVectorVisible(visible) {
+  ignVectorLayerIds.forEach((id) => setLayerVisible(id, visible));
+}
+
+/** Show the Plan IGN, vector if we can get it, raster meanwhile. */
+function applyIgnPlan(wanted) {
+  if (wanted && !ignVectorPromise) {
+    ignVectorPromise = loadIgnVectorLayers()
+      .then(() => applyIgnPlan(currentMapStyle === 'ign-plan'))
+      .catch((err) => {
+        console.warn('[maplibre] Plan IGN vector unavailable, keeping raster', err);
+        ignVectorLayerIds = [];
+        applyIgnPlan(currentMapStyle === 'ign-plan');
+      });
+  }
+
+  const vectorReady = ignVectorLayerIds.length > 0;
+  setIgnVectorVisible(wanted && vectorReady);
+  // Raster only fills in while the vector layers are not there.
+  ensureRasterLayer('ign-plan-tiles', 'ign-plan', wanted && !vectorReady);
+  setLayerVisible('ign-plan-tiles', wanted && !vectorReady);
+}
+
 export function switchMapStyle(style) {
   ensureMap();
   currentMapStyle = style;
@@ -1346,7 +1433,6 @@ export function switchMapStyle(style) {
   }
 
   // Same lazy pattern for the IGN backgrounds: created on first use, below OSM.
-  ensureRasterLayer('ign-plan-tiles', 'ign-plan', style === 'ign-plan');
   ensureRasterLayer('ign-ortho-tiles', 'ign-ortho', style === 'ign-ortho');
 
   const isIgn = style === 'ign-plan' || style === 'ign-ortho';
@@ -1358,7 +1444,7 @@ export function switchMapStyle(style) {
     mapInstance.setLayoutProperty('satellite-tiles', 'visibility', showSatellite ? 'visible' : 'none');
   }
 
-  setLayerVisible('ign-plan-tiles', style === 'ign-plan');
+  applyIgnPlan(style === 'ign-plan');
   setLayerVisible('ign-ortho-tiles', style === 'ign-ortho');
 
   // Set OSM visibility and opacity
