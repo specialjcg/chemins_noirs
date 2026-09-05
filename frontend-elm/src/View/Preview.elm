@@ -8,6 +8,8 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, on)
 import Json.Decode as Decode
 import Types exposing (..)
+import Svg
+import View.ElevationBand as ElevationBand
 
 
 view : Model -> Html Msg
@@ -274,9 +276,10 @@ viewElevationChart model route =
     case route.elevationProfile of
         Just profile ->
             let
+                -- `List.filterMap identity` décalerait les index dès qu'une
+                -- altitude manque, et le marqueur tomberait à côté sur la carte.
                 elevations =
-                    profile.elevations
-                        |> List.filterMap identity
+                    ElevationBand.fillGaps profile.elevations
 
                 count =
                     List.length elevations
@@ -397,7 +400,7 @@ elevationSvg model elevations profile =
                                     cy =
                                         toFloat padding + yScale e
                                 in
-                                [ Html.node "circle"
+                                [ Svg.circle
                                     [ attribute "cx" (String.fromFloat cx)
                                     , attribute "cy" (String.fromFloat cy)
                                     , attribute "r" "4"
@@ -406,7 +409,7 @@ elevationSvg model elevations profile =
                                     , attribute "stroke-width" "1.5"
                                     ]
                                     []
-                                , Html.node "text"
+                                , Svg.text_
                                     [ attribute "x" (String.fromFloat (cx + 6))
                                     , attribute "y" (String.fromFloat (cy - 6))
                                     , attribute "fill" "#e4ddd0"
@@ -434,7 +437,7 @@ elevationSvg model elevations profile =
                             cx =
                                 toFloat padding + toFloat idx * xStep
                         in
-                        [ Html.node "line"
+                        [ Svg.line
                             [ attribute "x1" (String.fromFloat cx)
                             , attribute "y1" (String.fromInt padding)
                             , attribute "x2" (String.fromFloat cx)
@@ -453,14 +456,14 @@ elevationSvg model elevations profile =
                 Nothing ->
                     []
     in
-    Html.node "svg"
+    Svg.svg
         [ attribute "viewBox" ("0 0 " ++ String.fromInt width ++ " " ++ String.fromInt height)
         , attribute "preserveAspectRatio" "xMidYMid meet"
         , on "mousemove" mouseMoveDecoder
         , on "mouseleave" (Decode.succeed ElevationChartLeave)
         ]
         ([ -- Area fill
-           Html.node "polygon"
+           Svg.polygon
             [ attribute "points" areaPoints
             , attribute "fill" "rgba(77, 171, 123, 0.15)"
             , attribute "stroke" "none"
@@ -468,7 +471,7 @@ elevationSvg model elevations profile =
             []
 
          -- Line
-         , Html.node "polyline"
+         , Svg.polyline
             [ attribute "points" polyline
             , attribute "fill" "none"
             , attribute "stroke" "#4dab7b"
@@ -477,7 +480,7 @@ elevationSvg model elevations profile =
             []
 
          -- Min elevation label
-         , Html.node "text"
+         , Svg.text_
             [ attribute "x" "2"
             , attribute "y" (String.fromFloat (toFloat (height - padding) - 2))
             , attribute "fill" "#9b9484"
@@ -486,7 +489,7 @@ elevationSvg model elevations profile =
             [ text (String.fromInt (round minE) ++ "m") ]
 
          -- Max elevation label
-         , Html.node "text"
+         , Svg.text_
             [ attribute "x" "2"
             , attribute "y" (String.fromFloat (toFloat padding + 10))
             , attribute "fill" "#9b9484"
