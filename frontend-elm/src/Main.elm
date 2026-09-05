@@ -22,6 +22,7 @@ import Dict exposing (Dict)
 import Task
 import Types exposing (..)
 import View.Form as Form
+import View.ElevationBand as ElevationBand
 import View.Preview as Preview
 
 
@@ -929,32 +930,25 @@ update msg model =
             )
 
         ElevationChartHover idx ->
-            let
-                coordAtIndex =
-                    case model.lastResponse of
-                        Just route ->
-                            route.path
-                                |> List.drop idx
-                                |> List.head
-
-                        Nothing ->
-                            Nothing
-
-                hoverCmd =
-                    case coordAtIndex of
-                        Just c ->
-                            Ports.setElevationHoverMarker (Just { lat = c.lat, lon = c.lon })
-
-                        Nothing ->
-                            Cmd.none
-            in
             ( { model | elevationHoverIndex = Just idx }
-            , hoverCmd
+            , elevationMarkerCmd model (Just idx)
             )
 
         ElevationChartLeave ->
+            -- Le curseur posé sur la bande survit à la sortie de souris : on lui
+            -- rend le marqueur au lieu de l'effacer.
             ( { model | elevationHoverIndex = Nothing }
-            , Ports.setElevationHoverMarker Nothing
+            , elevationMarkerCmd model model.elevationCursorIndex
+            )
+
+        ElevationCursorMoved idx ->
+            ( { model | elevationCursorIndex = Just idx }
+            , elevationMarkerCmd model (Just idx)
+            )
+
+        ToggleElevationBand ->
+            ( { model | showElevationBand = not model.showElevationBand }
+            , Cmd.none
             )
 
         ImportGpxClicked ->
@@ -1093,15 +1087,36 @@ update msg model =
 -- VIEW
 
 
+{-| Marqueur de survol sur la carte pour un index du tracé.
+`Nothing`, ou un index hors du tracé, efface le marqueur.
+-}
+elevationMarkerCmd : Model -> Maybe Int -> Cmd Msg
+elevationMarkerCmd model maybeIdx =
+    let
+        coord =
+            Maybe.map2 Tuple.pair maybeIdx model.lastResponse
+                |> Maybe.andThen
+                    (\( idx, route ) -> route.path |> List.drop idx |> List.head)
+    in
+    Ports.setElevationHoverMarker
+        (Maybe.map (\c -> { lat = c.lat, lon = c.lon }) coord)
+
+
 view : Model -> Html Msg
 view model =
-    div [ class "app-container" ]
-        [ header [ class "app-header" ]
-            [ h1 [] [ text "Chemins Noirs" ]
-            , p [ class "app-subtitle" ] [ text "Générateur GPX anti-bitume" ]
+    -- `app-root` est en `display: contents` : il disparaît de la mise en page,
+    -- mais il sort la bande du `.app-container`, dont le `backdrop-filter` en
+    -- ferait un bloc conteneur pour les enfants `position: fixed`.
+    div [ class "app-root" ]
+        [ div [ class "app-container" ]
+            [ header [ class "app-header" ]
+                [ h1 [] [ text "Chemins Noirs" ]
+                , p [ class "app-subtitle" ] [ text "Générateur GPX anti-bitume" ]
+                ]
+            , Form.view model
+            , Preview.view model
             ]
-        , Form.view model
-        , Preview.view model
+        , ElevationBand.view model
         ]
 
 
@@ -1557,6 +1572,7 @@ applyRoute model route =
     { model
         | pending = False
         , lastResponse = Just route
+        , elevationCursorIndex = Nothing
         , error = Nothing
         , form = newForm
         -- Keep original waypoints unchanged - don't extract from calculated path
@@ -1605,6 +1621,7 @@ applySavedRoute model route originalWaypoints =
     { model
         | pending = False
         , lastResponse = Just route
+        , elevationCursorIndex = Nothing
         , error = Nothing
         , form = newForm
         , waypoints = originalWaypoints  -- Restore original waypoints

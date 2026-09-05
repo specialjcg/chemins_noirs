@@ -1730,3 +1730,214 @@ small {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ─── Bande de dénivelé (dock bas) ─────────────────────────────────────────
+   `app-root` doit rester transparent pour la mise en page : la bande est un
+   frère de `.app-container`, dont le `backdrop-filter` en ferait sinon le bloc
+   conteneur de ses enfants `position: fixed`. */
+.app-root {
+  display: contents;
+}
+
+/* Place pour la bande sous le contenu de la page. */
+body {
+  padding-bottom: 9rem;
+}
+
+.elevation-band {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* Au-dessus de `#map.map-fullscreen` (z-index 9999) : la bande doit rester
+     lisible quand la carte prend tout l'écran, c'est là qu'elle sert le plus. */
+  z-index: 10000;
+  background: linear-gradient(180deg, rgba(14, 20, 15, 0.92), rgba(10, 14, 11, 0.97));
+  backdrop-filter: blur(10px);
+  border-top: 1px solid var(--border-medium);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+  user-select: none;
+}
+
+.elevation-band-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.3rem 0.9rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.elevation-band-title {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.elevation-band-readout {
+  display: flex;
+  gap: 0.75rem;
+  margin-left: auto;
+}
+
+.elevation-band-km {
+  color: var(--text-brass);
+}
+
+.elevation-band-alt {
+  color: var(--text-secondary);
+}
+
+.elevation-band-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0 0.25rem;
+  line-height: 1;
+}
+
+.elevation-band-toggle:hover {
+  color: var(--text-primary);
+}
+
+.elevation-band-plot {
+  position: relative;
+  height: 92px;
+}
+
+.elevation-band-plot:focus-within {
+  outline: 1px solid var(--accent-brass);
+  outline-offset: -1px;
+}
+
+.elevation-band-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Curseur épinglé par le slider. */
+.elevation-band-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid #4dab7b;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.elevation-band-dot {
+  position: absolute;
+  left: 0;
+  width: 9px;
+  height: 9px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: #4dab7b;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 6px rgba(77, 171, 123, 0.8);
+}
+
+/* Écho du survol du tracé sur la carte. */
+.elevation-band-map-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1.5px dashed var(--accent-brass);
+  opacity: 0.8;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Slider invisible mais pleine surface : c'est lui qui capte le glissement,
+   au doigt comme à la souris, et les flèches du clavier. */
+.elevation-band-slider {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  cursor: ew-resize;
+  z-index: 3;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+
+.elevation-band-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 92px;
+  background: #fff;
+}
+
+.elevation-band-slider::-moz-range-thumb {
+  width: 24px;
+  height: 92px;
+  border: none;
+  border-radius: 0;
+  background: #fff;
+}
+
+.elevation-band-min,
+.elevation-band-max {
+  position: absolute;
+  left: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.elevation-band-max {
+  top: 2px;
+}
+
+.elevation-band-min {
+  bottom: 2px;
+}
+
+.elevation-band.is-collapsed {
+  box-shadow: none;
+}
+
+@media (max-width: 768px) {
+  body {
+    padding-bottom: 0;
+  }
+
+  /* La bande passe au-dessus de la feuille du bas ; on lui rend la place
+     au bas du panneau pour que son contenu reste atteignable. */
+  .app-container {
+    padding-bottom: 8.5rem;
+  }
+
+  .elevation-band-plot {
+    height: 70px;
+  }
+
+  .elevation-band-slider::-webkit-slider-thumb,
+  .elevation-band-slider::-moz-range-thumb {
+    height: 70px;
+  }
+}
+
+/* Point du tracé pointé par la bande de dénivelé. */
+.elevation-hover-marker {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #4dab7b;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 4px rgba(77, 171, 123, 0.28), 0 2px 6px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}

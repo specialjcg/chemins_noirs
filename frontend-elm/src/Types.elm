@@ -29,6 +29,8 @@ type alias Model =
     , showSavedRoutes : Bool
     , showElevationChart : Bool
     , elevationHoverIndex : Maybe Int
+    , elevationCursorIndex : Maybe Int
+    , showElevationBand : Bool
     , waypointHistory : List (List Coordinate)
     , waypointFuture : List (List Coordinate)
     , mapRouteHoverIndex : Maybe Int
@@ -117,6 +119,8 @@ initialModel =
     , showSavedRoutes = False
     , showElevationChart = False
     , elevationHoverIndex = Nothing
+    , elevationCursorIndex = Nothing
+    , showElevationBand = True
     , waypointHistory = []
     , waypointFuture = []
     , mapRouteHoverIndex = Nothing
@@ -183,6 +187,8 @@ type Msg
     | ToggleElevationChart
     | ElevationChartHover Int
     | ElevationChartLeave
+    | ElevationCursorMoved Int
+    | ToggleElevationBand
     | UndoWaypoints
     | RedoWaypoints
     | ImportGpxClicked

@@ -4,6 +4,7 @@ import mlcontour from 'maplibre-contour';
 let mapInstance;
 let routeSource;
 let startMarker;
+let elevationMarker = null; // Point du tracé suivi par la bande de dénivelé
 let endMarker;
 let clickHandlerSet = false;
 let terrainEnabled = false;
@@ -1317,6 +1318,32 @@ function updateMarker(type, coord) {
     markerRef.remove();
     if (type === 'start') startMarker = null;
     else endMarker = null;
+  }
+}
+
+/**
+ * Point de position sur le tracé, piloté par la bande de dénivelé.
+ * `coord` vaut null quand il n'y a plus rien à montrer.
+ */
+export function setElevationHoverMarker(coord) {
+  ensureMap();
+
+  if (!coord || typeof coord.lat !== 'number' || typeof coord.lon !== 'number') {
+    if (elevationMarker) {
+      elevationMarker.remove();
+      elevationMarker = null;
+    }
+    return;
+  }
+
+  if (!elevationMarker) {
+    const el = document.createElement('div');
+    el.className = 'elevation-hover-marker';
+    elevationMarker = new maplibregl.Marker({ element: el })
+      .setLngLat([coord.lon, coord.lat])
+      .addTo(mapInstance);
+  } else {
+    elevationMarker.setLngLat([coord.lon, coord.lat]);
   }
 }
 
