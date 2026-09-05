@@ -530,6 +530,7 @@ async fn multi_route_handler(
                 end: points[i + 1],
                 w_pop: req.w_pop,
                 w_paved: req.w_paved,
+                w_forest: req.w_forest,
             };
 
             let t_seg = std::time::Instant::now();

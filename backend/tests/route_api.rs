@@ -66,6 +66,7 @@ async fn route_respects_weights() {
         },
         w_pop: 0.0,
         w_paved: 0.0,
+        w_forest: 0.0,
     };
     let scenic = RouteRequest {
         w_pop: 0.0,
@@ -112,6 +113,7 @@ fn regression_three_waypoint_itinerary() {
             end: waypoint_b,
             w_pop,
             w_paved,
+            w_forest: 0.0,
         })
         .expect("path A→B should exist");
 
@@ -122,6 +124,7 @@ fn regression_three_waypoint_itinerary() {
             end: waypoint_c,
             w_pop,
             w_paved,
+            w_forest: 0.0,
         })
         .expect("path B→C should exist");
 

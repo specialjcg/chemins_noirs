@@ -148,6 +148,8 @@ struct EdgeData {
     length_km: f64,
     surface: SurfaceType,
     mean_population_density: f64,
+    /// Part du tronçon en forêt, dans `0.0..=1.0`.
+    forest_ratio: f64,
     /// Intermediate waypoints for this edge (OSM geometry)
     waypoints: Vec<Coordinate>,
 }
@@ -156,6 +158,24 @@ struct EdgeData {
 pub struct WeightConfig {
     pub population: f64,
     pub paved: f64,
+    /// Pénalité appliquée à ce qui n'est *pas* en forêt. Voir `edge_cost` pour
+    /// la raison de ce sens de lecture.
+    pub forest: f64,
+}
+
+/// Breakdown of an existing polyline scored with `RouteEngine::score_polyline`.
+#[derive(Clone, Debug, Default)]
+pub struct PolylineScore {
+    pub length_km: f64,
+    /// Weighted cost, directly comparable with a routed alternative's.
+    pub cost: f64,
+    pub paved_km: f64,
+    pub trail_km: f64,
+    pub dirt_km: f64,
+    /// Length that snapped to no edge (off-graph: unmapped paths, ferries…).
+    pub unmatched_km: f64,
+    /// Longueur pondérée par la part boisée des tronçons empruntés.
+    pub forest_km: f64,
 }
 
 impl RouteEngine {
@@ -207,6 +227,7 @@ impl RouteEngine {
                 length_km,
                 surface: edge.surface,
                 mean_population_density,
+                forest_ratio: edge.forest_ratio,
                 waypoints: edge.waypoints,
             };
             graph.update_edge(from, to, data);
@@ -522,6 +543,7 @@ impl RouteEngine {
         let weights = WeightConfig {
             population: req.w_pop,
             paved: req.w_paved,
+            forest: req.w_forest,
         };
 
         let heuristic = |idx: NodeIndex| {
@@ -832,6 +854,80 @@ impl RouteEngine {
         roads
     }
 
+    /// Nearest edge to a coordinate, with its distance in degrees.
+    /// Same projection logic as `closest_nodes`, but keeps the edge instead of
+    /// its endpoints — scoring a trace needs the surface, not the intersection.
+    fn nearest_edge(&self, target: Coordinate) -> Option<(petgraph::graph::EdgeIndex, f64)> {
+        let nearest = self
+            .road_point_index
+            .nearest(&[target.lon, target.lat], 20, &squared_euclidean)
+            .ok()?;
+
+        let mut best: Option<(petgraph::graph::EdgeIndex, f64)> = None;
+        for (_, &point_id) in &nearest {
+            if let Some(edge_idx) = self.road_points[point_id].edge_idx {
+                if best.map(|(b, _)| b == edge_idx).unwrap_or(false) {
+                    continue;
+                }
+                let dist = self.project_to_edge(target, edge_idx);
+                if best.map_or(true, |(_, best_dist)| dist < best_dist) {
+                    best = Some((edge_idx, dist));
+                }
+            }
+        }
+        best
+    }
+
+    /// Cost of an existing polyline under the same weights the router uses.
+    ///
+    /// The router only ever scores paths it built itself, so a hand-made trace
+    /// (a GR, a GPX import) cannot be compared with a computed alternative.
+    /// This walks the polyline, snaps each step onto the nearest edge and
+    /// reuses `edge_cost`, which makes the two numbers comparable.
+    ///
+    /// A step further than `MAX_SNAP_KM` from any edge is off-graph: its length
+    /// lands in `unmatched_km` and it is charged distance only, with no surface
+    /// penalty invented for it.
+    pub fn score_polyline(&self, path: &[Coordinate], weights: WeightConfig) -> PolylineScore {
+        const MAX_SNAP_KM: f64 = 0.2;
+
+        let mut score = PolylineScore::default();
+
+        for pair in path.windows(2) {
+            let step_km = straight_line_km(pair[0], pair[1]);
+            if step_km <= 0.0 {
+                continue;
+            }
+            score.length_km += step_km;
+
+            let mid = Coordinate {
+                lat: (pair[0].lat + pair[1].lat) / 2.0,
+                lon: (pair[0].lon + pair[1].lon) / 2.0,
+            };
+
+            match self.nearest_edge(mid) {
+                Some((edge_idx, dist_deg)) if dist_deg * 111.0 <= MAX_SNAP_KM => {
+                    let edge = &self.graph[edge_idx];
+                    match edge.surface {
+                        SurfaceType::Paved => score.paved_km += step_km,
+                        SurfaceType::Trail => score.trail_km += step_km,
+                        SurfaceType::Dirt => score.dirt_km += step_km,
+                    }
+                    score.forest_km += step_km * edge.forest_ratio;
+                    // Charge this step at the snapped edge's rate, per km.
+                    let per_km = self.edge_cost(edge, weights) / edge.length_km.max(1e-9);
+                    score.cost += step_km * per_km;
+                }
+                _ => {
+                    score.unmatched_km += step_km;
+                    score.cost += step_km;
+                }
+            }
+        }
+
+        score
+    }
+
     fn edge_cost(&self, edge: &EdgeData, weights: WeightConfig) -> f64 {
         let paved_penalty = match edge.surface {
             SurfaceType::Paved => 1.0,
@@ -839,10 +935,17 @@ impl RouteEngine {
             SurfaceType::Dirt => 0.0,
         };
 
+        // On pénalise le hors-forêt au lieu de bonifier la forêt : l'heuristique
+        // de l'A* est la distance à vol d'oiseau, donc tout coût inférieur à
+        // `length_km` la rendrait inadmissible et l'algorithme renverrait des
+        // chemins sous-optimaux sans le signaler.
+        let open_ground_penalty = 1.0 - edge.forest_ratio;
+
         edge.length_km
             * (1.0
                 + weights.population * edge.mean_population_density
-                + weights.paved * paved_penalty)
+                + weights.paved * paved_penalty
+                + weights.forest * open_ground_penalty)
     }
 }
 
@@ -1019,6 +1122,7 @@ mod tests {
             },
             w_pop: 0.0,
             w_paved: 5.0,
+            w_forest: 0.0,
         };
         let path = engine.find_path(&base_req).expect("path");
         assert!(path.len() > 3, "should take longer scenic path");
@@ -1038,6 +1142,7 @@ mod tests {
             },
             w_pop: 0.0,
             w_paved: 0.0,
+            w_forest: 0.0,
         };
         let path = engine.find_path(&base_req).expect("path");
         // Note: With OSM waypoints + interpolation, paths may have more points
@@ -1075,6 +1180,7 @@ mod tests {
             },
             w_pop: 1.0,
             w_paved: 1.0,
+            w_forest: 0.0,
         };
 
         let path = engine.find_path(&far_req);
@@ -1119,6 +1225,7 @@ mod tests {
             },
             w_pop: 1.0,
             w_paved: 1.0,
+            w_forest: 0.0,
         };
 
         // Should either return a single-point path or None
@@ -1179,13 +1286,14 @@ mod tests {
                         Coordinate { lat: 45.020, lon: 5.002 },  // wp1 ← target area
                         Coordinate { lat: 45.025, lon: 5.001 },  // wp2
                     ],
+                    forest_ratio: 0.0,
                 },
                 // Paved roads at intersection
-                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 400.0, waypoints: vec![] },
-                EdgeRecord { from: 1, to: 4, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![] },
-                EdgeRecord { from: 1, to: 5, surface: SurfaceType::Paved, length_m: 550.0, waypoints: vec![] },
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 400.0, waypoints: vec![], forest_ratio: 0.0 },
+                EdgeRecord { from: 1, to: 4, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0 },
+                EdgeRecord { from: 1, to: 5, surface: SurfaceType::Paved, length_m: 550.0, waypoints: vec![], forest_ratio: 0.0 },
                 // Connect N2→N5 for routing alternatives
-                EdgeRecord { from: 2, to: 5, surface: SurfaceType::Paved, length_m: 700.0, waypoints: vec![] },
+                EdgeRecord { from: 2, to: 5, surface: SurfaceType::Paved, length_m: 700.0, waypoints: vec![], forest_ratio: 0.0 },
             ],
         }
     }
@@ -1366,6 +1474,7 @@ mod tests {
             end: Coordinate { lat: 45.015, lon: 5.005 },   // at intersection N1
             w_pop: 1.0,
             w_paved: 1.0,
+            w_forest: 0.0,
         };
 
         let path = engine.find_path(&req).expect("should find path");
@@ -1398,6 +1507,7 @@ mod tests {
             end: Coordinate { lat: 45.015, lon: 5.015 },   // N4
             w_pop: 1.0,
             w_paved: 1.0,
+            w_forest: 0.0,
         };
 
         let path = engine.find_path(&req).expect("should find path");
@@ -1437,6 +1547,7 @@ mod tests {
             end: Coordinate { lat: 45.015, lon: 5.000 },   // N2
             w_pop: 0.0,
             w_paved: 0.0,
+            w_forest: 0.0,
         };
 
         let path = engine.find_path(&req).expect("should find path");
@@ -1469,6 +1580,7 @@ mod tests {
             end: Coordinate { lat: 45.015, lon: 5.015 },   // N4
             w_pop: 0.0,
             w_paved: 0.0,
+            w_forest: 0.0,
         };
 
         let path = engine.find_path(&req).expect("should find path");
@@ -1520,4 +1632,77 @@ mod tests {
             connectivity_ratio * 100.0
         );
     }
+
+    /// Deux itinéraires entre les mêmes points : un direct hors bois (800 m) et
+    /// un détour entièrement boisé (1000 m). Sans critère forêt, A* prend le
+    /// direct ; avec, il doit préférer le détour.
+    fn forest_fixture() -> crate::graph::GraphFile {
+        use crate::graph::{EdgeRecord, GraphFile, NodeRecord};
+
+        GraphFile {
+            nodes: vec![
+                NodeRecord { id: 1, lat: 45.000, lon: 5.000, elevation: None, population_density: 0.0 },
+                NodeRecord { id: 2, lat: 45.000, lon: 5.010, elevation: None, population_density: 0.0 },
+                NodeRecord { id: 3, lat: 45.005, lon: 5.005, elevation: None, population_density: 0.0 },
+            ],
+            edges: vec![
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Trail, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0 },
+                EdgeRecord { from: 1, to: 3, surface: SurfaceType::Trail, length_m: 500.0, waypoints: vec![], forest_ratio: 1.0 },
+                EdgeRecord { from: 3, to: 2, surface: SurfaceType::Trail, length_m: 500.0, waypoints: vec![], forest_ratio: 1.0 },
+            ],
+        }
+    }
+
+    fn forest_request(w_forest: f64) -> RouteRequest {
+        RouteRequest {
+            start: Coordinate { lat: 45.000, lon: 5.000 },
+            end: Coordinate { lat: 45.000, lon: 5.010 },
+            w_pop: 0.0,
+            // Neutralisé pour isoler l'effet du couvert boisé : les trois
+            // tronçons ont la même surface.
+            w_paved: 0.0,
+            w_forest,
+        }
+    }
+
+    #[test]
+    fn without_forest_weight_the_short_open_route_wins() {
+        let engine = RouteEngine::from_graph_file(forest_fixture()).expect("engine");
+        let path = engine.find_path(&forest_request(0.0)).expect("path");
+
+        assert!(
+            path.iter().all(|c| (c.lat - 45.005).abs() > 1e-4),
+            "sans critère forêt le détour boisé ne doit pas être emprunté : {path:?}"
+        );
+    }
+
+    #[test]
+    fn forest_weight_takes_the_longer_wooded_route() {
+        let engine = RouteEngine::from_graph_file(forest_fixture()).expect("engine");
+        let path = engine.find_path(&forest_request(2.0)).expect("path");
+
+        assert!(
+            path.iter().any(|c| (c.lat - 45.005).abs() < 1e-4),
+            "avec w_forest=2 le détour boisé doit l'emporter malgré ses 200 m de plus : {path:?}"
+        );
+    }
+
+    #[test]
+    fn forest_ratio_never_makes_an_edge_cheaper_than_its_length() {
+        // L'heuristique A* est la distance à vol d'oiseau : un coût inférieur à
+        // la longueur la rendrait inadmissible.
+        let engine = RouteEngine::from_graph_file(forest_fixture()).expect("engine");
+        let weights = WeightConfig { population: 0.0, paved: 0.0, forest: 5.0 };
+
+        for edge in engine.graph.edge_weights() {
+            assert!(
+                engine.edge_cost(edge, weights) >= edge.length_km - 1e-9,
+                "coût {} < longueur {} pour forest_ratio {}",
+                engine.edge_cost(edge, weights),
+                edge.length_km,
+                edge.forest_ratio
+            );
+        }
+    }
+
 }

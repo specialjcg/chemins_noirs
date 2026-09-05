@@ -244,6 +244,7 @@ fn build_loop_path(
         end: waypoint,
         w_pop: req.w_pop,
         w_paved: req.w_paved,
+        w_forest: req.w_forest,
     };
 
     // Find outbound path with node indices (avoids costly reverse-mapping via closest_node)
@@ -264,6 +265,7 @@ fn build_loop_path(
         end: req.start,
         w_pop: req.w_pop,
         w_paved: req.w_paved,
+        w_forest: req.w_forest,
     };
 
     let (mut inbound, _) =

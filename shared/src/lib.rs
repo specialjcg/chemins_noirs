@@ -31,6 +31,9 @@ pub struct RouteRequest {
     pub w_pop: f64,
     #[serde(default = "default_weight")]
     pub w_paved: f64,
+    /// Pénalité du hors-forêt. 0 = indifférent au couvert boisé.
+    #[serde(default = "default_forest_weight")]
+    pub w_forest: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +45,9 @@ pub struct MultiPointRouteRequest {
     pub w_pop: f64,
     #[serde(default = "default_weight")]
     pub w_paved: f64,
+    /// Pénalité du hors-forêt. 0 = indifférent au couvert boisé.
+    #[serde(default = "default_forest_weight")]
+    pub w_forest: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +62,9 @@ pub struct LoopRouteRequest {
     pub w_pop: f64,
     #[serde(default = "default_weight")]
     pub w_paved: f64,
+    /// Pénalité du hors-forêt. 0 = indifférent au couvert boisé.
+    #[serde(default = "default_forest_weight")]
+    pub w_forest: f64,
     #[serde(default)]
     pub max_total_ascent: Option<f64>,
     #[serde(default)]
@@ -136,6 +145,12 @@ pub struct ApiError {
 
 pub fn default_weight() -> f64 {
     1.0
+}
+
+/// Par défaut le moteur ignore le couvert boisé : ce critère se demande, il ne
+/// s'impose pas aux itinéraires déjà en base.
+pub fn default_forest_weight() -> f64 {
+    0.0
 }
 
 pub fn default_loop_candidate_count() -> usize {

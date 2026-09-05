@@ -118,6 +118,10 @@ pub struct EdgeRecord {
     /// This preserves the actual geometry of the road
     #[serde(default)]
     pub waypoints: Vec<Coordinate>,
+    /// Part du tronçon tombant dans un bois, dans `0.0..=1.0`.
+    /// Renseignée par `apply_landcover`; vaut 0 tant que la couche est absente.
+    #[serde(default)]
+    pub forest_ratio: f64,
 }
 
 impl GraphFile {
@@ -573,6 +577,9 @@ impl GraphBuilder {
                         surface: edge.surface,
                         length_m: edge.length_m,
                         waypoints: edge.waypoints,
+                        // Les tuiles pré-générées sont antérieures à la couche
+                        // d'occupation du sol : rien à propager.
+                        forest_ratio: 0.0,
                     });
                 }
                 _ => {
@@ -642,6 +649,7 @@ impl GraphBuilder {
                     surface: e.surface,
                     length_m: e.length_m,
                     waypoints: e.waypoints,
+                    forest_ratio: e.forest_ratio,
                 })
             })
             .collect();
@@ -735,18 +743,21 @@ impl GraphBuilder {
             }
         }
 
-        // Check disk cache (binary postcard format)
+        // Check disk cache (binary postcard format).
+        // `v2` : les caches d'avant la couche d'occupation du sol n'ont ni
+        // `forest_ratio` ni densité bâtie, et se reliraient en silence avec des
+        // zéros. Changer le préfixe les met hors circuit.
         let cache_path_bin = cache_dir
             .as_ref()
-            .join(format!("partial_{}.bin", cache_key));
+            .join(format!("partial_v2_{}.bin", cache_key));
 
         // Also check legacy formats for backward compatibility
         let cache_path_compressed = cache_dir
             .as_ref()
-            .join(format!("partial_{}.json.zst", cache_key));
+            .join(format!("partial_v2_{}.json.zst", cache_key));
         let cache_path_json = cache_dir
             .as_ref()
-            .join(format!("partial_{}.json", cache_key));
+            .join(format!("partial_v2_{}.json", cache_key));
 
         let disk_cache_path = if cache_path_bin.exists() {
             Some(&cache_path_bin)
@@ -789,7 +800,20 @@ impl GraphBuilder {
         // Build graph with bbox filter
         let config = GraphBuilderConfig { bbox: Some(bbox) };
         let builder = GraphBuilder::new(config);
-        let graph = builder.build_from_pbf(&effective_pbf)?;
+        let mut graph = builder.build_from_pbf(&effective_pbf)?;
+
+        // Occupation du sol : sans elle le moteur ne sait ni ce qu'est un bois
+        // ni ce qu'est un village, et ne peut arbitrer que sur le revêtement.
+        // Un échec ici dégrade le résultat sans l'invalider, d'où le warning
+        // plutôt qu'une erreur.
+        match load_or_build_landcover(&effective_pbf, cache_dir.as_ref(), &bbox, &cache_key) {
+            Ok(grid) => apply_landcover(&mut graph, &grid),
+            Err(err) => tracing::warn!(
+                "Couche d'occupation du sol indisponible pour {:?} ({err}) : \
+                 itinéraires calculés sans critère forêt ni densité bâtie",
+                bbox
+            ),
+        }
 
         // Cache to disk (binary postcard format)
         std::fs::create_dir_all(cache_dir.as_ref())?;
@@ -1122,6 +1146,7 @@ impl GraphBuilder {
                     length_m: e.length_m,
                     surface: e.surface,
                     waypoints: e.waypoints,
+                    forest_ratio: e.forest_ratio,
                 })
             })
             .collect();
@@ -1375,6 +1400,95 @@ fn process_way_element(
         .collect()
 }
 
+/// Charge la grille d'occupation du sol de la bbox, ou la construit et la cache.
+///
+/// Elle vit à côté du graphe partiel et partage sa clé : les deux sont valides
+/// pour exactement la même emprise.
+pub fn load_or_build_landcover(
+    pbf_path: &Path,
+    cache_dir: &Path,
+    bbox: &BoundingBox,
+    cache_key: &str,
+) -> Result<crate::landcover::LandCoverGrid, io::Error> {
+    let path = cache_dir.join(format!("landcover_{}.bin", cache_key));
+
+    if path.exists() {
+        return crate::landcover::LandCoverGrid::read_from_path(&path);
+    }
+
+    let grid = crate::landcover::build_from_pbf(
+        pbf_path,
+        bbox,
+        crate::landcover::DEFAULT_RESOLUTION_M,
+    )
+    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+
+    tracing::info!(
+        "Occupation du sol pour {:?} : {} cellules boisées, {} bâties",
+        bbox,
+        grid.forest_cells(),
+        grid.built_cells()
+    );
+
+    std::fs::create_dir_all(cache_dir)?;
+    grid.write_to_path(&path)?;
+
+    Ok(grid)
+}
+
+/// Reporte l'occupation du sol sur le graphe : densité bâtie par nœud, part
+/// boisée par tronçon.
+///
+/// Les tronçons sont ré-échantillonnés tous les `FOREST_SAMPLE_M` : ne tester
+/// que leurs extrémités ferait passer pour boisé un chemin qui traverse une
+/// coupe, et inversement.
+pub fn apply_landcover(graph: &mut GraphFile, grid: &crate::landcover::LandCoverGrid) {
+    const FOREST_SAMPLE_M: f64 = 50.0;
+
+    for node in graph.nodes.iter_mut() {
+        node.population_density = grid.built_density(node.lat, node.lon);
+    }
+
+    let coords: HashMap<u64, Coordinate> = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id, Coordinate { lat: node.lat, lon: node.lon }))
+        .collect();
+
+    for edge in graph.edges.iter_mut() {
+        let (Some(from), Some(to)) = (coords.get(&edge.from), coords.get(&edge.to)) else {
+            continue;
+        };
+
+        // Géométrie réelle du tronçon, extrémités comprises.
+        let mut line = Vec::with_capacity(edge.waypoints.len() + 2);
+        line.push(*from);
+        line.extend_from_slice(&edge.waypoints);
+        line.push(*to);
+
+        let mut samples = 0.0;
+        let mut in_forest = 0.0;
+
+        for pair in line.windows(2) {
+            let steps = ((haversine_km(pair[0], pair[1]) * 1000.0 / FOREST_SAMPLE_M).ceil() as usize)
+                .max(1);
+
+            for step in 0..steps {
+                let t = (step as f64 + 0.5) / steps as f64;
+                let lat = pair[0].lat + (pair[1].lat - pair[0].lat) * t;
+                let lon = pair[0].lon + (pair[1].lon - pair[0].lon) * t;
+
+                samples += 1.0;
+                if grid.is_forest(lat, lon) {
+                    in_forest += 1.0;
+                }
+            }
+        }
+
+        edge.forest_ratio = if samples > 0.0 { in_forest / samples } else { 0.0 };
+    }
+}
+
 // Pure function to create an edge record from node pair
 fn create_edge_record(
     from_osm: i64,
@@ -1397,6 +1511,7 @@ fn create_edge_record(
         surface,
         length_m: length_km * 1000.0,
         waypoints: Vec::new(), // No intermediate waypoints for now
+        forest_ratio: 0.0,     // Renseigné plus tard par `apply_landcover`
     })
 }
 
@@ -1588,6 +1703,7 @@ fn build_edge_with_waypoints(
         surface,
         length_m,
         waypoints,
+        forest_ratio: 0.0, // Renseigné plus tard par `apply_landcover`
     })
 }
 

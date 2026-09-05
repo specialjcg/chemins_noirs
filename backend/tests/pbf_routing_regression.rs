@@ -120,6 +120,7 @@ fn each_segment_finds_a_path() {
             end: Coordinate { lat: elat, lon: elon },
             w_pop: 1.0,
             w_paved: 1.0,
+            w_forest: 0.0,
         });
 
         assert!(
@@ -160,6 +161,7 @@ fn full_loop_distance_is_stable() {
                 end: Coordinate { lat: elat, lon: elon },
                 w_pop: 1.0,
                 w_paved: 1.0,
+                w_forest: 0.0,
             })
             .unwrap_or_else(|| panic!("No path for segment {} -> {}", i, i + 1));
 
@@ -210,6 +212,7 @@ fn path_coordinates_stay_near_waypoints() {
                 end: Coordinate { lat: elat, lon: elon },
                 w_pop: 1.0,
                 w_paved: 1.0,
+                w_forest: 0.0,
             })
             .expect("path should exist");
 
@@ -353,6 +356,7 @@ fn build_multi_point_route(
                 end: points[i + 1],
                 w_pop: 1.0,
                 w_paved: 1.0,
+                w_forest: 0.0,
             })
             .unwrap_or_else(|| panic!("No path for segment {} -> {}", i, i + 1));
 
