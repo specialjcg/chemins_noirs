@@ -1442,16 +1442,31 @@ fn infer_surface(tags: &[(String, String)]) -> SurfaceType {
     // Check explicit surface tag first
     if let Some(surface) = tags_map.get("surface") {
         return match *surface {
-            "gravel" | "fine_gravel" | "compacted" | "unpaved" => SurfaceType::Trail,
-            "dirt" | "earth" | "ground" | "grass" => SurfaceType::Dirt,
+            "gravel" | "fine_gravel" | "compacted" | "unpaved" | "shells" | "woodchips" => {
+                SurfaceType::Trail
+            }
+            // Soft natural ground. Sand matters in the Sologne and the Landes,
+            // where sandy tracks used to be read as tarmac and avoided.
+            "dirt" | "earth" | "ground" | "grass" | "sand" | "mud" | "soil" | "rock"
+            | "pebblestone" | "stepping_stones" => SurfaceType::Dirt,
             _ => SurfaceType::Paved,
         };
     }
 
     // Fallback to highway classification
     if let Some(highway) = tags_map.get("highway") {
+        // An untagged track is graded by tracktype when OSM provides one:
+        // grade1 is a made surface, grade3 and below are not.
+        if *highway == "track" {
+            return match tags_map.get("tracktype").copied() {
+                Some("grade1") => SurfaceType::Paved,
+                Some("grade2") => SurfaceType::Trail,
+                Some("grade3") | Some("grade4") | Some("grade5") => SurfaceType::Dirt,
+                _ => SurfaceType::Trail,
+            };
+        }
         return match *highway {
-            "path" | "footway" | "track" => SurfaceType::Trail,
+            "path" | "footway" => SurfaceType::Trail,
             "service" | "residential" | "primary" | "secondary" | "tertiary" => SurfaceType::Paved,
             _ => SurfaceType::Trail,
         };
@@ -1722,6 +1737,72 @@ fn merge_close_nodes(edges: Vec<EdgeRecord>, node_state: &NodeCollectionState) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tags(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn sandy_ground_is_not_tarmac() {
+        // Sologne and Landes tracks are sandy; reading them as paved made the
+        // router avoid exactly the ways it should prefer.
+        for value in ["sand", "mud", "soil", "rock", "pebblestone"] {
+            assert_eq!(
+                infer_surface(&tags(&[("highway", "track"), ("surface", value)])),
+                SurfaceType::Dirt,
+                "surface={} should be soft ground",
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_hard_surfaces_stay_paved() {
+        for value in ["asphalt", "concrete", "sett", "paving_stones"] {
+            assert_eq!(
+                infer_surface(&tags(&[("highway", "residential"), ("surface", value)])),
+                SurfaceType::Paved
+            );
+        }
+    }
+
+    #[test]
+    fn tracktype_grades_an_untagged_track() {
+        let cases = [
+            ("grade1", SurfaceType::Paved),
+            ("grade2", SurfaceType::Trail),
+            ("grade3", SurfaceType::Dirt),
+            ("grade5", SurfaceType::Dirt),
+        ];
+        for (grade, expected) in cases {
+            assert_eq!(
+                infer_surface(&tags(&[("highway", "track"), ("tracktype", grade)])),
+                expected,
+                "tracktype={}",
+                grade
+            );
+        }
+        // No tracktype at all: unchanged, a track stays a trail.
+        assert_eq!(
+            infer_surface(&tags(&[("highway", "track")])),
+            SurfaceType::Trail
+        );
+    }
+
+    #[test]
+    fn explicit_surface_wins_over_tracktype() {
+        assert_eq!(
+            infer_surface(&tags(&[
+                ("highway", "track"),
+                ("tracktype", "grade5"),
+                ("surface", "asphalt"),
+            ])),
+            SurfaceType::Paved
+        );
+    }
 
     #[test]
     fn test_identify_intersections_simple_way() {
