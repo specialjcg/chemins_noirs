@@ -43,29 +43,64 @@ fn load_cached_graph() -> Option<GraphFile> {
 fn load_first_graph(dir: &Path) -> Option<GraphFile> {
     // Try .bin first, then .json.zst, then .json
     for ext in ["bin", "json.zst", "json"] {
-        let entries: Vec<_> = std::fs::read_dir(dir)
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
             .ok()?
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.path()
+                let path = e.path();
+                let is_ext = path
                     .to_str()
-                    .is_some_and(|s| s.ends_with(&format!(".{}", ext)))
+                    .is_some_and(|s| s.ends_with(&format!(".{}", ext)));
+                // Les grilles d'occupation du sol partagent le répertoire mais
+                // ne sont pas des graphes.
+                let is_landcover = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("landcover_"));
+
+                is_ext && !is_landcover
             })
             .collect();
 
-        if let Some(entry) = entries.first() {
+        // `read_dir` ne garantit aucun ordre : sans tri, ce test dépendait du
+        // hasard du système de fichiers et changeait de graphe d'un jour à
+        // l'autre. Le plus gros fichier est le graphe régional attendu.
+        entries.sort_by_key(|entry| {
+            std::cmp::Reverse(entry.metadata().map(|m| m.len()).unwrap_or(0))
+        });
+
+        for entry in &entries {
             let path = entry.path();
-            eprintln!("Loading cached graph: {}", path.display());
             match GraphFile::read_from_path(&path) {
-                Ok(g) => return Some(g),
-                Err(e) => {
-                    eprintln!("ERROR reading {}: {}", path.display(), e);
-                    continue;
+                Ok(graph) if covers_waypoints(&graph) => {
+                    eprintln!("Loading cached graph: {}", path.display());
+                    return Some(graph);
                 }
+                // Le cache mélange les emprises : un graphe d'une autre région
+                // ferait échouer ces tests au lieu de les faire skipper.
+                Ok(graph) => eprintln!(
+                    "Skipping {} ({} nodes): does not cover the Beaujolais waypoints",
+                    path.display(),
+                    graph.nodes.len()
+                ),
+                Err(e) => eprintln!("ERROR reading {}: {}", path.display(), e),
             }
         }
     }
     None
+}
+
+/// Le graphe contient-il la zone testée ? Un nœud à moins de 5 km du premier
+/// waypoint suffit à l'affirmer.
+fn covers_waypoints(graph: &GraphFile) -> bool {
+    let (lat, lon) = WAYPOINTS[0];
+
+    graph.nodes.iter().any(|node| {
+        let d_lat = (node.lat - lat).abs();
+        let d_lon = (node.lon - lon).abs();
+
+        d_lat < 0.05 && d_lon < 0.07
+    })
 }
 
 fn engine() -> &'static RouteEngine {
