@@ -85,6 +85,18 @@ update msg model =
             , resetLoopCandidatesCmd model
             )
 
+        ForestWeightChanged val ->
+            let
+                form =
+                    model.form
+
+                newForm =
+                    { form | wForest = val }
+            in
+            ( { model | form = newForm }
+            , resetLoopCandidatesCmd model
+            )
+
         LoopDistanceChanged val ->
             let
                 loopForm =
@@ -165,13 +177,14 @@ update msg model =
                                 endWp =
                                     List.head (List.drop 1 model.waypoints) |> Maybe.withDefault { lat = 0, lon = 0 }
 
-                                ( wPop, wPaved ) =
+                                ( wPop, wPaved, wForest ) =
                                     if model.cheminNoir then
-                                        ( 5.0, 8.0 )
+                                        ( 5.0, 8.0, 2.0 )
 
                                     else
                                         ( String.toFloat model.form.wPop |> Maybe.withDefault 1.5
                                         , String.toFloat model.form.wPaved |> Maybe.withDefault 4.0
+                                        , String.toFloat model.form.wForest |> Maybe.withDefault 0.0
                                         )
 
                                 request =
@@ -179,6 +192,7 @@ update msg model =
                                     , end = endWp
                                     , wPop = wPop
                                     , wPaved = wPaved
+                                    , wForest = wForest
                                     }
                             in
                             ( { model | pending = True, error = Nothing }
@@ -1636,18 +1650,18 @@ loopFormToRequest cheminNoir form loopForm waypoints =
             let
                 weightsResult =
                     if cheminNoir then
-                        Ok ( 5.0, 8.0 )
+                        Ok ( 5.0, 8.0, 2.0 )
 
                     else
-                        case ( String.toFloat form.wPop, String.toFloat form.wPaved ) of
-                            ( Just wPop, Just wPaved ) ->
-                                Ok ( wPop, wPaved )
+                        case ( String.toFloat form.wPop, String.toFloat form.wPaved, String.toFloat form.wForest ) of
+                            ( Just wPop, Just wPaved, Just wForest ) ->
+                                Ok ( wPop, wPaved, wForest )
 
                             _ ->
                                 Err "Poids invalides"
             in
             case weightsResult of
-                Ok ( wPop, wPaved ) ->
+                Ok ( wPop, wPaved, wForest ) ->
                     case String.toFloat loopForm.distanceKm of
                         Just distanceKm ->
                             case String.toFloat loopForm.toleranceKm of
@@ -1661,6 +1675,7 @@ loopFormToRequest cheminNoir form loopForm waypoints =
                                                 , candidateCount = max 1 candidateCount
                                                 , wPop = wPop
                                                 , wPaved = wPaved
+                                                , wForest = wForest
                                                 , maxTotalAscent = String.toFloat loopForm.maxAscentM
                                                 , minTotalAscent = String.toFloat loopForm.minAscentM
                                                 }
@@ -1734,6 +1749,9 @@ multiPointRequest model =
         , closeLoop = model.closeLoop
         , wPop = 5.0
         , wPaved = 8.0
+        -- Le mode « chemin noir » cache les curseurs : il embarque son propre
+        -- penchant pour la forêt, mesuré à +8 points de couvert sur le GR31.
+        , wForest = 2.0
         }
 
     else
@@ -1741,4 +1759,5 @@ multiPointRequest model =
         , closeLoop = model.closeLoop
         , wPop = String.toFloat model.form.wPop |> Maybe.withDefault 1.0
         , wPaved = String.toFloat model.form.wPaved |> Maybe.withDefault 1.0
+        , wForest = String.toFloat model.form.wForest |> Maybe.withDefault 0.0
         }

@@ -30,6 +30,7 @@ encodeRouteRequest req =
         , ( "end", encodeCoordinate req.end )
         , ( "w_pop", Encode.float req.wPop )
         , ( "w_paved", Encode.float req.wPaved )
+        , ( "w_forest", Encode.float req.wForest )
         ]
 
 
@@ -44,6 +45,7 @@ encodeMultiPointRouteRequest req =
         , ( "close_loop", Encode.bool req.closeLoop )
         , ( "w_pop", Encode.float req.wPop )
         , ( "w_paved", Encode.float req.wPaved )
+        , ( "w_forest", Encode.float req.wForest )
         ]
 
 
@@ -60,6 +62,7 @@ encodeLoopRouteRequest req =
         , ( "candidate_count", Encode.int req.candidateCount )
         , ( "w_pop", Encode.float req.wPop )
         , ( "w_paved", Encode.float req.wPaved )
+        , ( "w_forest", Encode.float req.wForest )
         , ( "max_total_ascent", encodeMaybe Encode.float req.maxTotalAscent )
         , ( "min_total_ascent", encodeMaybe Encode.float req.minTotalAscent )
         ]

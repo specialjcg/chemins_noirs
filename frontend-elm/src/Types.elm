@@ -52,6 +52,7 @@ type alias RouteForm =
     , endLon : String
     , wPop : String
     , wPaved : String
+    , wForest : String
     }
 
 
@@ -84,6 +85,9 @@ defaultRouteForm =
     , endLon = "4.5757"
     , wPop = "1.5"
     , wPaved = "4.0"
+    -- 0 par défaut : le critère forêt s'ajoute à la demande, il ne change pas
+    -- le comportement de ceux qui ne le règlent pas.
+    , wForest = "0.0"
     }
 
 
@@ -189,6 +193,7 @@ type Msg
     | ElevationChartLeave
     | ElevationCursorMoved Int
     | ToggleElevationBand
+    | ForestWeightChanged String
     | UndoWaypoints
     | RedoWaypoints
     | ImportGpxClicked
@@ -262,6 +267,7 @@ type alias RouteRequest =
     , end : Coordinate
     , wPop : Float
     , wPaved : Float
+    , wForest : Float
     }
 
 
@@ -270,6 +276,7 @@ type alias MultiPointRouteRequest =
     , closeLoop : Bool
     , wPop : Float
     , wPaved : Float
+    , wForest : Float
     }
 
 
@@ -280,6 +287,7 @@ type alias LoopRouteRequest =
     , candidateCount : Int
     , wPop : Float
     , wPaved : Float
+    , wForest : Float
     , maxTotalAscent : Maybe Float
     , minTotalAscent : Maybe Float
     }
