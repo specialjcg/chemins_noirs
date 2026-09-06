@@ -12,6 +12,9 @@ let bboxLayer;
 let currentRoute = null;
 let animationFrameId = null;
 let animationStartTimestamp = null;
+let animationClockMs = 0;      // Temps d'animation écoulé, hors attentes de tuiles
+let animationLastFrame = null; // Horodatage de l'image précédente
+let animationStalledMs = 0;    // Depuis combien de temps on attend les tuiles
 let routeLengthMeters = 0;
 let routeDistances = [];
 let animationDurationMs = 60000;
@@ -129,7 +132,19 @@ const CAMERA_MODES = {
 let currentCameraMode = CAMERA_MODES.CINEMA;
 
 const DRONE_MIN_DURATION = 5000;
-const DRONE_MAX_DURATION = 180000;
+
+// La durée n'est plus bornée directement : la borner revenait à accélérer la
+// caméra sur les longs itinéraires, jusqu'à 23x la vitesse du mode sur 250 km,
+// et les tuiles n'avaient plus aucune chance de suivre. On borne la vitesse.
+const MAX_SPEED_FACTOR = 3;          // au plus 3x l'allure du mode
+const COMFORT_DURATION = 600000;     // en deçà de 10 min, on garde l'allure nominale
+
+// Au-delà, l'animation avance quand même : une source de tuiles muette ne doit
+// pas la figer pour de bon.
+const TILE_WAIT_BUDGET_MS = 2000;
+// Un onglet remis au premier plan rend un delta énorme ; sans plafond la
+// caméra ferait un bond.
+const MAX_FRAME_DELTA_MS = 100;
 
 /**
  * Set 3D camera position with advanced control
@@ -1270,6 +1285,9 @@ export function updateRoute(coords) {
 
   updateRouteMetrics(coords);
   animationStartTimestamp = null;
+  animationClockMs = 0;
+  animationLastFrame = null;
+  animationStalledMs = 0;
   lastBearing = null;
   lastAnimationMode = null;
   terrainSampleWarned = false;
@@ -1599,6 +1617,9 @@ export function startAnimation() {
 
   console.debug('[maplibre] Starting camera animation');
   animationStartTimestamp = null;
+  animationClockMs = 0;
+  animationLastFrame = null;
+  animationStalledMs = 0;
   lastTerrainZoomAdjust = 0;
   if (animationFrameId !== null) {
     cancelAnimationFrame(animationFrameId);
@@ -1613,6 +1634,9 @@ export function stopAnimation() {
     console.debug('[maplibre] Animation stopped');
   }
   animationStartTimestamp = null;
+  animationClockMs = 0;
+  animationLastFrame = null;
+  animationStalledMs = 0;
   lastBearing = null;
   lastAnimationMode = null;
   terrainSampleWarned = false;
@@ -1747,9 +1771,30 @@ function animateCamera(timestamp) {
     animationStartTimestamp = timestamp;
   }
 
+  // L'horloge d'animation ne suit pas le temps réel : elle se fige tant que le
+  // fond n'est pas chargé, sinon la caméra survole du gris. Le budget d'attente
+  // évite qu'une source muette ne bloque tout.
+  const delta = animationLastFrame === null
+    ? 0
+    : Math.min(timestamp - animationLastFrame, MAX_FRAME_DELTA_MS);
+  animationLastFrame = timestamp;
+
+  const tilesReady = typeof mapInstance.areTilesLoaded !== 'function'
+    || mapInstance.areTilesLoaded();
+
+  if (tilesReady) {
+    animationStalledMs = 0;
+    animationClockMs += delta;
+  } else {
+    animationStalledMs += delta;
+    if (animationStalledMs > TILE_WAIT_BUDGET_MS) {
+      animationClockMs += delta;
+    }
+  }
+
   const mode = currentCameraMode;
   const duration = Math.max(DRONE_MIN_DURATION, animationDurationMs);
-  const loopTime = (timestamp - animationStartTimestamp) % duration;
+  const loopTime = animationClockMs % duration;
   const progress = duration === 0 ? 0 : loopTime / duration;
   const targetDistance = routeLengthMeters * progress;
   const cameraPoint = coordinateAtDistance(targetDistance);
@@ -1896,9 +1941,20 @@ function updateRouteMetrics(coords) {
     }
   }
 
-  animationDurationMs = Math.min(
-    DRONE_MAX_DURATION,
-    Math.max(DRONE_MIN_DURATION, totalDuration)
+  // `totalDuration` est la durée à l'allure du mode. On ne l'écourte que si le
+  // survol dépasse le confortable, et jamais au-delà de MAX_SPEED_FACTOR.
+  const fastestAllowed = totalDuration / MAX_SPEED_FACTOR;
+  animationDurationMs = Math.max(
+    DRONE_MIN_DURATION,
+    Math.min(totalDuration, Math.max(COMFORT_DURATION, fastestAllowed))
+  );
+
+  // `console.debug` ne connaît pas `%.1f` : on formate nous-mêmes.
+  console.debug(
+    `[maplibre] survol : ${(routeLengthMeters / 1000).toFixed(1)} km en `
+    + `${(animationDurationMs / 1000).toFixed(0)} s `
+    + `(${(routeLengthMeters / (animationDurationMs / 1000)).toFixed(0)} m/s, `
+    + `${(totalDuration / animationDurationMs).toFixed(2)}x l'allure du mode)`
   );
 }
 
