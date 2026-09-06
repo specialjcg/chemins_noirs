@@ -93,6 +93,38 @@ struct RoadSnap {
     road_prefix: Vec<Coordinate>,
     /// Surface type of the edge this snap landed on (used for coloring).
     prefix_surface: SurfaceType,
+    /// L'autre extrémité de l'arête sur laquelle on s'est projeté, et le
+    /// morceau de route qui y mène depuis la projection.
+    ///
+    /// `node` est choisi sur la seule distance au point cliqué, sans savoir où
+    /// va l'itinéraire. Quand A* repart par cette même arête, le préfixe est
+    /// parcouru deux fois et se superpose : c'est l'antenne qu'on voit sur la
+    /// carte. Garder l'autre bout permet de repartir dans le bon sens.
+    other_node: Option<NodeIndex>,
+    other_prefix: Vec<Coordinate>,
+}
+
+/// Préfixe à coudre en tête de l'itinéraire, et nombre de nœuds à sauter.
+///
+/// Si le premier pas d'A* retraverse l'arête du snap, on repart de la
+/// projection vers l'autre extrémité au lieu de faire l'aller-retour.
+fn oriented_prefix<'a>(snap: &'a RoadSnap, route: &[NodeIndex]) -> (&'a [Coordinate], usize) {
+    match snap.other_node {
+        Some(other) if route.len() >= 3 && route[1] == other => (&snap.other_prefix, 1),
+        _ => (&snap.road_prefix, 0),
+    }
+}
+
+/// Pendant d'`oriented_prefix` pour la fin de l'itinéraire : si le dernier pas
+/// d'A* arrive par l'arête du snap, on s'arrête à l'autre extrémité et on
+/// rejoint la projection de là.
+fn oriented_suffix<'a>(snap: &'a RoadSnap, route: &[NodeIndex]) -> (&'a [Coordinate], usize) {
+    match snap.other_node {
+        Some(other) if route.len() >= 3 && route[route.len() - 2] == other => {
+            (&snap.other_prefix, 1)
+        }
+        _ => (&snap.road_prefix, 0),
+    }
 }
 
 #[derive(Clone)]
@@ -372,10 +404,19 @@ impl RouteEngine {
             (start, end)
         };
 
-        let (astar_coords, astar_surfaces) = {
+        let (astar_coords, astar_surfaces, start_prefix, end_prefix) = {
             let excluded = HashSet::new();
             let (_, route) = self.run_astar(start, end, req, &excluded)?;
-            expand_path_with_waypoints_and_surfaces(&route, &self.graph, &self.nodes, &self.edge_map)
+            let (start_prefix, skip_head) = oriented_prefix(&start_snap, &route);
+            let (end_prefix, skip_tail) = oriented_suffix(&end_snap, &route);
+            let core = &route[skip_head..route.len() - skip_tail];
+            let (coords, surfaces) = expand_path_with_waypoints_and_surfaces(
+                core,
+                &self.graph,
+                &self.nodes,
+                &self.edge_map,
+            );
+            (coords, surfaces, start_prefix.to_vec(), end_prefix.to_vec())
         };
 
         let start_paved = matches!(start_snap.prefix_surface, SurfaceType::Paved);
@@ -393,13 +434,13 @@ impl RouteEngine {
             }
         };
 
-        for &c in &start_snap.road_prefix {
+        for &c in &start_prefix {
             push(&mut full_coords, &mut full_surfaces, c, start_paved);
         }
         for (&c, &s) in astar_coords.iter().zip(astar_surfaces.iter()) {
             push(&mut full_coords, &mut full_surfaces, c, s);
         }
-        let mut end_suffix: Vec<Coordinate> = end_snap.road_prefix;
+        let mut end_suffix = end_prefix;
         end_suffix.reverse();
         for &c in &end_suffix {
             push(&mut full_coords, &mut full_surfaces, c, end_paved);
@@ -492,13 +533,24 @@ impl RouteEngine {
         };
 
         // Run A* between snap nodes (may be same node → single point)
-        let (astar_coords, route) = self.run_astar(start, end, req, excluded_edges)?;
+        let (_, route) = self.run_astar(start, end, req, excluded_edges)?;
+
+        // Le préfixe dépend de la direction qu'a prise A*, d'où ce recalcul de
+        // la géométrie sur la tranche utile de l'itinéraire.
+        let (start_prefix, skip_head) = oriented_prefix(&start_snap, &route);
+        let (end_prefix, skip_tail) = oriented_suffix(&end_snap, &route);
+        let astar_coords = expand_path_with_waypoints(
+            &route[skip_head..route.len() - skip_tail],
+            &self.graph,
+            &self.nodes,
+            &self.edge_map,
+        );
 
         // Build full path: start_prefix + A* path + reversed end_prefix
         let mut full_coords = Vec::new();
 
         // Start prefix: projected point on road → ... → start node
-        full_coords.extend_from_slice(&start_snap.road_prefix);
+        full_coords.extend_from_slice(start_prefix);
 
         // A* path (may overlap with last point of prefix — dedup)
         for &coord in &astar_coords {
@@ -510,7 +562,7 @@ impl RouteEngine {
         }
 
         // End prefix reversed: end node → ... → projected point on road
-        let mut end_suffix: Vec<Coordinate> = end_snap.road_prefix;
+        let mut end_suffix: Vec<Coordinate> = end_prefix.to_vec();
         end_suffix.reverse();
         for &coord in &end_suffix {
             if full_coords.last().map_or(true, |last: &Coordinate| {
@@ -757,6 +809,8 @@ impl RouteEngine {
                     node: NodeIndex::new(node_idx),
                     road_prefix: vec![],
                     prefix_surface: SurfaceType::Paved,
+                    other_node: None,
+                    other_prefix: vec![],
                 });
             }
         }
@@ -800,20 +854,22 @@ impl RouteEngine {
             + (target.lon - self.nodes[to.index()].coord.lon).powi(2))
         .sqrt();
 
-        let (snap_node, road_prefix) = if from_dist <= to_dist {
-            // Snap to 'from' — prefix goes backward along polyline: proj → seg_idx → ... → 0
-            let mut prefix = vec![proj_point];
-            for i in (0..=min_seg_idx).rev() {
-                prefix.push(polyline[i]);
-            }
-            (from, prefix)
+        // Les deux moitiés de l'arête, depuis la projection. On garde les deux :
+        // laquelle sert dépend de la direction que prendra A*, qu'on ne connaît
+        // pas encore ici.
+        let mut backward = vec![proj_point];
+        for i in (0..=min_seg_idx).rev() {
+            backward.push(polyline[i]);
+        }
+        let mut forward = vec![proj_point];
+        for i in (min_seg_idx + 1)..polyline.len() {
+            forward.push(polyline[i]);
+        }
+
+        let (snap_node, road_prefix, other_node, other_prefix) = if from_dist <= to_dist {
+            (from, backward, to, forward)
         } else {
-            // Snap to 'to' — prefix goes forward along polyline: proj → seg_idx+1 → ... → end
-            let mut prefix = vec![proj_point];
-            for i in (min_seg_idx + 1)..polyline.len() {
-                prefix.push(polyline[i]);
-            }
-            (to, prefix)
+            (to, forward, from, backward)
         };
 
         tracing::debug!(
@@ -826,7 +882,13 @@ impl RouteEngine {
             road_prefix.len()
         );
 
-        Some(RoadSnap { node: snap_node, road_prefix, prefix_surface: edge_data.surface })
+        Some(RoadSnap {
+            node: snap_node,
+            road_prefix,
+            prefix_surface: edge_data.surface,
+            other_node: Some(other_node),
+            other_prefix,
+        })
     }
 
     /// Extract all road polylines within a bounding box
@@ -1703,6 +1765,101 @@ mod tests {
                 edge.forest_ratio
             );
         }
+    }
+
+
+    /// Trois nœuds alignés d'ouest en est, deux tronçons.
+    fn straight_line_graph() -> crate::graph::GraphFile {
+        use crate::graph::{EdgeRecord, GraphFile, NodeRecord};
+
+        GraphFile {
+            nodes: vec![
+                NodeRecord { id: 1, lat: 45.0, lon: 5.000, elevation: None, population_density: 0.0 },
+                NodeRecord { id: 2, lat: 45.0, lon: 5.010, elevation: None, population_density: 0.0 },
+                NodeRecord { id: 3, lat: 45.0, lon: 5.020, elevation: None, population_density: 0.0 },
+                NodeRecord { id: 4, lat: 45.0, lon: 5.030, elevation: None, population_density: 0.0 },
+            ],
+            edges: vec![
+                // Géométrie intermédiaire : sans elle le clic se raccroche
+                // directement à un nœud et le préfixe de snap n'existe pas.
+                EdgeRecord {
+                    from: 1, to: 2, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0,
+                    waypoints: vec![
+                        Coordinate { lat: 45.0, lon: 5.002 },
+                        Coordinate { lat: 45.0, lon: 5.004 },
+                        Coordinate { lat: 45.0, lon: 5.006 },
+                        Coordinate { lat: 45.0, lon: 5.008 },
+                    ],
+                },
+                EdgeRecord {
+                    from: 2, to: 3, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0,
+                    waypoints: vec![
+                        Coordinate { lat: 45.0, lon: 5.012 },
+                        Coordinate { lat: 45.0, lon: 5.014 },
+                        Coordinate { lat: 45.0, lon: 5.016 },
+                    ],
+                },
+                EdgeRecord {
+                    from: 3, to: 4, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0,
+                    waypoints: vec![
+                        Coordinate { lat: 45.0, lon: 5.024 },
+                        Coordinate { lat: 45.0, lon: 5.027 },
+                    ],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn snapping_does_not_double_back_to_the_nearest_node() {
+        let engine = RouteEngine::from_graph_file(straight_line_graph()).expect("engine");
+
+        // Départ posé sur le tronçon 1→2, plus près de 1 ; arrivée à l'est, en 3.
+        // Le point se raccroche donc au nœud 1, dans le dos de l'itinéraire.
+        let start = Coordinate { lat: 45.0001, lon: 5.004 };
+        let end = Coordinate { lat: 45.0, lon: 5.020 };
+
+        let path = engine
+            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0 })
+            .expect("path");
+
+        let travelled: f64 = path.windows(2).map(|p| straight_line_km(p[0], p[1])).sum();
+        let direct = straight_line_km(start, end);
+
+        assert!(
+            travelled < direct * 1.2,
+            "aller-retour : {travelled:.3} km parcourus pour {direct:.3} km utiles — {path:?}"
+        );
+    }
+
+
+    #[test]
+    fn a_waypoint_mid_edge_does_not_kink_the_junction() {
+        // Un point d'étape posé en plein milieu d'un tronçon : chaque segment
+        // est snappé de son côté, et c'est à leur jonction que l'antenne
+        // apparaissait le plus souvent.
+        let engine = RouteEngine::from_graph_file(straight_line_graph()).expect("engine");
+
+        let start = Coordinate { lat: 45.0, lon: 5.001 };
+        let via = Coordinate { lat: 45.0001, lon: 5.014 };
+        let end = Coordinate { lat: 45.0, lon: 5.030 };
+
+        let leg = |from, to| {
+            engine
+                .find_path(&RouteRequest { start: from, end: to, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0 })
+                .expect("leg")
+        };
+
+        let mut full = leg(start, via);
+        full.extend(leg(via, end).into_iter().skip(1));
+
+        let travelled: f64 = full.windows(2).map(|p| straight_line_km(p[0], p[1])).sum();
+        let direct = straight_line_km(start, end);
+
+        assert!(
+            travelled < direct * 1.2,
+            "coude à la jonction : {travelled:.3} km pour {direct:.3} km utiles — {full:?}"
+        );
     }
 
 }
