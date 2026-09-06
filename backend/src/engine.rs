@@ -102,15 +102,86 @@ struct RoadSnap {
     /// carte. Garder l'autre bout permet de repartir dans le bon sens.
     other_node: Option<NodeIndex>,
     other_prefix: Vec<Coordinate>,
+    /// Arête sur laquelle le point s'est projeté, sa géométrie complète
+    /// (`from` → `to`), et la position de la projection le long de celle-ci,
+    /// exprimée en « index de sommet + fraction du segment ».
+    edge: Option<petgraph::graph::EdgeIndex>,
+    polyline: Vec<Coordinate>,
+    along: f64,
+}
+
+/// Point de la polyligne à la position `along` (index de sommet + fraction).
+fn point_along(polyline: &[Coordinate], along: f64) -> Coordinate {
+    let i = (along.floor().max(0.0) as usize).min(polyline.len().saturating_sub(2));
+    let t = along - i as f64;
+
+    Coordinate {
+        lat: polyline[i].lat + t * (polyline[i + 1].lat - polyline[i].lat),
+        lon: polyline[i].lon + t * (polyline[i + 1].lon - polyline[i].lon),
+    }
+}
+
+/// Les deux extrémités tombent sur la même arête : l'itinéraire est le morceau
+/// de route entre les deux projections.
+///
+/// Sans ce cas, A* doit passer par un nœud du graphe, et comme chaque bout se
+/// raccroche à l'extrémité la plus proche de lui, le tracé sort du chemin par
+/// un bout puis par l'autre — deux crochets pour un trajet en ligne droite.
+fn same_edge_path(start: &RoadSnap, end: &RoadSnap) -> Option<Vec<Coordinate>> {
+    if start.edge? != end.edge? {
+        return None;
+    }
+
+    let polyline = &start.polyline;
+    if polyline.len() < 2 {
+        return None;
+    }
+
+    // Uniquement quand les deux projections tombent *à l'intérieur* de l'arête.
+    // Si l'une est sur un nœud, le trajet direct n'est plus forcément le
+    // meilleur — A* peut vouloir contourner, par exemple pour éviter du goudron
+    // — et ce raccourci lui retirerait le choix.
+    const EDGE_END: f64 = 1e-9;
+    let last = (polyline.len() - 1) as f64;
+    let inside = |along: f64| along > EDGE_END && along < last - EDGE_END;
+    if !inside(start.along) || !inside(end.along) {
+        return None;
+    }
+
+    let forward = end.along >= start.along;
+    let (lo, hi) = if forward {
+        (start.along, end.along)
+    } else {
+        (end.along, start.along)
+    };
+
+    // Sommets de la polyligne strictement compris entre les deux projections.
+    let mut middle: Vec<Coordinate> = (0..polyline.len())
+        .filter(|&i| (i as f64) > lo && (i as f64) < hi)
+        .map(|i| polyline[i])
+        .collect();
+    if !forward {
+        middle.reverse();
+    }
+
+    let mut path = vec![point_along(polyline, start.along)];
+    path.extend(middle);
+    path.push(point_along(polyline, end.along));
+
+    Some(path)
 }
 
 /// Préfixe à coudre en tête de l'itinéraire, et nombre de nœuds à sauter.
 ///
 /// Si le premier pas d'A* retraverse l'arête du snap, on repart de la
 /// projection vers l'autre extrémité au lieu de faire l'aller-retour.
+///
+/// Deux nœuds suffisent : les deux bouts ne peuvent pas se corriger l'un
+/// l'autre jusqu'à vider l'itinéraire, cela demanderait qu'ils partagent
+/// l'arête et `same_edge_path` a déjà traité ce cas.
 fn oriented_prefix<'a>(snap: &'a RoadSnap, route: &[NodeIndex]) -> (&'a [Coordinate], usize) {
     match snap.other_node {
-        Some(other) if route.len() >= 3 && route[1] == other => (&snap.other_prefix, 1),
+        Some(other) if route.len() >= 2 && route[1] == other => (&snap.other_prefix, 1),
         _ => (&snap.road_prefix, 0),
     }
 }
@@ -120,7 +191,7 @@ fn oriented_prefix<'a>(snap: &'a RoadSnap, route: &[NodeIndex]) -> (&'a [Coordin
 /// rejoint la projection de là.
 fn oriented_suffix<'a>(snap: &'a RoadSnap, route: &[NodeIndex]) -> (&'a [Coordinate], usize) {
     match snap.other_node {
-        Some(other) if route.len() >= 3 && route[route.len() - 2] == other => {
+        Some(other) if route.len() >= 2 && route[route.len() - 2] == other => {
             (&snap.other_prefix, 1)
         }
         _ => (&snap.road_prefix, 0),
@@ -422,6 +493,11 @@ impl RouteEngine {
         let start_paved = matches!(start_snap.prefix_surface, SurfaceType::Paved);
         let end_paved = matches!(end_snap.prefix_surface, SurfaceType::Paved);
 
+        if let Some(direct) = same_edge_path(&start_snap, &end_snap) {
+            let surfaces = vec![start_paved; direct.len()];
+            return Some((direct, surfaces));
+        }
+
         let mut full_coords: Vec<Coordinate> = Vec::new();
         let mut full_surfaces: Vec<bool> = Vec::new();
 
@@ -486,6 +562,11 @@ impl RouteEngine {
     ) -> Option<(Vec<Coordinate>, Vec<NodeIndex>)> {
         let start_snap = self.snap_to_road(req.start)?;
         let end_snap = self.snap_to_road(req.end)?;
+
+        // Aucun nœud du graphe n'est traversé, d'où la liste d'indices vide.
+        if let Some(direct) = same_edge_path(&start_snap, &end_snap) {
+            return Some((direct, Vec::new()));
+        }
 
         let start = start_snap.node;
         let end = end_snap.node;
@@ -795,6 +876,23 @@ impl RouteEngine {
                 if dist_deg * 111.0 < MAX_DISTANCE_KM && best_pure_node.is_none() {
                     best_pure_node = Some((rp.node_idx, dist_deg));
                 }
+
+                // Seuls les points de géométrie intermédiaires portent un
+                // `edge_idx` dans l'index : une arête droite n'y figure que par
+                // ses deux extrémités, son milieu n'est donc jamais « proche ».
+                // Sans les arêtes incidentes aux nœuds voisins, un clic le long
+                // d'une telle route se raccrochait au nœud et le tracé démarrait
+                // en arrière du point posé.
+                for edge in self.graph.edges(NodeIndex::new(rp.node_idx)) {
+                    let edge_idx = edge.id();
+                    if edge_projections.contains_key(&edge_idx) {
+                        continue;
+                    }
+                    let proj_dist = self.project_to_edge(target, edge_idx);
+                    if proj_dist * 111.0 < MAX_DISTANCE_KM {
+                        edge_projections.insert(edge_idx, proj_dist);
+                    }
+                }
             }
         }
 
@@ -811,6 +909,9 @@ impl RouteEngine {
                     prefix_surface: SurfaceType::Paved,
                     other_node: None,
                     other_prefix: vec![],
+                    edge: None,
+                    polyline: vec![],
+                    along: 0.0,
                 });
             }
         }
@@ -888,6 +989,9 @@ impl RouteEngine {
             prefix_surface: edge_data.surface,
             other_node: Some(other_node),
             other_prefix,
+            edge: Some(best_edge_idx),
+            along: min_seg_idx as f64 + min_t,
+            polyline,
         })
     }
 
@@ -1859,6 +1963,71 @@ mod tests {
         assert!(
             travelled < direct * 1.2,
             "coude à la jonction : {travelled:.3} km pour {direct:.3} km utiles — {full:?}"
+        );
+    }
+
+
+    /// Deux tronçons rectilignes, sans aucun point de géométrie intermédiaire.
+    fn bare_line_graph() -> crate::graph::GraphFile {
+        use crate::graph::{EdgeRecord, GraphFile, NodeRecord};
+
+        GraphFile {
+            nodes: vec![
+                NodeRecord { id: 1, lat: 45.0, lon: 5.000, elevation: None, population_density: 0.0 },
+                NodeRecord { id: 2, lat: 45.0, lon: 5.010, elevation: None, population_density: 0.0 },
+                NodeRecord { id: 3, lat: 45.0, lon: 5.020, elevation: None, population_density: 0.0 },
+            ],
+            edges: vec![
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Trail, length_m: 790.0, waypoints: vec![], forest_ratio: 0.0 },
+                EdgeRecord { from: 2, to: 3, surface: SurfaceType::Trail, length_m: 790.0, waypoints: vec![], forest_ratio: 0.0 },
+            ],
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_bare_edge_starts_where_it_was_placed() {
+        let engine = RouteEngine::from_graph_file(bare_line_graph()).expect("engine");
+
+        // Posé aux trois quarts du premier tronçon, qui n'a aucun sommet
+        // intermédiaire : rien ne le rendait « proche » de l'index spatial.
+        let start = Coordinate { lat: 45.0, lon: 5.0075 };
+        let end = Coordinate { lat: 45.0, lon: 5.020 };
+
+        let path = engine
+            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0 })
+            .expect("path");
+
+        assert!(
+            (path[0].lon - start.lon).abs() < 1e-6,
+            "le tracé démarre en {:.4} au lieu de {:.4} — {path:?}",
+            path[0].lon,
+            start.lon
+        );
+    }
+
+    #[test]
+    fn both_ends_on_one_edge_follow_the_road_between_them() {
+        let engine = RouteEngine::from_graph_file(bare_line_graph()).expect("engine");
+
+        // Les deux points sur le même tronçon, chacun plus près d'un bout
+        // différent : sans traitement dédié, le tracé sortait par les deux.
+        let start = Coordinate { lat: 45.0, lon: 5.002 };
+        let end = Coordinate { lat: 45.0, lon: 5.008 };
+
+        let path = engine
+            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0 })
+            .expect("path");
+
+        let travelled: f64 = path.windows(2).map(|p| straight_line_km(p[0], p[1])).sum();
+        let direct = straight_line_km(start, end);
+
+        assert!(
+            travelled < direct * 1.05,
+            "crochets aux deux bouts : {travelled:.3} km pour {direct:.3} km — {path:?}"
+        );
+        assert!(
+            path.iter().all(|c| c.lon >= 5.002 - 1e-9 && c.lon <= 5.008 + 1e-9),
+            "le tracé sort du segment demandé — {path:?}"
         );
     }
 

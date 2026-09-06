@@ -138,21 +138,27 @@ fn regression_three_waypoint_itinerary() {
 
     // Path structure
     assert_eq!(seg_ab.len(), 3, "segment A→B point count");
-    assert_eq!(seg_bc.len(), 2, "segment B→C point count");
-    assert_eq!(full_path.len(), 4, "merged path point count");
+    assert_eq!(seg_bc.len(), 4, "segment B→C point count");
+    assert_eq!(full_path.len(), 6, "merged path point count");
 
     // Total distance
     assert!(
-        (distance_km - 4.2084657499).abs() < 0.0001,
+        (distance_km - 4.2792231129).abs() < 0.0001,
         "distance_km regression: got {distance_km}"
     );
 
-    // Exact path coordinates (nodes 1 → 2 → 3 → 6)
-    let expected: [(f64, f64); 4] = [
-        (45.000, 5.000),  // node 1
-        (45.010, 5.005),  // node 2
-        (45.020, 5.015),  // node 3
-        (45.025, 5.035),  // node 6
+    // The route now starts and ends where the waypoints were actually placed.
+    // This snapshot used to expect nodes 1 → 2 → 3 → 6 exactly: every click was
+    // pulled onto the nearest node, because none of these edges carries
+    // intermediate geometry and only such points were candidates for
+    // projection. A and C were silently moved ~80 m and ~155 m.
+    let expected: [(f64, f64); 6] = [
+        (45.0006, 5.0003),  // A, projected onto edge 1→2
+        (45.010, 5.005),    // node 2
+        (45.019, 5.014),    // B, projected onto edge 2→3
+        (45.020, 5.015),    // node 3
+        (45.025, 5.035),    // node 6
+        (45.0238, 5.0344),  // C, projected onto edge 4→6
     ];
 
     for (i, (coord, (elat, elon))) in full_path.iter().zip(expected.iter()).enumerate() {
