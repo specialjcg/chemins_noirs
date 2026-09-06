@@ -5,6 +5,7 @@ use backend::{
     database::Database,
     elevation::create_elevation_profile,
     engine::RouteEngine,
+    geo_utils::fold_overlap,
     graph::{BoundingBox, GraphBuilder, GraphBuilderConfig, GraphFile},
     loops::{self, LoopGenerationError},
     models::{Coordinate, LoopRouteRequest, LoopRouteResponse, RouteRequest},
@@ -551,8 +552,33 @@ async fn multi_route_handler(
                         snapped_waypoints.push(path[0]);
                     }
 
+                    // Coudre le segment au précédent : si l'un descend chercher
+                    // le point d'étape au bout d'une branche et que l'autre en
+                    // remonte, la ligne se replie sur elle-même. Seule la
+                    // jonction peut le voir.
+                    let (drop_tail, skip_head) = fold_overlap(&all_coords, &path);
+                    if drop_tail > 0 {
+                        let kept = all_coords.len() - drop_tail;
+                        all_coords.truncate(kept);
+                        all_surfaces.truncate(kept);
+
+                        // Ces index désignaient des points qu'on vient de retirer.
+                        let last = kept.saturating_sub(1);
+                        current_segment_start = current_segment_start.min(last);
+                        if let Some(boundary) = segment_boundaries.last_mut() {
+                            boundary.1 = boundary.1.min(last);
+                        }
+                        // Le point d'étape affiché doit suivre la ligne, pas
+                        // rester au bout d'une antenne qui n'existe plus.
+                        if let (Some(marker), Some(&tip)) =
+                            (snapped_waypoints.last_mut(), all_coords.last())
+                        {
+                            *marker = tip;
+                        }
+                    }
+
                     // Add the routed path (dedup avoids duplicate at segment boundaries)
-                    for (&coord, &surf) in path.iter().zip(seg_surfaces.iter()) {
+                    for (&coord, &surf) in path.iter().skip(skip_head).zip(seg_surfaces.iter().skip(skip_head)) {
                         let prev_len = all_coords.len();
                         push_dedup(&mut all_coords, coord);
                         if all_coords.len() > prev_len {

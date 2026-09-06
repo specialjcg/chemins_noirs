@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 use backend::{
     engine::{PolylineScore, RouteEngine, WeightConfig},
+    geo_utils::fold_overlap,
     graph::{BoundingBox, GraphBuilder, GraphBuilderConfig, GraphFile},
     models::{Coordinate, RouteRequest},
     routing::haversine_km,
@@ -271,8 +272,13 @@ fn main() -> Result<(), String> {
                 replaced_count += 1;
                 replaced_km += polyline_km(&chosen);
             }
-            // The first point of each stretch is already the previous one's last.
-            hybrid.extend(chosen.into_iter().skip(1));
+            // Coudre plutôt que concaténer : quand l'ancre tombe au bout d'une
+            // branche du réseau, la portion précédente descend l'y chercher et
+            // celle-ci remonte par le même chemin — une antenne parcourue deux
+            // fois que ni l'une ni l'autre ne peut voir seule.
+            let (drop_tail, skip_head) = fold_overlap(&hybrid, &chosen);
+            hybrid.truncate(hybrid.len() - drop_tail);
+            hybrid.extend(chosen.into_iter().skip(skip_head));
 
             decisions.push(AnchorDecision {
                 index: decisions.len(),

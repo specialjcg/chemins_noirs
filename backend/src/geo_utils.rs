@@ -139,3 +139,143 @@ mod tests {
         assert_eq!(approximate_distance_km(&path), 0.0);
     }
 }
+
+/// Recouvrement en miroir entre la fin de `tail` et le début de `head`.
+///
+/// Renvoie combien de points retirer à la fin de `tail` et combien sauter au
+/// début de `head` pour les coudre sans repli.
+///
+/// Deux segments calculés séparément se rejoignent sur un point commun. Quand
+/// ce point d'accroche est au bout d'une branche du réseau, le premier segment
+/// descend l'y chercher et le second remonte par le même chemin : chacun est
+/// juste, mais mis bout à bout ils dessinent une antenne parcourue deux fois.
+/// Seule la couture peut le voir, d'où cette fonction.
+///
+/// Les points répétés sont ignorés de part et d'autre : un itinéraire routé
+/// commence souvent par deux points distants de quelques millimètres, assez
+/// pour survivre au dédoublonnage et décaler la comparaison d'un cran.
+///
+/// Sans repli, le recouvrement se limite au point commun et le résultat est
+/// `(0, 1)` — exactement le « sauter le premier point » habituel.
+pub fn fold_overlap(tail: &[Coordinate], head: &[Coordinate]) -> (usize, usize) {
+    /// Deux points à moins de ça sont le même endroit du réseau.
+    const SAME_M: f64 = 5.0;
+
+    fn same(a: Coordinate, b: Coordinate) -> bool {
+        haversine_m(a.lat, a.lon, b.lat, b.lon) < SAME_M
+    }
+
+    /// Indices à parcourir, dans l'ordre donné, sans les répétitions.
+    fn distinct(points: &[Coordinate], order: impl Iterator<Item = usize>) -> Vec<usize> {
+        let mut out: Vec<usize> = Vec::new();
+        for i in order {
+            if out.last().is_none_or(|&last| !same(points[last], points[i])) {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    let back = distinct(tail, (0..tail.len()).rev());
+    let front = distinct(head, 0..head.len());
+
+    let mut k = 0;
+    while k < back.len() && k < front.len() && same(tail[back[k]], head[front[k]]) {
+        k += 1;
+    }
+
+    if k == 0 {
+        return (0, 0);
+    }
+
+    // On garde toujours au moins un point de chaque côté : un recouvrement
+    // total signifierait que l'un des segments disparaît.
+    let drop_tail = (tail.len() - 1 - back[k - 1]).min(tail.len() - 1);
+    let skip_head = (front[k - 1] + 1).min(head.len() - 1);
+
+    (drop_tail, skip_head)
+}
+
+#[cfg(test)]
+mod fold_tests {
+    use super::*;
+
+    fn c(lat: f64, lon: f64) -> Coordinate {
+        Coordinate { lat, lon }
+    }
+
+    #[test]
+    fn plain_junction_just_skips_the_shared_point() {
+        let tail = vec![c(45.000, 5.000), c(45.001, 5.001)];
+        let head = vec![c(45.001, 5.001), c(45.002, 5.002)];
+
+        assert_eq!(fold_overlap(&tail, &head), (0, 1));
+    }
+
+    #[test]
+    fn a_mirrored_tail_is_cut_back_to_the_branch_point() {
+        // Le second segment remonte exactement le chemin du premier sur trois
+        // points avant de repartir ailleurs.
+        let tail = vec![c(45.000, 5.000), c(45.001, 5.000), c(45.002, 5.000), c(45.003, 5.000)];
+        let head = vec![c(45.003, 5.000), c(45.002, 5.000), c(45.001, 5.000), c(45.001, 5.005)];
+
+        let (drop_tail, skip_head) = fold_overlap(&tail, &head);
+        assert_eq!((drop_tail, skip_head), (2, 3));
+
+        let mut stitched = tail[..tail.len() - drop_tail].to_vec();
+        stitched.extend_from_slice(&head[skip_head..]);
+
+        let expected = [(45.000, 5.000), (45.001, 5.000), (45.001, 5.005)];
+        assert_eq!(stitched.len(), expected.len(), "{stitched:?}");
+        for (got, (lat, lon)) in stitched.iter().zip(expected) {
+            assert!(
+                (got.lat - lat).abs() < 1e-9 && (got.lon - lon).abs() < 1e-9,
+                "attendu ({lat}, {lon}), obtenu ({}, {})",
+                got.lat,
+                got.lon
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_first_point_does_not_hide_the_fold() {
+        // Le segment routé démarre par deux points à quelques millimètres l'un
+        // de l'autre : sans dédoublonnage, la comparaison se décale et le
+        // miroir passe inaperçu.
+        let tail = vec![c(45.000, 5.000), c(45.001, 5.000), c(45.002, 5.000), c(45.003, 5.000)];
+        let head = vec![
+            c(45.003, 5.000),
+            c(45.0030000001, 5.0000000001),
+            c(45.002, 5.000),
+            c(45.001, 5.000),
+            c(45.001, 5.005),
+        ];
+
+        let (drop_tail, skip_head) = fold_overlap(&tail, &head);
+        let mut stitched = tail[..tail.len() - drop_tail].to_vec();
+        stitched.extend_from_slice(&head[skip_head..]);
+
+        assert_eq!(stitched.len(), 3, "{stitched:?}");
+        assert!((stitched[2].lon - 5.005).abs() < 1e-9, "{stitched:?}");
+    }
+
+    #[test]
+    fn segments_that_do_not_meet_are_left_alone() {
+        let tail = vec![c(45.000, 5.000), c(45.001, 5.000)];
+        let head = vec![c(45.010, 5.000), c(45.011, 5.000)];
+
+        assert_eq!(fold_overlap(&tail, &head), (0, 0));
+    }
+
+    #[test]
+    fn a_fully_retraced_segment_keeps_one_point_on_each_side() {
+        // Le second segment refait le premier à l'envers, en entier : on ne
+        // doit pas vider le tracé.
+        let tail = vec![c(45.000, 5.000), c(45.001, 5.000), c(45.002, 5.000)];
+        let head = vec![c(45.002, 5.000), c(45.001, 5.000), c(45.000, 5.000)];
+
+        let (drop_tail, skip_head) = fold_overlap(&tail, &head);
+        assert!(drop_tail < tail.len(), "drop_tail={drop_tail}");
+        assert!(skip_head < head.len(), "skip_head={skip_head}");
+    }
+}
