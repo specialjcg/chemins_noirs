@@ -257,7 +257,7 @@ view model =
                                 [ text "Aucun tracé sauvegardé" ]
 
                           else
-                            div [] (List.map viewSavedRoute model.savedRoutes)
+                            div [] (List.map (viewSavedRoute model.referenceRouteId) model.savedRoutes)
                         ]
 
                   else
@@ -287,7 +287,7 @@ view model =
                                 [ text "Aucun tracé sauvegardé" ]
 
                           else
-                            div [] (List.map viewSavedRoute model.savedRoutes)
+                            div [] (List.map (viewSavedRoute model.referenceRouteId) model.savedRoutes)
                         ]
 
                   else
@@ -354,8 +354,8 @@ onEnter msg =
         )
 
 
-viewSavedRoute : SavedRoute -> Html Msg
-viewSavedRoute route =
+viewSavedRoute : Maybe Int -> SavedRoute -> Html Msg
+viewSavedRoute referenceRouteId route =
     div [ class "saved-route-item" ]
         [ div [ class "saved-route-header" ]
             [ div [ class "saved-route-info" ]
@@ -399,6 +399,16 @@ viewSavedRoute route =
                 , onClick (LoadSavedRoute route.id)
                 ]
                 [ text "Charger" ]
+            , button
+                [ type_ "button"
+                , classList
+                    [ ( "action-layer", True )
+                    , ( "active", referenceRouteId == Just route.id )
+                    ]
+                , onClick (ToggleReferenceRoute route.id)
+                , title "Afficher en calque sur la carte, sans remplacer le tracé courant"
+                ]
+                [ text "\u{29C9}" ]
             , button
                 [ type_ "button"
                 , classList [ ( "action-fav", True ), ( "active", route.isFavorite ) ]

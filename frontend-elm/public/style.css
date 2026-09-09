@@ -1941,3 +1941,23 @@ body {
   box-shadow: 0 0 0 4px rgba(77, 171, 123, 0.28), 0 2px 6px rgba(0, 0, 0, 0.5);
   pointer-events: none;
 }
+
+/* Bouton « calque » : superpose un itinéraire enregistré au tracé courant. */
+.action-layer {
+  background: transparent;
+  border: 1px solid var(--border-medium);
+  color: var(--text-muted);
+  padding: 0.45rem 0.65rem;
+  font-size: 0.85rem;
+}
+
+.action-layer.active {
+  background: rgba(201, 168, 76, 0.14);
+  border-color: rgba(201, 168, 76, 0.45);
+  color: var(--accent-brass);
+}
+
+.action-layer:hover {
+  background: rgba(201, 168, 76, 0.08);
+  border-color: rgba(201, 168, 76, 0.3);
+}

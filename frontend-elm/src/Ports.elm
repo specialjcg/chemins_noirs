@@ -76,6 +76,9 @@ port triggerGpxImport : () -> Cmd msg
 port setElevationHoverMarker : Maybe { lat : Float, lon : Float } -> Cmd msg
 
 
+port setReferenceRoute : Maybe (List Coordinate) -> Cmd msg
+
+
 port centerMapOn : { lat : Float, lon : Float } -> Cmd msg
 
 

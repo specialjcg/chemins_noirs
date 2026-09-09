@@ -85,6 +85,38 @@ update msg model =
             , resetLoopCandidatesCmd model
             )
 
+        ToggleReferenceRoute id ->
+            if model.referenceRouteId == Just id then
+                ( { model | referenceRouteId = Nothing }
+                , Ports.setReferenceRoute Nothing
+                )
+
+            else
+                -- Le tracé complet n'est pas dans la liste : il faut aller le
+                -- chercher, comme pour un chargement ordinaire.
+                ( { model | referenceRouteId = Just id }
+                , Api.getSavedRoute id (ReferenceRouteLoaded id)
+                )
+
+        ReferenceRouteLoaded id result ->
+            -- Une réponse qui arrive après un changement de calque ne doit pas
+            -- écraser le choix courant.
+            if model.referenceRouteId /= Just id then
+                ( model, Cmd.none )
+
+            else
+                case result of
+                    Ok saved ->
+                        ( model, Ports.setReferenceRoute (Just saved.routeData.path) )
+
+                    Err _ ->
+                        ( { model
+                            | referenceRouteId = Nothing
+                            , error = Just "Impossible d'afficher cet itinéraire en calque"
+                          }
+                        , Ports.setReferenceRoute Nothing
+                        )
+
         ForestWeightChanged val ->
             let
                 form =

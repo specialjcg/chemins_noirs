@@ -27,6 +27,9 @@ type alias Model =
     , saveRouteName : String
     , saveRouteDescription : String
     , showSavedRoutes : Bool
+    -- Itinéraire enregistré affiché en surimpression, pour comparer le tracé
+    -- courant à un balisage officiel. `Nothing` = aucun calque.
+    , referenceRouteId : Maybe Int
     , showElevationChart : Bool
     , elevationHoverIndex : Maybe Int
     , elevationCursorIndex : Maybe Int
@@ -121,6 +124,7 @@ initialModel =
     , saveRouteName = ""
     , saveRouteDescription = ""
     , showSavedRoutes = False
+    , referenceRouteId = Nothing
     , showElevationChart = False
     , elevationHoverIndex = Nothing
     , elevationCursorIndex = Nothing
@@ -194,6 +198,8 @@ type Msg
     | ElevationCursorMoved Int
     | ToggleElevationBand
     | ForestWeightChanged String
+    | ToggleReferenceRoute Int
+    | ReferenceRouteLoaded Int (Result Http.Error SavedRoute)
     | UndoWaypoints
     | RedoWaypoints
     | ImportGpxClicked

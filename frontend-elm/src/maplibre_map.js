@@ -386,6 +386,27 @@ function ensureMap() {
     });
 
     // Add route source (will be populated later)
+    // Calque de référence : un itinéraire enregistré affiché en surimpression,
+    // pour comparer le tracé courant à un balisage officiel. Déclaré avant la
+    // route pour rester dessous.
+    mapInstance.addSource('reference', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+
+    mapInstance.addLayer({
+      id: 'reference-line',
+      type: 'line',
+      source: 'reference',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': '#c9a84c',
+        'line-width': 5,
+        'line-opacity': 0.9,
+        'line-dasharray': [2, 1.5]
+      }
+    });
+
     mapInstance.addSource('route', {
       type: 'geojson',
       data: {
@@ -1363,6 +1384,36 @@ export function setElevationHoverMarker(coord) {
   } else {
     elevationMarker.setLngLat([coord.lon, coord.lat]);
   }
+}
+
+/**
+ * Itinéraire de référence en surimpression (tirets dorés), ou null pour l'effacer.
+ */
+export function setReferenceRoute(coords) {
+  ensureMap();
+
+  const source = mapInstance.getSource('reference');
+  if (!source) {
+    console.warn('[maplibre] reference source not ready');
+    return;
+  }
+
+  if (!Array.isArray(coords) || coords.length < 2) {
+    source.setData({ type: 'FeatureCollection', features: [] });
+    return;
+  }
+
+  source.setData({
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: {},
+      geometry: {
+        type: 'LineString',
+        coordinates: coords.map((c) => [c.lon, c.lat])
+      }
+    }]
+  });
 }
 
 export function toggleSatelliteView(enabled) {

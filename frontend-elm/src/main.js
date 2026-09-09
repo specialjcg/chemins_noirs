@@ -337,6 +337,10 @@ app.ports.triggerGpxImport.subscribe(() => {
 // ============================================================
 // ELEVATION HOVER MARKER on map
 // ============================================================
+app.ports.setReferenceRoute.subscribe((coords) => {
+  MapLibreMap.setReferenceRoute(coords);
+});
+
 app.ports.setElevationHoverMarker.subscribe((coord) => {
   MapLibreMap.setElevationHoverMarker(coord);
 });
