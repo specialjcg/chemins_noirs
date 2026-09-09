@@ -744,20 +744,20 @@ impl GraphBuilder {
         }
 
         // Check disk cache (binary postcard format).
-        // `v2` : les caches d'avant la couche d'occupation du sol n'ont ni
-        // `forest_ratio` ni densité bâtie, et se reliraient en silence avec des
-        // zéros. Changer le préfixe les met hors circuit.
+        // `v3` : les caches antérieurs contiennent les chemins fermés au public,
+        // que le graphe n'accepte plus ; les `v1` n'avaient en outre ni
+        // `forest_ratio` ni densité bâtie. Changer le préfixe les met hors circuit.
         let cache_path_bin = cache_dir
             .as_ref()
-            .join(format!("partial_v2_{}.bin", cache_key));
+            .join(format!("partial_v4_{}.bin", cache_key));
 
         // Also check legacy formats for backward compatibility
         let cache_path_compressed = cache_dir
             .as_ref()
-            .join(format!("partial_v2_{}.json.zst", cache_key));
+            .join(format!("partial_v4_{}.json.zst", cache_key));
         let cache_path_json = cache_dir
             .as_ref()
-            .join(format!("partial_v2_{}.json", cache_key));
+            .join(format!("partial_v4_{}.json", cache_key));
 
         let disk_cache_path = if cache_path_bin.exists() {
             Some(&cache_path_bin)
@@ -887,8 +887,14 @@ impl GraphBuilder {
                         }
                     }
                     Element::Way(way) => {
-                        // Quick highway check without collecting all tags (avoids millions of Vec allocations)
-                        if way.tags().any(|(k, v)| k == "highway" && is_supported_highway(v)) {
+                        // Quick highway check without collecting all tags (avoids millions of Vec allocations).
+                        // Le contrôle d'accès est ici aussi : `build_from_filtered_data`
+                        // ne refiltre plus rien ensuite, et ce chemin optimisé est
+                        // celui qu'emprunte tout calcul avec bbox.
+                        let walkable = way.tags().any(|(k, v)| k == "highway" && is_supported_highway(v))
+                            && tags_are_walkable(way.tags());
+
+                        if walkable {
                             let node_refs: Vec<i64> = way.refs().collect();
                             let tag_pairs: Vec<(String, String)> =
                                 way.tags().map(|(k, v)| (k.to_string(), v.to_string())).collect();
@@ -1517,10 +1523,54 @@ fn create_edge_record(
 
 // Pure function to check if way has supported highway
 fn has_supported_highway(tags: &[(String, String)]) -> bool {
-    tags.iter()
+    let supported = tags
+        .iter()
         .find(|(k, _)| k == "highway")
         .map(|(_, v)| is_supported_highway(v))
-        .unwrap_or(false)
+        .unwrap_or(false);
+
+    supported && is_walkable(tags)
+}
+
+/// Le passage à pied y est-il autorisé ?
+///
+/// Le graphe acceptait tout chemin dont le `highway` convenait, y compris ceux
+/// explicitement fermés. En Sologne, région de grandes propriétés de chasse
+/// closes, cela mène des itinéraires dans des allées interdites.
+///
+/// Portée réelle de ce filtre : en Sologne, 10 % seulement des chemins portent
+/// une information d'accès. Il écarte ce qui est déclaré fermé, il ne dit rien
+/// des 90 % restants.
+fn is_walkable(tags: &[(String, String)]) -> bool {
+    tags_are_walkable(tags.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+}
+
+/// Même règle, sur un itérateur de tags.
+///
+/// Le balayage du PBF voit des millions de ways : y allouer un `Vec` de tags
+/// par way seulement pour lire `access` coûterait plus cher que tout le reste.
+fn tags_are_walkable<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> bool {
+    let mut access = None;
+    let mut foot = None;
+
+    for (key, value) in tags {
+        match key {
+            "foot" => foot = Some(value),
+            "access" => access = Some(value),
+            _ => {}
+        }
+    }
+
+    // `foot` tranche pour un piéton, même quand `access` ferme la voie aux
+    // véhicules — c'est le cas courant d'un chemin rural ouvert aux marcheurs.
+    if let Some(foot) = foot {
+        return !matches!(foot, "no" | "private");
+    }
+
+    match access {
+        Some(access) => !matches!(access, "no" | "private"),
+        None => true,
+    }
 }
 
 // Pure function to check if highway value is supported
@@ -1860,6 +1910,54 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
     }
+
+    #[test]
+    fn a_private_track_is_kept_out_of_the_graph() {
+        assert!(!has_supported_highway(&tags(&[
+            ("highway", "track"),
+            ("access", "private"),
+        ])));
+        assert!(!has_supported_highway(&tags(&[
+            ("highway", "path"),
+            ("access", "no"),
+        ])));
+    }
+
+    #[test]
+    fn foot_access_overrides_a_closed_road() {
+        // Chemin rural fermé aux véhicules mais ouvert aux marcheurs : le cas
+        // courant, et il doit rester praticable.
+        assert!(has_supported_highway(&tags(&[
+            ("highway", "track"),
+            ("access", "private"),
+            ("foot", "yes"),
+        ])));
+        assert!(has_supported_highway(&tags(&[
+            ("highway", "path"),
+            ("access", "no"),
+            ("foot", "designated"),
+        ])));
+    }
+
+    #[test]
+    fn foot_no_closes_an_otherwise_open_path() {
+        assert!(!has_supported_highway(&tags(&[
+            ("highway", "path"),
+            ("foot", "no"),
+        ])));
+    }
+
+    #[test]
+    fn a_path_without_access_tags_stays_open() {
+        // 90 % des chemins de Sologne sont dans ce cas : le filtre ne peut rien
+        // en dire, ils restent dans le graphe.
+        assert!(has_supported_highway(&tags(&[("highway", "track")])));
+        assert!(has_supported_highway(&tags(&[
+            ("highway", "path"),
+            ("access", "permissive"),
+        ])));
+    }
+
 
     #[test]
     fn sandy_ground_is_not_tarmac() {

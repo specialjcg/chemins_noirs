@@ -112,9 +112,10 @@ fn bbox_around(points: &[Coordinate], margin_km: f64) -> BoundingBox {
 /// Build (or reuse from disk) the graph for one chunk of the trace.
 fn engine_for(bbox: BoundingBox, pbf: &PathBuf, cache_dir: &PathBuf) -> Result<RouteEngine, String> {
     let key = bbox.cache_key();
-    // `v2` : les graphes d'avant la couche d'occupation du sol n'ont ni part
-    // boisée ni densité bâtie, et se reliraient en silence avec des zéros.
-    let cache_path = cache_dir.join(format!("hybridize_v2_{}.bin", key));
+    // `v3` : les graphes antérieurs contiennent les chemins fermés au public,
+    // que le graphe n'accepte plus ; les `v1` n'avaient en outre ni part boisée
+    // ni densité bâtie.
+    let cache_path = cache_dir.join(format!("hybridize_v4_{}.bin", key));
     if cache_path.exists() {
         if let Ok(graph) = GraphFile::read_from_path(&cache_path) {
             eprintln!("  graph: cache hit ({} nodes)", graph.nodes.len());
