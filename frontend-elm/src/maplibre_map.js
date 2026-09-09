@@ -401,9 +401,13 @@ function ensureMap() {
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: {
         'line-color': '#c9a84c',
-        'line-width': 5,
-        'line-opacity': 0.9,
-        'line-dasharray': [2, 1.5]
+        // Plus large que le tracé courant et son contour blanc réunis (6 px) :
+        // posé dessous à largeur égale, le calque disparaissait dès que les
+        // deux lignes passaient à moins de 500 m l'une de l'autre. En
+        // débordant, il se lit comme un surlignage même là où elles coïncident.
+        'line-width': ['interpolate', ['linear'], ['zoom'], 8, 10, 12, 16, 16, 22],
+        'line-opacity': 0.75,
+        'line-dasharray': [1.6, 1]
       }
     });
 
