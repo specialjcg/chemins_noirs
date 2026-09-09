@@ -7,6 +7,17 @@ use crate::error::RouteError;
 use crate::models::Coordinate;
 
 pub fn encode_route_as_gpx(path: &[Coordinate]) -> Result<String, RouteError> {
+    encode_route_as_gpx_with_elevations(path, None)
+}
+
+/// Comme `encode_route_as_gpx`, en portant les altitudes dans les points.
+///
+/// Sans elles un GPX ne montre aucun profil une fois chargé dans une montre ou
+/// une application de rando : la trace est juste, mais le dénivelé disparaît.
+pub fn encode_route_as_gpx_with_elevations(
+    path: &[Coordinate],
+    elevations: Option<&[Option<f64>]>,
+) -> Result<String, RouteError> {
     let mut gpx = Gpx {
         version: GpxVersion::Gpx11,
         creator: Some("chemins_noirs".into()),
@@ -18,7 +29,9 @@ pub fn encode_route_as_gpx(path: &[Coordinate]) -> Result<String, RouteError> {
     };
 
     let mut segment = TrackSegment::new();
-    for waypoint in path.iter().map(to_waypoint) {
+    for (idx, coord) in path.iter().enumerate() {
+        let mut waypoint = to_waypoint(coord);
+        waypoint.elevation = elevations.and_then(|e| e.get(idx).copied().flatten());
         segment.points.push(waypoint);
     }
     track.segments.push(segment);

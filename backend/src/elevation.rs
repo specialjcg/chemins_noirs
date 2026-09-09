@@ -38,13 +38,17 @@ pub async fn get_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Elevati
         return Ok(Vec::new());
     }
 
-    let grid = local_dem_grid().ok_or(ElevationError::DemNotAvailable)?;
+    // Pas de DEM local n'est pas une impasse : tout devient « non couvert » et
+    // part au repli IGN, comme les points hors emprise d'un DEM présent. Le DEM
+    // livré ne couvre qu'une région ; un itinéraire ailleurs échouait ici alors
+    // que le repli existait juste en dessous.
+    let grid = local_dem_grid();
 
     let mut values: Vec<Option<f64>> = Vec::with_capacity(coords.len());
     let mut missing: Vec<usize> = Vec::new();
 
     for (idx, &(lat, lon)) in coords.iter().enumerate() {
-        match grid.sample(lat, lon) {
+        match grid.and_then(|g| g.sample(lat, lon)) {
             Some(val) => values.push(Some(val)),
             None => {
                 values.push(None);
@@ -66,7 +70,11 @@ pub async fn get_elevations(coords: Vec<(f64, f64)>) -> Result<Vec<f64>, Elevati
 
     if !ign_fallback_enabled() {
         tracing::warn!("IGN fallback disabled (IGN_ELEVATION_FALLBACK=0)");
-        return Err(ElevationError::IncompleteCoverage(missing.len()));
+        return Err(if grid.is_none() {
+            ElevationError::DemNotAvailable
+        } else {
+            ElevationError::IncompleteCoverage(missing.len())
+        });
     }
 
     let wanted: Vec<(f64, f64)> = missing.iter().map(|&i| coords[i]).collect();

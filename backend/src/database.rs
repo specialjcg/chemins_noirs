@@ -150,6 +150,58 @@ impl Database {
         Ok(route)
     }
 
+    /// Replace an existing route, keeping its id.
+    ///
+    /// Regenerating a route in place matters: its id is what the map overlay
+    /// and any shared link point at.
+    pub async fn update_route(
+        &self,
+        id: i32,
+        req: SaveRouteRequest,
+    ) -> Result<SavedRoute, DatabaseError> {
+        let route_json = serde_json::to_value(&req.route)
+            .map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
+
+        let total_ascent = req.route.elevation_profile.as_ref().map(|p| p.total_ascent);
+        let total_descent = req.route.elevation_profile.as_ref().map(|p| p.total_descent);
+        let original_waypoints_json = req
+            .original_waypoints
+            .and_then(|wp| serde_json::to_value(wp).ok());
+
+        let route = sqlx::query_as::<_, SavedRoute>(
+            r#"
+            UPDATE saved_routes SET
+                name = $2,
+                description = $3,
+                distance_km = $4,
+                total_ascent_m = $5,
+                total_descent_m = $6,
+                route_data = $7,
+                gpx_data = $8,
+                tags = $9,
+                original_waypoints = COALESCE($10, original_waypoints)
+            WHERE id = $1
+            RETURNING *
+            "#,
+        )
+        .bind(id)
+        .bind(&req.name)
+        .bind(&req.description)
+        .bind(req.route.distance_km)
+        .bind(total_ascent)
+        .bind(total_descent)
+        .bind(route_json)
+        .bind(&req.route.gpx_base64)
+        .bind(req.tags.unwrap_or_default())
+        .bind(original_waypoints_json)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(DatabaseError::NotFound(id))?;
+
+        tracing::info!("Route updated: {} (ID: {})", route.name, route.id);
+        Ok(route)
+    }
+
     /// Get all saved routes (summary only)
     pub async fn list_routes(&self) -> Result<Vec<SavedRoute>, DatabaseError> {
         let routes = sqlx::query_as::<_, SavedRoute>(
