@@ -1407,17 +1407,34 @@ export function setReferenceRoute(coords) {
     return;
   }
 
+  const line = coords.map((c) => [c.lon, c.lat]);
+
   source.setData({
     type: 'FeatureCollection',
     features: [{
       type: 'Feature',
       properties: {},
-      geometry: {
-        type: 'LineString',
-        coordinates: coords.map((c) => [c.lon, c.lat])
-      }
+      geometry: { type: 'LineString', coordinates: line }
     }]
   });
+
+  // Cadrer sur l'ensemble calque + tracé courant. Le calque déborde presque
+  // toujours de l'itinéraire affiché — un GR entier contre une de ses
+  // sections — et rien ne signalait qu'il continuait hors écran.
+  const bounds = new maplibregl.LngLatBounds(line[0], line[0]);
+  line.forEach((point) => bounds.extend(point));
+
+  const route = mapInstance.getSource('route');
+  const routeData = route && (route.serialize ? route.serialize().data : route._data);
+  const routeLine = routeData
+    && routeData.features
+    && routeData.features[0]
+    && routeData.features[0].geometry.coordinates;
+  if (routeLine) {
+    routeLine.forEach((point) => bounds.extend(point));
+  }
+
+  mapInstance.fitBounds(bounds, { padding: 60, duration: 800 });
 }
 
 export function toggleSatelliteView(enabled) {
