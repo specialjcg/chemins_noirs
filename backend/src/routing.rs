@@ -88,11 +88,23 @@ pub fn rate_difficulty(
 ) -> String {
     let max_slope_pct = steepest_run_pct(elevations, path);
 
-    if max_slope_pct < 15.0 && total_ascent < 300.0 {
+    // Le dénivelé compte rapporté à la distance, pas en cumul brut : 1000 m
+    // sur 20 km est une course de montagne, les mêmes 1000 m sur 250 km sont
+    // un parcours plat. Le seuil absolu classait « expert » une traversée à
+    // moins de 8 m de montée par kilomètre.
+    let distance_km = approximate_distance_km(path);
+    let ascent_per_km = if distance_km > 0.5 {
+        total_ascent / distance_km
+    } else {
+        // Trop court pour que le rapport veuille dire quelque chose.
+        0.0
+    };
+
+    if max_slope_pct < 15.0 && ascent_per_km < 10.0 {
         "easy".to_string()
-    } else if max_slope_pct < 25.0 && total_ascent < 600.0 {
+    } else if max_slope_pct < 25.0 && ascent_per_km < 20.0 {
         "moderate".to_string()
-    } else if max_slope_pct < 35.0 && total_ascent < 1000.0 {
+    } else if max_slope_pct < 35.0 && ascent_per_km < 35.0 {
         "difficult".to_string()
     } else {
         "expert".to_string()
@@ -158,17 +170,30 @@ mod tests {
 
     #[test]
     fn a_flat_walk_stays_easy() {
-        let (elevations, path) = profile(50.0, &[100.0; 40]);
-        assert_eq!(rate_difficulty(&elevations, &path, 120.0), "easy");
+        // ~2 km, 10 m de montée : 5 m par kilomètre.
+        let (elevations, path) = profile(50.0, &[100.0; 41]);
+        assert_eq!(rate_difficulty(&elevations, &path, 10.0), "easy");
         assert_eq!(steepest_run_pct(&elevations, &path), 0.0);
     }
 
     #[test]
-    fn total_ascent_alone_still_raises_the_rating() {
-        // La pente n'est pas le seul critère : le cumul compte aussi.
-        let (elevations, path) = profile(50.0, &[100.0; 40]);
-        assert_eq!(rate_difficulty(&elevations, &path, 800.0), "difficult");
-        assert_eq!(rate_difficulty(&elevations, &path, 1200.0), "expert");
+    fn climb_per_kilometre_raises_the_rating_on_its_own() {
+        // Terrain plat entre les points, mais beaucoup de montée cumulée par
+        // kilomètre : la pente n'est pas le seul critère.
+        let (elevations, path) = profile(50.0, &[100.0; 41]); // 2 km
+
+        assert_eq!(rate_difficulty(&elevations, &path, 15.0), "easy"); // 7,5 m/km
+        assert_eq!(rate_difficulty(&elevations, &path, 30.0), "moderate"); // 15 m/km
+        assert_eq!(rate_difficulty(&elevations, &path, 60.0), "difficult"); // 30 m/km
+        assert_eq!(rate_difficulty(&elevations, &path, 200.0), "expert"); // 100 m/km
+    }
+
+    #[test]
+    fn a_long_flat_traverse_is_not_expert() {
+        // 2000 m de montée étalés sur 250 km : moins de 8 m par kilomètre.
+        // Le seuil absolu de 1000 m classait cela « expert ».
+        let (elevations, path) = profile(50.0, &[100.0; 5001]); // 250 km
+        assert_eq!(rate_difficulty(&elevations, &path, 2000.0), "easy");
     }
 
     // Property-based tests using proptest
