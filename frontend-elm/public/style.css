@@ -1961,3 +1961,54 @@ body {
   background: rgba(201, 168, 76, 0.08);
   border-color: rgba(201, 168, 76, 0.3);
 }
+
+/* ─── Rappel du calque actif ───────────────────────────────────────────────
+   Posé sur la carte : sans lui, rien ne dit quel itinéraire est superposé
+   une fois le panneau refermé. */
+.reference-badge {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 0.4rem 0.5rem 0.4rem 0.65rem;
+  background: rgba(12, 16, 13, 0.92);
+  border: 1px solid rgba(201, 168, 76, 0.45);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-elevated);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+/* Rappel visuel de la ligne dessinée sur la carte. */
+.reference-badge-swatch {
+  flex: none;
+  width: 22px;
+  height: 0;
+  border-top: 4px dashed var(--accent-brass);
+}
+
+.reference-badge-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-badge-close {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.2rem 0.3rem;
+}
+
+.reference-badge-close:hover {
+  color: var(--accent-brass-light);
+}

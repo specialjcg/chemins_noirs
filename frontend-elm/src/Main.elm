@@ -1148,6 +1148,40 @@ elevationMarkerCmd model maybeIdx =
         (Maybe.map (\c -> { lat = c.lat, lon = c.lon }) coord)
 
 
+{-| Rappel de l'itinéraire affiché en calque.
+
+Le seul indice était un bouton doré dans le panneau des itinéraires, invisible
+une fois celui-ci refermé : on ne savait plus quel tracé on regardait, et trois
+noms de la liste commencent par « Sologne ».
+
+-}
+viewReferenceBadge : Model -> Html Msg
+viewReferenceBadge model =
+    case model.referenceRouteId of
+        Nothing ->
+            text ""
+
+        Just id ->
+            let
+                name =
+                    model.savedRoutes
+                        |> List.filter (\route -> route.id == id)
+                        |> List.head
+                        |> Maybe.map .name
+                        |> Maybe.withDefault "Itinéraire de référence"
+            in
+            div [ class "reference-badge" ]
+                [ span [ class "reference-badge-swatch" ] []
+                , span [ class "reference-badge-name" ] [ text name ]
+                , button
+                    [ class "reference-badge-close"
+                    , Html.Events.onClick (ToggleReferenceRoute id)
+                    , Html.Attributes.title "Retirer le calque"
+                    ]
+                    [ text "\u{2715}" ]
+                ]
+
+
 view : Model -> Html Msg
 view model =
     -- `app-root` est en `display: contents` : il disparaît de la mise en page,
@@ -1162,6 +1196,7 @@ view model =
             , Form.view model
             , Preview.view model
             ]
+        , viewReferenceBadge model
         , ElevationBand.view model
         ]
 
