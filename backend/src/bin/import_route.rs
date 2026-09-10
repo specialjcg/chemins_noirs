@@ -230,6 +230,7 @@ async fn main() -> Result<(), String> {
         .map(|t| t.split(',').filter(|s| !s.is_empty()).map(String::from).collect())
         .unwrap_or_default();
     let target_km = arg_f64(&args, "--target-km", 35.0);
+    let elevations_path = arg(&args, "--elevations");
     let places_path = PathBuf::from(
         arg(&args, "--places").unwrap_or_else(|| "data/places.json".into()),
     );
@@ -260,9 +261,37 @@ async fn main() -> Result<(), String> {
     );
 
     // Altitudes IGN, lissage et cumuls : exactement ce que fait le backend.
-    let profile = create_elevation_profile(&path)
-        .await
-        .map_err(|e| format!("altitudes : {e}"))?;
+    // `--elevations` rejoue un import sur un profil déjà connu, sans redemander
+    // le réseau — utile pour reprendre un tracé sans en changer les altitudes.
+    let profile = match &elevations_path {
+        Some(file) => {
+            let raw: Vec<Option<f64>> = serde_json::from_str(
+                &fs::read_to_string(file).map_err(|e| format!("read {file}: {e}"))?,
+            )
+            .map_err(|e| format!("parse {file}: {e}"))?;
+
+            if raw.len() != path.len() {
+                return Err(format!(
+                    "{} altitudes pour {} points",
+                    raw.len(),
+                    path.len()
+                ));
+            }
+
+            let (total_ascent, total_descent) = ascent_descent(&raw);
+            let known: Vec<f64> = raw.iter().flatten().copied().collect();
+            shared::ElevationProfile {
+                min_elevation: known.iter().cloned().reduce(f64::min),
+                max_elevation: known.iter().cloned().reduce(f64::max),
+                elevations: raw,
+                total_ascent,
+                total_descent,
+            }
+        }
+        None => create_elevation_profile(&path)
+            .await
+            .map_err(|e| format!("altitudes : {e}"))?,
+    };
 
     let segments: Vec<SegmentStats> = cuts
         .windows(2)

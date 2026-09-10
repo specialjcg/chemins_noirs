@@ -40,6 +40,45 @@ pub fn estimate_time_minutes(distance_km: f64, total_ascent: f64) -> u32 {
     (hours * 60.0).round() as u32
 }
 
+/// Shortest run of trail a slope is measured over, in metres.
+///
+/// Elevation is accurate to a metre or two at best, so over a few metres of
+/// ground that noise *is* the slope: a 5 m step with 2.6 m between its ends
+/// reads as 48 %, and one such point was enough to rate 152 km of flat
+/// Sologne "expert". A real ramp survives being measured over 25 m; a bad
+/// sample does not.
+const MIN_SLOPE_RUN_M: f64 = 25.0;
+
+/// Steepest slope over any stretch of at least `MIN_SLOPE_RUN_M`.
+///
+/// The window slides point by point and grows until it is long enough, so a
+/// short sharp climb inside a longer stretch is still caught — it is only
+/// measured over ground long enough to mean something.
+fn steepest_run_pct(elevations: &[Option<f64>], path: &[Coordinate]) -> f64 {
+    let count = path.len().min(elevations.len());
+    let mut steepest: f64 = 0.0;
+
+    for start in 0..count {
+        let Some(from) = elevations[start] else { continue };
+
+        let mut run_m = 0.0;
+        for i in (start + 1)..count {
+            run_m += haversine_km(path[i - 1], path[i]) * 1000.0;
+            if run_m < MIN_SLOPE_RUN_M {
+                continue;
+            }
+
+            if let Some(to) = elevations[i] {
+                let slope = (to - from).abs() / run_m * 100.0;
+                steepest = steepest.max(slope);
+            }
+            break;
+        }
+    }
+
+    steepest
+}
+
 /// Rate difficulty based on max slope, total elevation, and distance.
 /// Returns "easy", "moderate", "difficult", or "expert".
 pub fn rate_difficulty(
@@ -47,19 +86,7 @@ pub fn rate_difficulty(
     path: &[Coordinate],
     total_ascent: f64,
 ) -> String {
-    // Compute max slope between consecutive points
-    let mut max_slope_pct: f64 = 0.0;
-    for i in 1..path.len().min(elevations.len()) {
-        if let (Some(e1), Some(e2)) = (elevations[i - 1], elevations[i]) {
-            let horiz_m = haversine_km(path[i - 1], path[i]) * 1000.0;
-            if horiz_m > 1.0 {
-                let slope = ((e2 - e1).abs() / horiz_m * 100.0).abs();
-                if slope > max_slope_pct {
-                    max_slope_pct = slope;
-                }
-            }
-        }
-    }
+    let max_slope_pct = steepest_run_pct(elevations, path);
 
     if max_slope_pct < 15.0 && total_ascent < 300.0 {
         "easy".to_string()
@@ -75,6 +102,74 @@ pub fn rate_difficulty(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Points espacés de `spacing_m` le long d'un parallèle, aux altitudes données.
+    fn profile(spacing_m: f64, elevations: &[f64]) -> (Vec<Option<f64>>, Vec<Coordinate>) {
+        let step_deg = spacing_m / (111_320.0 * (45.0f64).to_radians().cos());
+        let path = (0..elevations.len())
+            .map(|i| Coordinate { lat: 45.0, lon: 5.0 + i as f64 * step_deg })
+            .collect();
+        (elevations.iter().map(|&e| Some(e)).collect(), path)
+    }
+
+    #[test]
+    fn a_noisy_step_no_longer_decides_the_rating() {
+        // 2,6 m d'écart sur 5 m de terrain : 48 % de pente sur le papier, du
+        // bruit d'altimétrie en réalité. C'est le point qui classait 152 km de
+        // Sologne plate en « expert ».
+        let (elevations, path) = profile(5.0, &[74.6, 72.0, 74.6, 72.0, 74.6, 72.0]);
+        assert!(
+            steepest_run_pct(&elevations, &path) < 15.0,
+            "pente retenue : {}",
+            steepest_run_pct(&elevations, &path)
+        );
+        assert_eq!(rate_difficulty(&elevations, &path, 50.0), "easy");
+    }
+
+    #[test]
+    fn a_real_climb_is_still_seen() {
+        // 30 % soutenus sur 250 m : une vraie rampe, elle doit rester détectée.
+        let mut elevations = vec![0.0];
+        for i in 1..=10 {
+            elevations.push(i as f64 * 7.5);
+        }
+        let (elevations, path) = profile(25.0, &elevations);
+
+        let slope = steepest_run_pct(&elevations, &path);
+        assert!((slope - 30.0).abs() < 1.0, "pente retenue : {slope}");
+    }
+
+    #[test]
+    fn a_short_ramp_inside_a_long_stretch_is_caught() {
+        // Rampe brève au milieu du plat : la fenêtre glissante doit la voir,
+        // mesurée sur la longueur minimale et non diluée sur tout le tracé.
+        let mut elevations = vec![100.0; 20];
+        for i in 10..14 {
+            elevations[i] = 100.0 + (i - 9) as f64 * 4.0;
+        }
+        for i in 14..20 {
+            elevations[i] = 116.0;
+        }
+        let (elevations, path) = profile(10.0, &elevations);
+
+        let slope = steepest_run_pct(&elevations, &path);
+        assert!(slope > 30.0, "rampe manquée : {slope}");
+    }
+
+    #[test]
+    fn a_flat_walk_stays_easy() {
+        let (elevations, path) = profile(50.0, &[100.0; 40]);
+        assert_eq!(rate_difficulty(&elevations, &path, 120.0), "easy");
+        assert_eq!(steepest_run_pct(&elevations, &path), 0.0);
+    }
+
+    #[test]
+    fn total_ascent_alone_still_raises_the_rating() {
+        // La pente n'est pas le seul critère : le cumul compte aussi.
+        let (elevations, path) = profile(50.0, &[100.0; 40]);
+        assert_eq!(rate_difficulty(&elevations, &path, 800.0), "difficult");
+        assert_eq!(rate_difficulty(&elevations, &path, 1200.0), "expert");
+    }
 
     // Property-based tests using proptest
     mod proptests {
