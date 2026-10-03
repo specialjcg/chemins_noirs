@@ -181,7 +181,7 @@ app.ports.loadRouteFromLocalStorage.subscribe(() => {
 // Center map on a location (geocoding result)
 app.ports.centerMapOn.subscribe(({ lat, lon }) => {
   console.log('[Elm→JS] centerMapOn', { lat, lon });
-  MapLibreMap.flyToBbox(lat, lon);
+  MapLibreMap.centerMapOnCoord(lat, lon);
 });
 
 // ============================================================
