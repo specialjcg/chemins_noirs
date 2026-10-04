@@ -565,9 +565,7 @@ async fn multi_route_handler(
                         // Ces index désignaient des points qu'on vient de retirer.
                         let last = kept.saturating_sub(1);
                         current_segment_start = current_segment_start.min(last);
-                        if let Some(boundary) = segment_boundaries.last_mut() {
-                            boundary.1 = boundary.1.min(last);
-                        }
+                        clamp_boundaries(&mut segment_boundaries, last);
                         // Le point d'étape affiché doit suivre la ligne, pas
                         // rester au bout d'une antenne qui n'existe plus.
                         if let (Some(marker), Some(&tip)) =
@@ -660,6 +658,7 @@ async fn multi_route_handler(
     let segments = if segment_boundaries.len() >= 2 {
         let seg_stats: Vec<shared::SegmentStats> = segment_boundaries
             .iter()
+            .filter(|&&(from_idx, to_idx)| from_idx < to_idx && to_idx < all_coords.len())
             .map(|&(from_idx, to_idx)| {
                 // Distance for this segment
                 let seg_dist: f64 = all_coords[from_idx..=to_idx]
@@ -892,6 +891,26 @@ async fn pois_handler(
     Ok(Json(pois))
 }
 
+/// Ramène les bornes d'étapes à l'intérieur de la ligne après qu'une jonction
+/// repliée l'a raccourcie.
+///
+/// Un tronçon qui repart en arrière se superpose aux précédents : `fold_overlap`
+/// peut alors tronquer `all_coords` bien au-delà de la dernière borne posée.
+/// Ne réparer que celle-là laissait les autres pointer hors de la ligne, et le
+/// calcul des statistiques d'étape paniquait sur
+/// `range end index 314 out of range for slice of length 285`.
+///
+/// Les bornes réduites à un point désignent une étape que la ligne ne contient
+/// plus : on les retire, sans quoi `from > to` ferait paniquer la découpe à
+/// l'autre bout.
+fn clamp_boundaries(boundaries: &mut Vec<(usize, usize)>, last: usize) {
+    for bound in boundaries.iter_mut() {
+        bound.0 = bound.0.min(last);
+        bound.1 = bound.1.min(last);
+    }
+    boundaries.retain(|&(from, to)| from < to);
+}
+
 /// Reporte l'occupation du sol sur un graphe fraîchement construit.
 ///
 /// Sans elle, `forest_ratio` et `population_density` restent à zéro : le coût
@@ -1028,6 +1047,45 @@ mod tests {
     /// Coordinate has no PartialEq; compare the components.
     fn same(a: Coordinate, b: Coordinate) -> bool {
         (a.lat - b.lat).abs() < 1e-9 && (a.lon - b.lon).abs() < 1e-9
+    }
+
+    /// Une troncature peu profonde ne touche que la dernière borne.
+    #[test]
+    fn shallow_truncation_only_clamps_the_tail() {
+        let mut bounds = vec![(0, 50), (50, 120), (120, 200)];
+        clamp_boundaries(&mut bounds, 180);
+        assert_eq!(bounds, vec![(0, 50), (50, 120), (120, 180)]);
+    }
+
+    /// Le cas qui paniquait : le dernier tronçon repart en arrière, la ligne
+    /// retombe sous plusieurs bornes à la fois, et toutes doivent suivre.
+    #[test]
+    fn deep_truncation_clamps_every_boundary() {
+        let mut bounds = vec![(0, 50), (50, 120), (120, 200), (200, 313)];
+        clamp_boundaries(&mut bounds, 99);
+
+        for &(from, to) in &bounds {
+            assert!(to <= 99, "borne {to} hors de la ligne tronquée à 99");
+            assert!(from < to, "borne vide conservée : {from}..{to}");
+        }
+        assert_eq!(bounds, vec![(0, 50), (50, 99)]);
+    }
+
+    /// Une borne réduite à un seul point ne décrit plus d'étape : la garder
+    /// ferait paniquer la découpe sur `from > to`.
+    #[test]
+    fn collapsed_boundaries_are_dropped() {
+        let mut bounds = vec![(0, 10), (10, 20), (20, 30)];
+        clamp_boundaries(&mut bounds, 10);
+        assert_eq!(bounds, vec![(0, 10)]);
+    }
+
+    /// Une ligne vidée ne laisse aucune étape, et surtout aucun index.
+    #[test]
+    fn empty_line_leaves_no_boundary() {
+        let mut bounds = vec![(0, 10), (10, 20)];
+        clamp_boundaries(&mut bounds, 0);
+        assert!(bounds.is_empty());
     }
 
     /// A trace small enough for one graph must stay a single chunk, so short
