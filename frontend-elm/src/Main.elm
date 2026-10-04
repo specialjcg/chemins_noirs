@@ -824,12 +824,7 @@ update msg model =
                     , Cmd.batch
                         ([ Ports.updateRoute route.path
                          , Ports.setRouteSurfaces route.pointSurfaces
-                         , case route.metadata of
-                            Just meta ->
-                                Ports.centerOnMarkers { start = meta.start, end = meta.end }
-
-                            Nothing ->
-                                Cmd.none
+                         , frameRoute route.path
                          ]
                             ++ markerCmds
                         )
@@ -926,12 +921,7 @@ update msg model =
                     , Cmd.batch
                         [ Ports.updateRoute route.path
                         , Ports.setRouteSurfaces route.pointSurfaces
-                        , case route.metadata of
-                            Just meta ->
-                                Ports.centerOnMarkers { start = meta.start, end = meta.end }
-
-                            Nothing ->
-                                Cmd.none
+                        , frameRoute route.path
                         ]
                     )
 
@@ -1592,6 +1582,19 @@ centerOnRouteCmd route =
             Ports.centerOnMarkers { start = start, end = end }
 
         _ ->
+            Cmd.none
+
+
+{-| Recadre la carte sur toute l'emprise du tracé. Start/end ne suffisent pas :
+absents des tracés importés, et confondus sur une boucle.
+-}
+frameRoute : List Coordinate -> Cmd msg
+frameRoute path =
+    case bboxOfCoords path of
+        Just ( sw, ne ) ->
+            Ports.centerOnMarkers { start = sw, end = ne }
+
+        Nothing ->
             Cmd.none
 
 
