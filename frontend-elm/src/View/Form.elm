@@ -12,6 +12,29 @@ import Dict
 import Types exposing (..)
 
 
+{-| Texte du bandeau d'attente, fonction du temps déjà écoulé.
+
+Un graphe déjà en cache répond en une poignée de secondes ; s'il faut le
+construire depuis le PBF, il faut compter deux à quatre minutes. Le message
+annonçait 15 s dans tous les cas, et l'attente paraissait donc bloquée passé
+ce délai — au point qu'on recharge la page avant la réponse.
+-}
+waitMessage : Int -> String
+waitMessage seconds =
+    if seconds < 15 then
+        "Calcul du tracé…"
+
+    else if seconds < 45 then
+        "Calcul du tracé… " ++ String.fromInt seconds ++ " s"
+
+    else
+        "Première carte de cette zone : construction du graphe depuis les données OSM, "
+            ++ String.fromInt (seconds // 60)
+            ++ " min "
+            ++ String.fromInt (modBy 60 seconds)
+            ++ " s. Compter 2 à 4 min — ne pas recharger la page."
+
+
 view : Model -> Html Msg
 view model =
     Html.form [ class "controls" ]
@@ -310,7 +333,7 @@ view model =
         , if model.pending then
             div [ class "route-loading" ]
                 [ span [ class "route-spinner" ] []
-                , span [] [ text "Calcul du tracé (peut prendre ~15s la 1ère fois)" ]
+                , span [] [ text (waitMessage model.pendingSeconds) ]
                 ]
 
           else

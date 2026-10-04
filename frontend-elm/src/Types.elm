@@ -14,6 +14,11 @@ type alias Model =
     , waypoints : List Coordinate
     , closeLoop : Bool
     , pending : Bool
+    -- Secondes écoulées depuis le début du calcul en cours. Le temps de
+    -- réponse va de 2 s sur un graphe en cache à 4 min quand il faut le
+    -- construire depuis le PBF : sans ce compteur, le bandeau d'attente ne
+    -- peut pas distinguer les deux et annonce un délai faux.
+    , pendingSeconds : Int
     , lastResponse : Maybe RouteResponse
     , loopCandidates : List LoopCandidate
     , loopMeta : Maybe LoopMeta
@@ -111,6 +116,7 @@ initialModel =
     , waypoints = []
     , closeLoop = False
     , pending = False
+    , pendingSeconds = 0
     , lastResponse = Nothing
     , loopCandidates = []
     , loopMeta = Nothing
@@ -179,6 +185,7 @@ type Msg
     | RouteLoadedFromStorage (Result Json.Decode.Error RouteResponse)
     | MapClicked Float Float
     | RouteFetched (Result Http.Error RouteResponse)
+    | PendingTick
     | LoopRouteFetched (Result Http.Error LoopRouteResponse)
     | SelectLoopCandidate Int
     | AddWaypoint Coordinate

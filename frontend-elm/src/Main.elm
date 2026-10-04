@@ -227,7 +227,7 @@ update msg model =
                                     , wForest = wForest
                                     }
                             in
-                            ( { model | pending = True, error = Nothing }
+                            ( { model | pending = True, pendingSeconds = 0, error = Nothing }
                             , Api.fetchRoute request RouteFetched
                             )
 
@@ -241,7 +241,7 @@ update msg model =
                             case loopFormToRequest model.cheminNoir model.form model.loopForm model.waypoints of
                                 Ok request ->
                                     ( { model
-                                        | pending = True
+                                        | pending = True, pendingSeconds = 0
                                         , error = Nothing
                                         , loopCandidates = []
                                         , loopMeta = Nothing
@@ -262,11 +262,16 @@ update msg model =
                             )
 
                         else
-                            ( { model | pending = True, error = Nothing }
+                            ( { model | pending = True, pendingSeconds = 0, error = Nothing }
                             , Api.fetchMultiPointRoute
                                 (multiPointRequest model)
                                 RouteFetched
                             )
+
+        PendingTick ->
+            ( { model | pendingSeconds = model.pendingSeconds + 1 }
+            , Cmd.none
+            )
 
         RouteFetched result ->
             case result of
@@ -739,7 +744,7 @@ update msg model =
                             , originalWaypoints = originalWaypoints
                             }
                     in
-                    ( { model | pending = True }
+                    ( { model | pending = True, pendingSeconds = 0 }
                     , Api.saveRouteToDb request route RouteSaved
                     )
 
@@ -770,7 +775,7 @@ update msg model =
                     )
 
         LoadSavedRoutes ->
-            ( { model | pending = True }
+            ( { model | pending = True, pendingSeconds = 0 }
             , Api.listSavedRoutes SavedRoutesLoaded
             )
 
@@ -795,7 +800,7 @@ update msg model =
                     )
 
         LoadSavedRoute id ->
-            ( { model | pending = True }
+            ( { model | pending = True, pendingSeconds = 0 }
             , Api.getSavedRoute id SavedRouteLoaded
             )
 
@@ -831,7 +836,7 @@ update msg model =
                     )
 
         DeleteSavedRoute id ->
-            ( { model | pending = True }
+            ( { model | pending = True, pendingSeconds = 0 }
             , Api.deleteSavedRoute id RouteDeleted
             )
 
@@ -851,7 +856,7 @@ update msg model =
                     )
 
         ToggleFavorite id ->
-            ( { model | pending = True }
+            ( { model | pending = True, pendingSeconds = 0 }
             , Api.toggleFavorite id FavoriteToggled
             )
 
@@ -1190,7 +1195,12 @@ view model =
 subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch
-        [ Ports.mapClickReceived (\{ lat, lon } -> MapClicked lat lon)
+        [ if model.pending then
+            Time.every 1000 (\_ -> PendingTick)
+
+          else
+            Sub.none
+        , Ports.mapClickReceived (\{ lat, lon } -> MapClicked lat lon)
         , Ports.waypointDragged (\{ index, lat, lon } -> MoveWaypoint index lat lon)
         , Ports.waypointDeleted (\{ index } -> RemoveWaypoint index)
         , Ports.routeLoadedFromLocalStorage
