@@ -925,21 +925,38 @@ fn prepare_graph_for_bbox(
 ) -> Result<GraphFile, (StatusCode, String)> {
     let t0 = std::time::Instant::now();
     let cache_key = bbox.cache_key();
-    // `v2` : les graphes d'avant portaient `forest_ratio` et
-    // `population_density` à zéro, faute d'appeler `apply_landcover` ici. Les
-    // resservir rendrait `w_forest` et `w_pop` inopérants sans le dire.
-    let cache_path = config.cache_dir.join(format!("partial_lc_v2_{}.bin", cache_key));
+    let cache_path = config.cache_dir.join(format!("{}.bin", cache_key));
+    // Témoin posé à côté du graphe une fois la couche d'occupation du sol
+    // reportée dessus. Les graphes écrits avant que `prepare_graph_for_bbox`
+    // ne l'applique portent `forest_ratio` et `population_density` à zéro :
+    // les resservir tels quels rendrait `w_forest` et `w_pop` inopérants sans
+    // le dire. Un témoin plutôt qu'un préfixe de version, pour que les graphes
+    // déjà construits soient repris au lieu d'être abandonnés ; et plutôt
+    // qu'un test sur les valeurs, car une boîte sans le moindre bois donne
+    // elle aussi des ratios nuls et serait reconstruite à chaque lecture.
+    let lc_marker = config.cache_dir.join(format!("{}.landcover", cache_key));
 
     // Check cache first
     if cache_path.exists() {
-        let result = GraphFile::read_from_path(&cache_path).map_err(|e| {
+        let mut graph = GraphFile::read_from_path(&cache_path).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to load cache: {}", e),
             )
-        });
+        })?;
+
+        if !lc_marker.exists() {
+            tracing::info!(
+                "graphe en cache sans occupation du sol, reprise sur place : {}",
+                cache_path.display()
+            );
+            attach_landcover(&mut graph, &config.pbf_path, &config.cache_dir, &bbox, &cache_key);
+            graph.write_to_path(&cache_path).ok();
+            std::fs::write(&lc_marker, b"").ok();
+        }
+
         tracing::info!("PERF prepare_graph CACHE HIT: {:.0}ms ({})", t0.elapsed().as_secs_f64() * 1000.0, cache_path.display());
-        return result;
+        return Ok(graph);
     }
 
     // Try to use tiles if available (FAST - <10s)
@@ -955,6 +972,7 @@ fn prepare_graph_for_bbox(
                     // Cache the result
                     std::fs::create_dir_all(&config.cache_dir).ok();
                     graph.write_to_path(&cache_path).ok();
+                    std::fs::write(&lc_marker, b"").ok();
                     tracing::info!("PERF prepare_graph TILES: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
                     return Ok(graph);
                 }
@@ -978,6 +996,7 @@ fn prepare_graph_for_bbox(
     attach_landcover(&mut graph, &config.pbf_path, &config.cache_dir, &bbox, &cache_key);
     std::fs::create_dir_all(&config.cache_dir).ok();
     graph.write_to_path(&cache_path).ok();
+    std::fs::write(&lc_marker, b"").ok();
     tracing::info!("PERF prepare_graph PBF: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
     Ok(graph)
 }
