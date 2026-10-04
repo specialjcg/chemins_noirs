@@ -72,12 +72,12 @@ jobs:
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
           echo "StrictHostKeyChecking no" >> ~/.ssh/config
-          ssh-keyscan -p 9368 VPS-423172.ssh.vps1euro.fr >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -p 9999 VPS-779132.ssh.vps1euro.fr >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Deploy to VPS
         run: |
-          SSH="ssh -p 9368 -i ~/.ssh/id_deploy root@VPS-423172.ssh.vps1euro.fr"
-          SCP="scp -P 9368 -i ~/.ssh/id_deploy"
+          SSH="ssh -p 9999 -i ~/.ssh/id_deploy root@VPS-779132.ssh.vps1euro.fr"
+          SCP="scp -P 9999 -i ~/.ssh/id_deploy"
 
           # 1. Stop service + create dirs
           $SSH << 'PREPARE'
@@ -86,8 +86,8 @@ jobs:
           PREPARE
 
           # 2. Copy files
-          $SCP target/release/backend_partial root@VPS-423172.ssh.vps1euro.fr:/opt/cheminsnoirs/backend_partial
-          $SCP -r frontend-elm/dist/* root@VPS-423172.ssh.vps1euro.fr:/opt/cheminsnoirs/frontend/
+          $SCP target/release/backend_partial root@VPS-779132.ssh.vps1euro.fr:/opt/cheminsnoirs/backend_partial
+          $SCP -r frontend-elm/dist/* root@VPS-779132.ssh.vps1euro.fr:/opt/cheminsnoirs/frontend/
 
           # 3. Permissions + start + diagnostics
           $SSH << 'FINALIZE'
