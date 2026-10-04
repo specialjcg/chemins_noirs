@@ -1,6 +1,32 @@
 import maplibregl from 'maplibre-gl';
 import mlcontour from 'maplibre-contour';
 
+/**
+ * Couleur de carte lue dans le design system.
+ *
+ * Les teintes de la carte étaient écrites ici, en dur : vingt-deux valeurs
+ * dont les défauts de Material Design, à côté d'un habillage en laiton et
+ * vert forêt. Elles vivent désormais dans `style.css` avec le reste de la
+ * palette, et ce lecteur est le seul chemin pour y accéder.
+ *
+ * Pas de valeur de repli : un repli serait une seconde définition, donc
+ * exactement le problème qu'on vient de corriger. Si la feuille de style
+ * n'est pas chargée, le magenta et l'avertissement rendent la panne visible
+ * plutôt que de laisser croire à un simple choix de couleur.
+ */
+function mapColor(token) {
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(token)
+    .trim();
+
+  if (!value) {
+    console.warn(`[maplibre] jeton ${token} introuvable : feuille de style non chargée ?`);
+    return '#ff00ff';
+  }
+
+  return value;
+}
+
 let mapInstance;
 let routeSource;
 let startMarker;
@@ -314,7 +340,7 @@ function ensureMap() {
       type: 'hillshade',
       source: 'terrainSource',
       layout: { visibility: 'visible' },
-      paint: { 'hillshade-shadow-color': '#473B24' }
+      paint: { 'hillshade-shadow-color': mapColor('--map-hillshade') }
     }, 'osm-tiles');
 
     // Generate contour lines on-the-fly from DEM tiles
@@ -400,7 +426,7 @@ function ensureMap() {
       source: 'reference',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: {
-        'line-color': '#c9a84c',
+        'line-color': mapColor('--map-reference'),
         // Plus large que le tracé courant et son contour blanc réunis (6 px) :
         // posé dessous à largeur égale, le calque disparaissait dès que les
         // deux lignes passaient à moins de 500 m l'une de l'autre. En
@@ -430,7 +456,7 @@ function ensureMap() {
         'line-cap': 'round'
       },
       paint: {
-        'line-color': '#ffffff',
+        'line-color': mapColor('--map-route-halo'),
         'line-width': 6,
         'line-opacity': 0.8
       }
@@ -446,7 +472,7 @@ function ensureMap() {
         'line-cap': 'round'
       },
       paint: {
-        'line-color': '#4dab7b',
+        'line-color': mapColor('--map-route-paved'),
         'line-width': 4
       }
     });
@@ -461,7 +487,7 @@ function ensureMap() {
       type: 'line',
       source: 'osm-unpaved',
       layout: { 'line-join': 'round', 'line-cap': 'round', visibility: 'none' },
-      paint: { 'line-color': '#9c27b0', 'line-width': 2, 'line-opacity': 0.7, 'line-dasharray': [3, 2] }
+      paint: { 'line-color': mapColor('--map-osm-unpaved'), 'line-width': 2, 'line-opacity': 0.7, 'line-dasharray': [3, 2] }
     });
 
     // Unpaved route overlay (purple), drawn above paved layer
@@ -474,14 +500,14 @@ function ensureMap() {
       type: 'line',
       source: 'route-unpaved',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#ffffff', 'line-width': 6, 'line-opacity': 0.6 }
+      paint: { 'line-color': mapColor('--map-route-halo'), 'line-width': 6, 'line-opacity': 0.6 }
     });
     mapInstance.addLayer({
       id: 'route-line-unpaved',
       type: 'line',
       source: 'route-unpaved',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#9c27b0', 'line-width': 4 }
+      paint: { 'line-color': mapColor('--map-route-unpaved'), 'line-width': 4 }
     });
 
     console.debug('[maplibre] Map loaded with terrain support');
@@ -582,7 +608,7 @@ function createSlopesControl() {
       }
 
       setLayerVisible('ign-slopes-tiles', slopesEnabled);
-      this._btn.style.backgroundColor = slopesEnabled ? '#e65100' : '';
+      this._btn.style.backgroundColor = slopesEnabled ? mapColor('--map-toggle-slopes') : '';
       this._btn.style.color = slopesEnabled ? 'white' : '';
     }
 
@@ -751,7 +777,7 @@ function createUnpavedControl() {
       if (this._map.getLayer('osm-unpaved-line')) {
         this._map.setLayoutProperty('osm-unpaved-line', 'visibility', vis);
       }
-      this._btn.style.backgroundColor = unpavedEnabled ? '#9c27b0' : '';
+      this._btn.style.backgroundColor = unpavedEnabled ? mapColor('--map-toggle-unpaved') : '';
       this._btn.style.color = unpavedEnabled ? 'white' : '';
 
       if (unpavedEnabled) {
@@ -803,8 +829,8 @@ function createTerrainControl() {
           duration: 1000
         });
         this._button.classList.add('active');
-        this._button.style.backgroundColor = '#4dab7b';
-        this._button.style.color = 'white';
+        this._button.style.backgroundColor = mapColor('--map-control-active');
+        this._button.style.color = mapColor('--map-marker-ink');
       } else {
         // Disable terrain and return to flat view
         this._map.setTerrain(null);
@@ -860,8 +886,8 @@ function createAnimationControl() {
         startAnimation();
         this._button.innerHTML = '⏸'; // Pause icon
         this._button.classList.add('active');
-        this._button.style.backgroundColor = '#4dab7b';
-        this._button.style.color = 'white';
+        this._button.style.backgroundColor = mapColor('--map-control-active');
+        this._button.style.color = mapColor('--map-marker-ink');
       }
 
       console.debug('[maplibre] Animation toggled:', animationFrameId !== null);
@@ -903,13 +929,13 @@ function createCameraModeControl() {
 
       // Update visual indicator
       const modeColors = {
-        'Cinéma': '#4dab7b',
-        'Cinéma Latéral': '#9b59b6',
-        'FPV Racing': '#ff6b35',
-        'Découverte': '#4a90e2'
+        'Cinéma': mapColor('--map-camera-cinema'),
+        'Cinéma Latéral': mapColor('--map-camera-lateral'),
+        'FPV Racing': mapColor('--map-camera-fpv'),
+        'Découverte': mapColor('--map-camera-discovery')
       };
       this._button.style.backgroundColor = modeColors[currentCameraMode.name];
-      this._button.style.color = 'white';
+      this._button.style.color = mapColor('--map-marker-ink');
     }
 
     cycleMode() {
@@ -984,8 +1010,8 @@ function createPoiControl() {
       poisVisible = !poisVisible;
 
       if (poisVisible) {
-        this._button.style.backgroundColor = '#4dab7b';
-        this._button.style.color = 'white';
+        this._button.style.backgroundColor = mapColor('--map-control-active');
+        this._button.style.color = mapColor('--map-marker-ink');
         this.fetchPois();
         // Refresh POIs when map moves
         this._moveHandler = () => this.fetchPois();
@@ -1123,7 +1149,7 @@ function createWaterControl() {
 
     toggle() {
       waterEnabled = !waterEnabled;
-      this._btn.style.backgroundColor = waterEnabled ? '#2196f3' : '';
+      this._btn.style.backgroundColor = waterEnabled ? mapColor('--map-toggle-water') : '';
       this._btn.style.color = waterEnabled ? 'white' : '';
 
       if (waterEnabled) {
@@ -1344,8 +1370,11 @@ function updateMarker(type, coord) {
       el.style.width = '20px';
       el.style.height = '20px';
       el.style.borderRadius = '50%';
-      el.style.backgroundColor = type === 'start' ? '#4CAF50' : '#F44336';
-      el.style.border = '2px solid white';
+      // Pastille neutre cerclée de couleur : le trait de la route change de
+      // teinte selon le revêtement, un marqueur plein lui ferait concurrence.
+      el.style.backgroundColor = mapColor('--map-marker-face');
+      el.style.border =
+        '2px solid ' + mapColor(type === 'start' ? '--map-ring-start' : '--map-ring-end');
       el.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)';
 
       markerRef = new maplibregl.Marker({ element: el })
@@ -1640,7 +1669,7 @@ export function updateBbox(bounds) {
       type: 'line',
       source: 'bbox-source',
       paint: {
-        'line-color': '#ff7800',
+        'line-color': mapColor('--map-bbox'),
         'line-width': 2,
         'line-dasharray': [2, 2]
       }
@@ -1770,14 +1799,14 @@ export function updateWaypointMarkers(waypoints) {
     el.style.width = '28px';
     el.style.height = '28px';
     el.style.borderRadius = '50%';
-    el.style.backgroundColor = '#2196F3';
-    el.style.border = '2px solid white';
+    el.style.backgroundColor = mapColor('--map-marker-face');
+    el.style.border = '2px solid ' + mapColor('--map-ring-waypoint');
     el.style.display = 'flex';
     el.style.alignItems = 'center';
     el.style.justifyContent = 'center';
     el.style.fontSize = '12px';
     el.style.fontWeight = 'bold';
-    el.style.color = 'white';
+    el.style.color = mapColor('--map-marker-ink');
     el.style.cursor = 'grab';
     el.style.boxShadow = '0 2px 6px rgba(0,0,0,0.3)';
     // In game mode: first waypoint is "D" (départ), rest are balise numbers
@@ -1792,14 +1821,14 @@ export function updateWaypointMarkers(waypoints) {
     delBtn.style.width = '18px';
     delBtn.style.height = '18px';
     delBtn.style.borderRadius = '50%';
-    delBtn.style.backgroundColor = '#F44336';
-    delBtn.style.border = '1.5px solid white';
+    delBtn.style.backgroundColor = mapColor('--map-ring-end');
+    delBtn.style.border = '1.5px solid ' + mapColor('--map-marker-face');
     delBtn.style.display = 'none';
     delBtn.style.alignItems = 'center';
     delBtn.style.justifyContent = 'center';
     delBtn.style.fontSize = '11px';
     delBtn.style.fontWeight = 'bold';
-    delBtn.style.color = 'white';
+    delBtn.style.color = mapColor('--map-marker-face');
     delBtn.style.cursor = 'pointer';
     delBtn.style.lineHeight = '1';
     delBtn.textContent = '×';

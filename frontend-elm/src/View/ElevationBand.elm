@@ -195,7 +195,7 @@ viewProfile elevations xPct yPct =
         , Svg.polyline
             [ SA.points points
             , SA.fill "none"
-            , SA.stroke "#4dab7b"
+            , SA.class "elevation-band-line"
             , SA.strokeWidth "2"
             , Attr.attribute "vector-effect" "non-scaling-stroke"
             ]

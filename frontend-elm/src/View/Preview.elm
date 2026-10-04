@@ -404,15 +404,14 @@ elevationSvg model elevations profile =
                                     [ attribute "cx" (String.fromFloat cx)
                                     , attribute "cy" (String.fromFloat cy)
                                     , attribute "r" "4"
-                                    , attribute "fill" "#4dab7b"
-                                    , attribute "stroke" "white"
+                                    , attribute "class" "preview-point"
                                     , attribute "stroke-width" "1.5"
                                     ]
                                     []
                                 , Svg.text_
                                     [ attribute "x" (String.fromFloat (cx + 6))
                                     , attribute "y" (String.fromFloat (cy - 6))
-                                    , attribute "fill" "#e4ddd0"
+                                    , attribute "class" "preview-label-strong"
                                     , attribute "font-size" "10"
                                     , attribute "font-family" "var(--font-mono)"
                                     ]
@@ -442,7 +441,7 @@ elevationSvg model elevations profile =
                             , attribute "y1" (String.fromInt padding)
                             , attribute "x2" (String.fromFloat cx)
                             , attribute "y2" (String.fromInt (height - padding))
-                            , attribute "stroke" "#c9a84c"
+                            , attribute "class" "preview-cursor"
                             , attribute "stroke-width" "1.5"
                             , attribute "stroke-dasharray" "4 3"
                             , attribute "opacity" "0.8"
@@ -474,7 +473,7 @@ elevationSvg model elevations profile =
          , Svg.polyline
             [ attribute "points" polyline
             , attribute "fill" "none"
-            , attribute "stroke" "#4dab7b"
+            , attribute "class" "preview-profile"
             , attribute "stroke-width" "2"
             ]
             []
@@ -483,7 +482,7 @@ elevationSvg model elevations profile =
          , Svg.text_
             [ attribute "x" "2"
             , attribute "y" (String.fromFloat (toFloat (height - padding) - 2))
-            , attribute "fill" "#9b9484"
+            , attribute "class" "preview-label"
             , attribute "font-size" "10"
             ]
             [ text (String.fromInt (round minE) ++ "m") ]
@@ -492,7 +491,7 @@ elevationSvg model elevations profile =
          , Svg.text_
             [ attribute "x" "2"
             , attribute "y" (String.fromFloat (toFloat padding + 10))
-            , attribute "fill" "#9b9484"
+            , attribute "class" "preview-label"
             , attribute "font-size" "10"
             ]
             [ text (String.fromInt (round maxE) ++ "m") ]

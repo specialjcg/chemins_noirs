@@ -50,6 +50,61 @@
   --shadow-elevated: 0 8px 40px rgba(0, 0, 0, 0.5), 0 0 1px rgba(201, 168, 76, 0.15);
   --shadow-glow: 0 0 20px rgba(201, 168, 76, 0.08);
 
+  /* Fin du dégradé des boutons en laiton, et rouille pour le degré de
+     difficulté le plus haut : la terre cuite servant déjà au niveau en
+     dessous, il fallait un cran plus sombre pour les distinguer. */
+  --accent-brass-deep: #b8953d;
+  --accent-rust: #8f3a28;
+
+  --bg-gradient-top: #0f1410;
+  --bg-gradient-mid: #0a0e0b;
+  --bg-gradient-bottom: #0d110e;
+
+  --difficulty-easy: var(--accent-forest);
+  --difficulty-moderate: var(--accent-brass);
+  --difficulty-difficult: var(--accent-terracotta);
+  --difficulty-expert: var(--accent-rust);
+
+  /* Les pastilles de revêtement reprennent les teintes de la carte : une
+     légende qui ne dirait pas la même chose que le tracé serait pire que
+     pas de légende. */
+  --surface-paved: var(--map-route-paved);
+  --surface-trail: var(--map-route-unpaved);
+  --surface-dirt: var(--accent-forest-light);
+
+  /* ─── Carte ───
+     La carte occupait presque tout l'écran en dehors du système : 22 couleurs
+     écrites dans maplibre_map.js, dont les défauts de Material Design, à côté
+     d'un habillage en laiton et vert forêt. Ces jetons dérivent de la palette
+     au lieu de la contredire, et le JS les lit au lieu de les redéfinir.
+
+     Le trait de la route porte le sens du projet : le non goudronné prend le
+     laiton, couleur de marque, et le goudron la terre cuite des avertissements.
+     Les marqueurs restent neutres pour ne jamais rivaliser avec elle. */
+  --map-route-unpaved: var(--accent-brass);
+  --map-route-paved: var(--accent-terracotta);
+  --map-route-halo: rgba(12, 16, 13, 0.85);
+  --map-reference: var(--accent-forest);
+  --map-osm-unpaved: var(--accent-forest-light);
+  --map-hillshade: #473b24;
+  --map-bbox: var(--text-muted);
+
+  --map-marker-face: var(--text-primary);
+  --map-marker-ink: var(--bg-deep);
+  --map-ring-start: var(--accent-forest-light);
+  --map-ring-end: var(--accent-terracotta);
+  --map-ring-waypoint: var(--accent-brass);
+
+  --map-toggle-slopes: var(--accent-terracotta);
+  --map-toggle-water: var(--info-blue);
+  --map-toggle-unpaved: var(--accent-brass);
+  --map-control-active: var(--accent-brass);
+
+  --map-camera-cinema: var(--accent-brass);
+  --map-camera-lateral: var(--accent-forest-light);
+  --map-camera-fpv: var(--accent-terracotta);
+  --map-camera-discovery: var(--info-blue);
+
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --transition-fast: 150ms var(--ease-out);
   --transition-normal: 250ms var(--ease-out);
@@ -81,7 +136,7 @@ body {
   background:
     radial-gradient(ellipse 120% 80% at 30% 20%, rgba(90, 122, 78, 0.06), transparent 60%),
     radial-gradient(ellipse 100% 90% at 75% 80%, rgba(201, 168, 76, 0.04), transparent 50%),
-    linear-gradient(175deg, #0f1410 0%, #0a0e0b 40%, #0d110e 100%);
+    linear-gradient(175deg, var(--bg-gradient-top) 0%, var(--bg-gradient-mid) 40%, var(--bg-gradient-bottom) 100%);
   position: relative;
 }
 
@@ -373,7 +428,7 @@ button[disabled] {
 
 /* Submit button — Primary CTA */
 .btn-submit {
-  background: linear-gradient(135deg, var(--accent-brass), #b8953d);
+  background: linear-gradient(135deg, var(--accent-brass), var(--accent-brass-deep));
   color: var(--text-inverse);
   font-size: 1rem;
   font-weight: 700;
@@ -625,14 +680,14 @@ button[disabled] {
 }
 
 .action-fav.active {
-  background: rgba(255, 193, 7, 0.12);
-  border-color: rgba(255, 193, 7, 0.3);
-  color: #ffc107;
+  background: var(--accent-brass-dim);
+  border-color: var(--border-strong);
+  color: var(--accent-brass-light);
 }
 
 .action-fav:hover {
-  background: rgba(255, 193, 7, 0.08);
-  border-color: rgba(255, 193, 7, 0.25);
+  background: var(--accent-brass-dim);
+  border-color: var(--border-medium);
 }
 
 .action-delete {
@@ -852,8 +907,8 @@ small {
   align-items: center;
   justify-content: center;
   background: rgba(12, 16, 13, 0.92);
-  color: #ffd180;
-  border: 1px solid #ffd180;
+  color: var(--text-brass);
+  border: 1px solid var(--text-brass);
   border-radius: 6px;
   font-size: 18px;
   font-family: 'Courier New', monospace;
@@ -874,7 +929,7 @@ small {
 
 #three3dContainer {
   position: relative;
-  background: #000;
+  background: var(--bg-deep);
 }
 
 #three3dContainer canvas {
@@ -1119,10 +1174,10 @@ small {
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
-.difficulty-easy    { background: #2e7d32; color: #e8f5e9; }
-.difficulty-moderate { background: #f9a825; color: #1a1a1a; }
-.difficulty-difficult { background: #ef6c00; color: #fff3e0; }
-.difficulty-expert  { background: #c62828; color: #ffebee; }
+.difficulty-easy    { background: var(--difficulty-easy); color: var(--text-primary); }
+.difficulty-moderate { background: var(--difficulty-moderate); color: var(--text-inverse); }
+.difficulty-difficult { background: var(--difficulty-difficult); color: var(--text-primary); }
+.difficulty-expert  { background: var(--difficulty-expert); color: var(--text-primary); }
 
 /* ─── Surface Breakdown Bar ─── */
 .surface-breakdown {
@@ -1141,9 +1196,9 @@ small {
   min-width: 2px;
   transition: width var(--transition-normal);
 }
-.surface-paved  { background: #78909c; }
-.surface-trail  { background: #66bb6a; }
-.surface-dirt   { background: #a1887f; }
+.surface-paved  { background: var(--surface-paved); }
+.surface-trail  { background: var(--surface-trail); }
+.surface-dirt   { background: var(--surface-dirt); }
 
 .surface-legend {
   display: flex;
@@ -1166,9 +1221,9 @@ small {
   height: 8px;
   border-radius: 50%;
 }
-.surface-dot.surface-paved { background: #78909c; }
-.surface-dot.surface-trail { background: #66bb6a; }
-.surface-dot.surface-dirt  { background: #a1887f; }
+.surface-dot.surface-paved { background: var(--surface-paved); }
+.surface-dot.surface-trail { background: var(--surface-trail); }
+.surface-dot.surface-dirt  { background: var(--surface-dirt); }
 
 /* ─── Segment Stats ─── */
 .segment-stats {
@@ -1299,7 +1354,7 @@ small {
   border-radius: 3px;
   background: rgba(0, 0, 0, 0.55);
   border: none;
-  color: #fff;
+  color: var(--text-primary);
   font-size: 9px;
   font-weight: 600;
   font-family: var(--font-mono);
@@ -1542,7 +1597,7 @@ small {
 
 .btn-cancel-freehand:hover {
   background: var(--accent-terracotta);
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .freehand-segments-list {
@@ -1820,13 +1875,41 @@ body {
   display: block;
 }
 
+/* Les deux vues SVG sont bâties en Elm, où une couleur écrite dans un
+   attribut de présentation échapperait au système : `stroke="var(--x)"`
+   n'y résout pas. Elles portent donc des classes, définies ici. */
+.elevation-band-line {
+  stroke: var(--accent-brass);
+}
+
+.preview-profile {
+  stroke: var(--accent-brass);
+}
+
+.preview-point {
+  fill: var(--accent-brass);
+  stroke: var(--map-marker-face);
+}
+
+.preview-cursor {
+  stroke: var(--accent-brass);
+}
+
+.preview-label {
+  fill: var(--text-secondary);
+}
+
+.preview-label-strong {
+  fill: var(--text-primary);
+}
+
 /* Curseur épinglé par le slider. */
 .elevation-band-cursor {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 0;
-  border-left: 1px solid #4dab7b;
+  border-left: 1px solid var(--accent-brass);
   pointer-events: none;
   z-index: 2;
 }
@@ -1838,9 +1921,9 @@ body {
   height: 9px;
   margin: -5px 0 0 -5px;
   border-radius: 50%;
-  background: #4dab7b;
-  border: 1.5px solid #fff;
-  box-shadow: 0 0 6px rgba(77, 171, 123, 0.8);
+  background: var(--accent-brass);
+  border: 1.5px solid var(--map-marker-face);
+  box-shadow: 0 0 6px rgba(201, 168, 76, 0.8);
 }
 
 /* Écho du survol du tracé sur la carte. */
@@ -1877,7 +1960,7 @@ body {
   appearance: none;
   width: 24px;
   height: 92px;
-  background: #fff;
+  background: var(--text-primary);
 }
 
 .elevation-band-slider::-moz-range-thumb {
@@ -1885,7 +1968,7 @@ body {
   height: 92px;
   border: none;
   border-radius: 0;
-  background: #fff;
+  background: var(--text-primary);
 }
 
 .elevation-band-min,
@@ -1936,9 +2019,9 @@ body {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #4dab7b;
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 4px rgba(77, 171, 123, 0.28), 0 2px 6px rgba(0, 0, 0, 0.5);
+  background: var(--accent-brass);
+  border: 2px solid var(--map-marker-face);
+  box-shadow: 0 0 0 4px rgba(201, 168, 76, 0.28), 0 2px 6px rgba(0, 0, 0, 0.5);
   pointer-events: none;
 }
 
