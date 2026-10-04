@@ -1098,6 +1098,72 @@ impl RouteEngine {
         score
     }
 
+    /// Revêtement de chaque point d'une ligne déjà tracée, dans l'ordre.
+    ///
+    /// `true` = goudron, comme `RouteResponse::point_surfaces`. Sert aux
+    /// itinéraires relus depuis la base : ils ne portent que leurs
+    /// coordonnées, et sans ce calcul la carte les affiche d'un seul vert,
+    /// même quand ils sont non goudronnés sur neuf dixièmes de leur longueur.
+    ///
+    /// L'accrochage ne passe pas par `nearest_edge` : celui-ci ne voit que les
+    /// arêtes dotées de sommets intermédiaires, et une route droite n'est
+    /// indexée que par ses deux bouts. On ajoute donc les arêtes incidentes
+    /// aux nœuds voisins, comme le fait `snap_to_road`.
+    ///
+    /// Un point qui ne s'accroche à rien est rendu goudronné : mieux vaut taire
+    /// une portion de terre que d'en inventer une.
+    pub fn surfaces_along(&self, path: &[Coordinate]) -> Vec<bool> {
+        const MAX_SNAP_KM: f64 = 0.2;
+
+        path.iter()
+            .map(|&point| match self.nearest_edge_or_incident(point) {
+                Some((edge_idx, dist_deg)) if dist_deg * 111.0 <= MAX_SNAP_KM => {
+                    self.graph[edge_idx].surface == SurfaceType::Paved
+                }
+                _ => true,
+            })
+            .collect()
+    }
+
+    /// Arête la plus proche d'un point, sommets intermédiaires *et* arêtes
+    /// incidentes aux nœuds voisins confondus, avec sa distance en degrés.
+    fn nearest_edge_or_incident(
+        &self,
+        target: Coordinate,
+    ) -> Option<(petgraph::graph::EdgeIndex, f64)> {
+        let nearest = self
+            .road_point_index
+            .nearest(&[target.lon, target.lat], 20, &squared_euclidean)
+            .ok()?;
+
+        let mut best: Option<(petgraph::graph::EdgeIndex, f64)> = None;
+        let mut consider = |engine: &Self,
+                            edge_idx: petgraph::graph::EdgeIndex,
+                            best: &mut Option<(petgraph::graph::EdgeIndex, f64)>| {
+            if best.map(|(seen, _)| seen == edge_idx).unwrap_or(false) {
+                return;
+            }
+            let dist = engine.project_to_edge(target, edge_idx);
+            if best.map_or(true, |(_, best_dist)| dist < best_dist) {
+                *best = Some((edge_idx, dist));
+            }
+        };
+
+        for (_, &point_id) in &nearest {
+            let road_point = &self.road_points[point_id];
+            match road_point.edge_idx {
+                Some(edge_idx) => consider(self, edge_idx, &mut best),
+                None => {
+                    for edge in self.graph.edges(NodeIndex::new(road_point.node_idx)) {
+                        consider(self, edge.id(), &mut best);
+                    }
+                }
+            }
+        }
+
+        best
+    }
+
     fn edge_cost(&self, edge: &EdgeData, weights: WeightConfig) -> f64 {
         let paved_penalty = match edge.surface {
             SurfaceType::Paved => 1.0,
@@ -1801,6 +1867,45 @@ mod tests {
             "Graph is too disconnected: only {:.1}% of nodes have neighbors",
             connectivity_ratio * 100.0
         );
+    }
+
+    /// Une ligne relue depuis la base doit retrouver le revêtement de chaque
+    /// point, sinon la carte l'affiche d'un seul trait.
+    #[test]
+    fn surfaces_along_reads_each_point() {
+        use crate::graph::{EdgeRecord, GraphFile, NodeRecord};
+
+        let graph = GraphFile {
+            nodes: vec![
+                NodeRecord { id: 1, lat: 45.000, lon: 5.000, elevation: None, population_density: 0.0 },
+                NodeRecord { id: 2, lat: 45.000, lon: 5.010, elevation: None, population_density: 0.0 },
+                NodeRecord { id: 3, lat: 45.000, lon: 5.020, elevation: None, population_density: 0.0 },
+            ],
+            edges: vec![
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0 },
+                EdgeRecord { from: 2, to: 3, surface: SurfaceType::Dirt, length_m: 800.0, waypoints: vec![], forest_ratio: 1.0 },
+            ],
+        };
+        let engine = RouteEngine::from_graph_file(graph).expect("graphe de test");
+
+        // Un point au milieu de chaque arête, pour ne pas dépendre du bord.
+        let surfaces = engine.surfaces_along(&[
+            Coordinate { lat: 45.000, lon: 5.004 },
+            Coordinate { lat: 45.000, lon: 5.015 },
+        ]);
+
+        assert_eq!(surfaces, vec![true, false]);
+    }
+
+    /// Un point loin de toute arête est rendu goudronné : taire une portion de
+    /// terre vaut mieux qu'en inventer une.
+    #[test]
+    fn surfaces_along_defaults_unmatched_to_paved() {
+        let engine = RouteEngine::from_graph_file(forest_fixture()).expect("graphe de test");
+
+        let surfaces = engine.surfaces_along(&[Coordinate { lat: 46.500, lon: 6.500 }]);
+
+        assert_eq!(surfaces, vec![true]);
     }
 
     /// Deux itinéraires entre les mêmes points : un direct hors bois (800 m) et

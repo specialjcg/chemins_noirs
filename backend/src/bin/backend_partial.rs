@@ -309,6 +309,49 @@ async fn loop_route_handler(
 }
 
 /// Bounding box covering `points`, widened by a ~5km margin.
+#[derive(serde::Deserialize)]
+struct SurfacesRequest {
+    path: Vec<Coordinate>,
+}
+
+#[derive(serde::Serialize)]
+struct SurfacesResponse {
+    point_surfaces: Vec<bool>,
+}
+
+/// Revêtement d'une ligne déjà tracée, point par point.
+///
+/// Un itinéraire relu depuis la base ne porte que ses coordonnées : rien n'y
+/// dit où est le goudron, et la carte le peint alors d'un seul vert. Ce point
+/// d'entrée rend l'information sans retoucher le tracé, là où un recalcul
+/// complet en produirait un autre.
+async fn surfaces_handler(
+    State(config): State<Arc<PartialGraphConfig>>,
+    Json(req): Json<SurfacesRequest>,
+) -> Result<Json<SurfacesResponse>, (StatusCode, String)> {
+    if req.path.len() < 2 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "au moins 2 points attendus".to_string(),
+        ));
+    }
+
+    let t0 = std::time::Instant::now();
+    let bbox = bbox_with_margin(&req.path);
+    let engine = get_or_build_engine(&config, bbox).await?;
+
+    let point_surfaces = engine.surfaces_along(&req.path);
+    let unpaved = point_surfaces.iter().filter(|&&paved| !paved).count();
+    tracing::info!(
+        "PERF /api/surfaces: {:.0}ms ({} pts, {} non goudronnés)",
+        t0.elapsed().as_secs_f64() * 1000.0,
+        point_surfaces.len(),
+        unpaved
+    );
+
+    Ok(Json(SurfacesResponse { point_surfaces }))
+}
+
 fn bbox_with_margin(points: &[Coordinate]) -> BoundingBox {
     let mut min_lat = f64::MAX;
     let mut max_lat = f64::MIN;
@@ -818,6 +861,7 @@ async fn main() {
         .route("/api/loops", axum::routing::post(loop_route_handler))
         .route("/api/route", axum::routing::post(route_handler))
         .route("/api/route/multi", axum::routing::post(multi_route_handler))
+        .route("/api/surfaces", axum::routing::post(surfaces_handler))
         .route("/api/log", axum::routing::post(frontend_log_handler))
         .route("/api/click_mode", axum::routing::get(click_mode_handler))
         .route("/api/pois", axum::routing::get(pois_handler))

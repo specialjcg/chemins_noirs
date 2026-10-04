@@ -186,6 +186,7 @@ type Msg
     | MapClicked Float Float
     | RouteFetched (Result Http.Error RouteResponse)
     | PendingTick
+    | SurfacesLoaded (Result Http.Error (List Bool))
     | LoopRouteFetched (Result Http.Error LoopRouteResponse)
     | SelectLoopCandidate Int
     | AddWaypoint Coordinate

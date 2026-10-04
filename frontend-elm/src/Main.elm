@@ -268,6 +268,37 @@ update msg model =
                                 RouteFetched
                             )
 
+        SurfacesLoaded result ->
+            case result of
+                Ok surfaces ->
+                    ( { model
+                        | lastResponse =
+                            Maybe.map
+                                (\route -> { route | pointSurfaces = Just surfaces })
+                                model.lastResponse
+                      }
+                    , Cmd.batch
+                        [ Ports.setRouteSurfaces (Just surfaces)
+                        , Api.sendLog
+                            ("surfaces reçues : "
+                                ++ String.fromInt (List.length (List.filter not surfaces))
+                                ++ " points non goudronnés sur "
+                                ++ String.fromInt (List.length surfaces)
+                            )
+                            (\_ -> NoOp)
+                        ]
+                    )
+
+                -- La carte reste lisible sans revêtements : l'échec ne mérite pas
+                -- un bandeau d'erreur, mais il doit laisser une trace, sinon rien
+                -- ne distingue « en cours » de « tombé ».
+                Err err ->
+                    ( model
+                    , Api.sendLog
+                        ("surfaces indisponibles : " ++ httpErrorToString err)
+                        (\_ -> NoOp)
+                    )
+
         PendingTick ->
             ( { model | pendingSeconds = model.pendingSeconds + 1 }
             , Cmd.none
@@ -816,12 +847,37 @@ update msg model =
 
                         markerCmds =
                             [ Ports.updateWaypointMarkers waypoints ]
+
+                        -- Un itinéraire enregistré ne porte pas ses revêtements :
+                        -- on les demande au moteur plutôt que de recalculer le
+                        -- tracé, qui sortirait différent de celui qu'on a ouvert.
+                        surfacesCmd =
+                            case route.pointSurfaces of
+                                Just _ ->
+                                    Cmd.none
+
+                                Nothing ->
+                                    Cmd.batch
+                                        [ Api.fetchSurfaces route.path SurfacesLoaded
+
+                                        -- Tracé dans le journal : la requête peut
+                                        -- durer des minutes quand le graphe de la
+                                        -- région n'est pas en cache, et sans cette
+                                        -- ligne rien ne dit qu'elle est partie.
+                                        , Api.sendLog
+                                            ("surfaces demandées pour "
+                                                ++ String.fromInt (List.length route.path)
+                                                ++ " points"
+                                            )
+                                            (\_ -> NoOp)
+                                        ]
                     in
                     ( applySavedRoute { model | pending = False, error = Nothing } route waypoints
                     , Cmd.batch
                         ([ Ports.updateRoute route.path
                          , Ports.setRouteSurfaces route.pointSurfaces
                          , frameRoute route.path
+                         , surfacesCmd
                          ]
                             ++ markerCmds
                         )

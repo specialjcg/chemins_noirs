@@ -7,6 +7,7 @@ Toutes les fonctions retournent des Cmd Msg (effets purs).
 import Decoders exposing (..)
 import Encoders exposing (..)
 import Http
+import Json.Decode
 import Json.Encode
 import Types exposing (..)
 import Url
@@ -83,6 +84,27 @@ fetchMultiPointRoute request toMsg =
         , expect = Http.expectJson toMsg decodeRouteResponse
         }
 
+
+
+{-| Revêtement d'un tracé déjà calculé, point par point.
+
+Un itinéraire relu depuis la base ne porte que ses coordonnées : la carte le
+peint alors d'un seul vert, même quand il est non goudronné presque partout.
+Cet appel récupère l'information sans retoucher le tracé.
+-}
+fetchSurfaces : List Coordinate -> (Result Http.Error (List Bool) -> msg) -> Cmd msg
+fetchSurfaces path toMsg =
+    Http.post
+        { url = "/api/surfaces"
+        , body =
+            Http.jsonBody
+                (Json.Encode.object
+                    [ ( "path", Json.Encode.list encodeCoordinate path ) ]
+                )
+        , expect =
+            Http.expectJson toMsg
+                (Json.Decode.field "point_surfaces" (Json.Decode.list Json.Decode.bool))
+        }
 
 
 {-| Send a debug log message to the backend (written to frontend_debug.log).
