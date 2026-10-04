@@ -70,6 +70,8 @@ struct Output {
     original_forest_km: f64,
     hybrid_paved_km: f64,
     hybrid_forest_km: f64,
+    original_built_km: f64,
+    hybrid_built_km: f64,
 }
 
 /// Anchor indices every `step_km` along the trace, always keeping both ends.
@@ -199,6 +201,8 @@ fn main() -> Result<(), String> {
     let mut original_forest_km = 0.0;
     let mut hybrid_paved_km = 0.0;
     let mut hybrid_forest_km = 0.0;
+    let mut original_built_km = 0.0;
+    let mut hybrid_built_km = 0.0;
 
     for (chunk_no, chunk) in anchors.windows(2).collect::<Vec<_>>().chunks(per_chunk).enumerate() {
         let first = chunk.first().unwrap()[0];
@@ -226,8 +230,8 @@ fn main() -> Result<(), String> {
                 w_forest: weights.forest,
             });
 
-            let (keep, routed_km, routed_cost, routed_paved_km, routed_forest_km, reason) = match routed {
-                None => (None, None, None, None, None, "no route".to_string()),
+            let (keep, routed_km, routed_cost, routed_paved_km, routed_forest_km, routed_built_km, reason) = match routed {
+                None => (None, None, None, None, None, None, "no route".to_string()),
                 Some(alt) => {
                     let alt_score: PolylineScore = engine.score_polyline(&alt, weights);
                     let longer = alt_score.length_km > original_len * (1.0 + tolerance);
@@ -252,6 +256,7 @@ fn main() -> Result<(), String> {
                         Some(alt_score.cost),
                         Some(alt_score.paved_km),
                         Some(alt_score.forest_km),
+                        Some(alt_score.built_km),
                         reason,
                     )
                 }
@@ -259,12 +264,15 @@ fn main() -> Result<(), String> {
 
             original_paved_km += original_score.paved_km;
             original_forest_km += original_score.forest_km;
+            original_built_km += original_score.built_km;
             if keep.is_some() {
                 hybrid_paved_km += routed_paved_km.unwrap_or(0.0);
                 hybrid_forest_km += routed_forest_km.unwrap_or(0.0);
+                hybrid_built_km += routed_built_km.unwrap_or(0.0);
             } else {
                 hybrid_paved_km += original_score.paved_km;
                 hybrid_forest_km += original_score.forest_km;
+                hybrid_built_km += original_score.built_km;
             }
 
             let replaced = keep.is_some();
@@ -312,6 +320,8 @@ fn main() -> Result<(), String> {
         original_forest_km,
         hybrid_paved_km,
         hybrid_forest_km,
+        original_built_km,
+        hybrid_built_km,
     };
     std::fs::write(&output, serde_json::to_string(&out).map_err(|e| e.to_string())?)
         .map_err(|e| format!("write {}: {}", output, e))?;
@@ -334,6 +344,13 @@ fn main() -> Result<(), String> {
         hybrid_forest_km / hybrid_km.max(1e-9) * 100.0,
         original_forest_km,
         original_forest_km / original_km.max(1e-9) * 100.0,
+    );
+    eprintln!(
+        "  habitat {:.2} km-pondérés ({:.3} /km) <- {:.2} km-pondérés ({:.3} /km)",
+        hybrid_built_km,
+        hybrid_built_km / hybrid_km.max(1e-9),
+        original_built_km,
+        original_built_km / original_km.max(1e-9),
     );
     Ok(())
 }

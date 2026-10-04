@@ -279,6 +279,9 @@ pub struct PolylineScore {
     pub unmatched_km: f64,
     /// Longueur pondérée par la part boisée des tronçons empruntés.
     pub forest_km: f64,
+    /// Longueur pondérée par la densité bâtie des tronçons empruntés. Même
+    /// lecture que `forest_km` : 0 km = aucun habitat le long du tracé.
+    pub built_km: f64,
 }
 
 impl RouteEngine {
@@ -1080,6 +1083,7 @@ impl RouteEngine {
                         SurfaceType::Dirt => score.dirt_km += step_km,
                     }
                     score.forest_km += step_km * edge.forest_ratio;
+                    score.built_km += step_km * edge.mean_population_density;
                     // Charge this step at the snapped edge's rate, per km.
                     let per_km = self.edge_cost(edge, weights) / edge.length_km.max(1e-9);
                     score.cost += step_km * per_km;
