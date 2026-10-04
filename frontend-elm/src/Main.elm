@@ -805,9 +805,9 @@ update msg model =
                     let
                         route = savedRoute.routeData
 
-                        -- Imported routes carry no waypoints: every path point would become a marker
+                        -- Imported routes carry no waypoints: sample the path instead of using every point
                         waypoints =
-                            Maybe.withDefault [] savedRoute.originalWaypoints
+                            Maybe.withDefault (sampleEveryKm 2 route.path) savedRoute.originalWaypoints
 
                         markerCmds =
                             [ Ports.updateWaypointMarkers waypoints ]
@@ -1575,6 +1575,37 @@ centerOnRouteCmd route =
 
         _ ->
             Cmd.none
+
+
+{-| Un point du tracé tous les `stepKm` environ, départ et arrivée inclus.
+-}
+sampleEveryKm : Float -> List Coordinate -> List Coordinate
+sampleEveryKm stepKm path =
+    case path of
+        [] ->
+            []
+
+        first :: rest ->
+            let
+                step coord ( prev, sinceLast, kept ) =
+                    let
+                        dist =
+                            sinceLast + haversineKm prev coord
+                    in
+                    if dist >= stepKm then
+                        ( coord, 0, coord :: kept )
+
+                    else
+                        ( coord, dist, kept )
+
+                ( last, _, sampled ) =
+                    List.foldl step ( first, 0, [ first ] ) rest
+            in
+            if List.head sampled == Just last then
+                List.reverse sampled
+
+            else
+                List.reverse (last :: sampled)
 
 
 {-| Recadre la carte sur toute l'emprise du tracé. Start/end ne suffisent pas :
