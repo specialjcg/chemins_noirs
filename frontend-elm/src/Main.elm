@@ -805,17 +805,9 @@ update msg model =
                     let
                         route = savedRoute.routeData
 
-                        -- Use saved waypoints if available, otherwise backward compatible extraction
+                        -- Imported routes carry no waypoints: every path point would become a marker
                         waypoints =
-                            case savedRoute.originalWaypoints of
-                                Just wp -> wp
-                                Nothing ->
-                                    -- Backward compatibility: extract from path
-                                    route.path
-                                        |> List.drop 1
-                                        |> List.reverse
-                                        |> List.drop 1
-                                        |> List.reverse
+                            Maybe.withDefault [] savedRoute.originalWaypoints
 
                         markerCmds =
                             [ Ports.updateWaypointMarkers waypoints ]
