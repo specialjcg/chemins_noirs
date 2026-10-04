@@ -892,13 +892,43 @@ async fn pois_handler(
     Ok(Json(pois))
 }
 
+/// Reporte l'occupation du sol sur un graphe fraîchement construit.
+///
+/// Sans elle, `forest_ratio` et `population_density` restent à zéro : le coût
+/// se réduit alors à `len * (1 + w_forest)` et monter `w_forest` ne fait que
+/// raccourcir l'itinéraire, en achetant du goudron. Le critère semble réglable
+/// alors qu'il est mort, d'où l'appel explicite dans les deux branches de
+/// construction.
+fn attach_landcover(
+    graph: &mut GraphFile,
+    pbf_path: &std::path::Path,
+    cache_dir: &std::path::Path,
+    bbox: &BoundingBox,
+    cache_key: &str,
+) {
+    match backend::graph::load_or_build_landcover(pbf_path, cache_dir, bbox, cache_key) {
+        Ok(grid) => {
+            backend::graph::apply_landcover(graph, &grid);
+            tracing::info!("occupation du sol appliquée au graphe partiel");
+        }
+        Err(err) => tracing::warn!(
+            "Couche d'occupation du sol indisponible pour {:?} ({err}) : \
+             itinéraires calculés sans critère forêt ni densité bâtie",
+            bbox
+        ),
+    }
+}
+
 fn prepare_graph_for_bbox(
     config: &PartialGraphConfig,
     bbox: BoundingBox,
 ) -> Result<GraphFile, (StatusCode, String)> {
     let t0 = std::time::Instant::now();
     let cache_key = bbox.cache_key();
-    let cache_path = config.cache_dir.join(format!("{}.bin", cache_key));
+    // `v2` : les graphes d'avant portaient `forest_ratio` et
+    // `population_density` à zéro, faute d'appeler `apply_landcover` ici. Les
+    // resservir rendrait `w_forest` et `w_pop` inopérants sans le dire.
+    let cache_path = config.cache_dir.join(format!("partial_lc_v2_{}.bin", cache_key));
 
     // Check cache first
     if cache_path.exists() {
@@ -920,7 +950,8 @@ fn prepare_graph_for_bbox(
             let builder = GraphBuilder::new(builder_config);
 
             match builder.build_from_tiles(tiles_dir, bbox) {
-                Ok(graph) => {
+                Ok(mut graph) => {
+                    attach_landcover(&mut graph, &config.pbf_path, &config.cache_dir, &bbox, &cache_key);
                     // Cache the result
                     std::fs::create_dir_all(&config.cache_dir).ok();
                     graph.write_to_path(&cache_path).ok();
@@ -938,12 +969,13 @@ fn prepare_graph_for_bbox(
     tracing::info!("Generating partial graph from PBF for bbox: {:?}", bbox);
     let builder_config = GraphBuilderConfig { bbox: Some(bbox) };
     let builder = GraphBuilder::new(builder_config);
-    let graph = builder.build_from_pbf(&config.pbf_path).map_err(|e| {
+    let mut graph = builder.build_from_pbf(&config.pbf_path).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to build graph: {}", e),
         )
     })?;
+    attach_landcover(&mut graph, &config.pbf_path, &config.cache_dir, &bbox, &cache_key);
     std::fs::create_dir_all(&config.cache_dir).ok();
     graph.write_to_path(&cache_path).ok();
     tracing::info!("PERF prepare_graph PBF: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
