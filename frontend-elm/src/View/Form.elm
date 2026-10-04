@@ -252,13 +252,34 @@ view model =
                         ]
                         []
                     ]
+                , case model.loadedRouteId of
+                    Just id ->
+                        button
+                            [ type_ "button"
+                            , class "save-btn"
+                            , onClick UpdateLoadedRoute
+                            , disabled (String.isEmpty model.saveRouteName)
+                            ]
+                            [ text ("Mettre à jour l'itinéraire " ++ String.fromInt id) ]
+
+                    Nothing ->
+                        text ""
                 , button
                     [ type_ "button"
                     , class "save-btn"
                     , onClick SaveRouteToDb
                     , disabled (String.isEmpty model.saveRouteName)
                     ]
-                    [ text "Sauvegarder dans la base" ]
+                    [ text <|
+                        -- Le libellé doit dire lequel des deux boutons crée une
+                        -- ligne, sinon on écrase sans le vouloir.
+                        case model.loadedRouteId of
+                            Just _ ->
+                                "Enregistrer comme nouvel itinéraire"
+
+                            Nothing ->
+                                "Sauvegarder dans la base"
+                    ]
                 , button
                     [ type_ "button"
                     , class "load-btn"

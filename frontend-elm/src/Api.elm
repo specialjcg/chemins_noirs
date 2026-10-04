@@ -132,6 +132,24 @@ saveRouteToDb request route toMsg =
         }
 
 
+{-| Remplacer un itinéraire déjà enregistré, au lieu d'en créer un autre.
+
+Sert à reprendre un itinéraire chargé dont on a déplacé les points. Le corps
+est celui de `saveRouteToDb` ; seule la méthode et l'URL changent.
+-}
+updateSavedRoute : Int -> SaveRouteRequest -> RouteResponse -> (Result Http.Error SavedRoute -> msg) -> Cmd msg
+updateSavedRoute id request route toMsg =
+    Http.request
+        { method = "PUT"
+        , headers = []
+        , url = savedRoutesApiRoot ++ "/" ++ String.fromInt id
+        , body = Http.jsonBody (encodeSaveRouteRequest request route)
+        , expect = Http.expectJson toMsg decodeSavedRoute
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
 listSavedRoutes : (Result Http.Error (List SavedRoute) -> msg) -> Cmd msg
 listSavedRoutes toMsg =
     Http.get

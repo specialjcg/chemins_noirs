@@ -45,6 +45,33 @@ pub async fn save_route(
         .map_err(db_error_to_api_error)
 }
 
+/// PUT /api/routes/:id — Remplacer un itinéraire existant
+///
+/// Même corps que `save_route`, mais écrit sur une ligne déjà là. Sert à
+/// reprendre un itinéraire chargé dont on a déplacé les points : sans cela
+/// chaque retouche créait une ligne de plus, et il fallait supprimer
+/// l'ancienne à la main.
+pub async fn update_route(
+    State(db): State<Arc<Database>>,
+    Path(id): Path<i32>,
+    Json(payload): Json<(SaveRouteApiRequest, RouteResponse)>,
+) -> Result<Json<SavedRoute>, (StatusCode, Json<ApiError>)> {
+    let (req, route) = payload;
+
+    let save_req = SaveRouteRequest {
+        name: req.name,
+        description: req.description,
+        route,
+        tags: req.tags,
+        original_waypoints: req.original_waypoints,
+    };
+
+    db.update_route(id, save_req)
+        .await
+        .map(Json)
+        .map_err(db_error_to_api_error)
+}
+
 /// GET /api/routes - List all saved routes
 pub async fn list_routes(
     State(db): State<Arc<Database>>,

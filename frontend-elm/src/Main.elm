@@ -663,6 +663,7 @@ update msg model =
                 | routeMode = mode
                 , waypoints = []
                 , lastResponse = Nothing
+                , loadedRouteId = Nothing
                 , loopCandidates = []
                 , loopMeta = Nothing
                 , selectedLoopIdx = Nothing
@@ -755,28 +756,8 @@ update msg model =
         SaveRouteToDb ->
             case model.lastResponse of
                 Just route ->
-                    let
-                        -- Include original waypoints for multi-point routes
-                        originalWaypoints =
-                            if List.isEmpty model.waypoints then
-                                Nothing
-                            else
-                                Just model.waypoints
-
-                        request =
-                            { name = model.saveRouteName
-                            , description =
-                                if String.isEmpty model.saveRouteDescription then
-                                    Nothing
-
-                                else
-                                    Just model.saveRouteDescription
-                            , tags = Nothing
-                            , originalWaypoints = originalWaypoints
-                            }
-                    in
                     ( { model | pending = True, pendingSeconds = 0 }
-                    , Api.saveRouteToDb request route RouteSaved
+                    , Api.saveRouteToDb (saveRequestFrom model) route RouteSaved
                     )
 
                 Nothing ->
@@ -784,15 +765,56 @@ update msg model =
                     , Cmd.none
                     )
 
+        UpdateLoadedRoute ->
+            case ( model.loadedRouteId, model.lastResponse ) of
+                ( Just id, Just route ) ->
+                    ( { model | pending = True, pendingSeconds = 0 }
+                    , Api.updateSavedRoute id (saveRequestFrom model) route RouteSaved
+                    )
+
+                ( Nothing, _ ) ->
+                    ( { model | error = Just "Aucun itinéraire chargé à mettre à jour" }
+                    , Cmd.none
+                    )
+
+                ( _, Nothing ) ->
+                    ( { model | error = Just "Aucune route à sauvegarder" }
+                    , Cmd.none
+                    )
+
         RouteSaved result ->
             case result of
                 Ok savedRoute ->
+                    let
+                        -- Une mise à jour renvoie une ligne déjà présente :
+                        -- l'empiler afficherait l'itinéraire deux fois.
+                        known =
+                            List.any (\r -> r.id == savedRoute.id) model.savedRoutes
+
+                        savedRoutes =
+                            if known then
+                                List.map
+                                    (\r ->
+                                        if r.id == savedRoute.id then
+                                            savedRoute
+
+                                        else
+                                            r
+                                    )
+                                    model.savedRoutes
+
+                            else
+                                savedRoute :: model.savedRoutes
+                    in
                     ( { model
                         | pending = False
                         , error = Nothing
-                        , saveRouteName = ""
-                        , saveRouteDescription = ""
-                        , savedRoutes = savedRoute :: model.savedRoutes
+                        , savedRoutes = savedRoutes
+
+                        -- Ce qui vient d'être écrit devient l'itinéraire chargé,
+                        -- pour que la retouche suivante le reprenne au lieu d'en
+                        -- créer un troisième.
+                        , loadedRouteId = Just savedRoute.id
                       }
                     , Cmd.none
                     )
@@ -872,7 +894,19 @@ update msg model =
                                             (\_ -> NoOp)
                                         ]
                     in
-                    ( applySavedRoute { model | pending = False, error = Nothing } route waypoints
+                    ( applySavedRoute
+                        { model
+                            | pending = False
+                            , error = Nothing
+                            , loadedRouteId = Just savedRoute.id
+
+                            -- Préremplis : une mise à jour qui part de champs
+                            -- vides écrirait un nom vide sur la ligne.
+                            , saveRouteName = savedRoute.name
+                            , saveRouteDescription = Maybe.withDefault "" savedRoute.description
+                        }
+                        route
+                        waypoints
                     , Cmd.batch
                         ([ Ports.updateRoute route.path
                          , Ports.setRouteSurfaces route.pointSurfaces
@@ -1749,6 +1783,31 @@ applyRoute model route =
         , error = Nothing
         , form = newForm
         -- Keep original waypoints unchanged - don't extract from calculated path
+    }
+
+
+{-| Métadonnées de sauvegarde lues dans le modèle.
+
+Partagé par la création et la mise à jour : les deux écrivent le même corps,
+seule l'URL change. Les waypoints ne sont joints que s'il y en a, sinon le
+chargement suivant les réinventerait tous les 2 km.
+-}
+saveRequestFrom : Model -> SaveRouteRequest
+saveRequestFrom model =
+    { name = model.saveRouteName
+    , description =
+        if String.isEmpty model.saveRouteDescription then
+            Nothing
+
+        else
+            Just model.saveRouteDescription
+    , tags = Nothing
+    , originalWaypoints =
+        if List.isEmpty model.waypoints then
+            Nothing
+
+        else
+            Just model.waypoints
     }
 
 

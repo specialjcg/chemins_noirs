@@ -19,6 +19,10 @@ type alias Model =
     -- construire depuis le PBF : sans ce compteur, le bandeau d'attente ne
     -- peut pas distinguer les deux et annonce un délai faux.
     , pendingSeconds : Int
+    -- Itinéraire enregistré d'où vient le tracé affiché, s'il en vient d'un.
+    -- Sans lui, retoucher un itinéraire chargé puis sauvegarder créait une
+    -- ligne de plus au lieu de reprendre la sienne.
+    , loadedRouteId : Maybe Int
     , lastResponse : Maybe RouteResponse
     , loopCandidates : List LoopCandidate
     , loopMeta : Maybe LoopMeta
@@ -117,6 +121,7 @@ initialModel =
     , closeLoop = False
     , pending = False
     , pendingSeconds = 0
+    , loadedRouteId = Nothing
     , lastResponse = Nothing
     , loopCandidates = []
     , loopMeta = Nothing
@@ -187,6 +192,7 @@ type Msg
     | RouteFetched (Result Http.Error RouteResponse)
     | PendingTick
     | SurfacesLoaded (Result Http.Error (List Bool))
+    | UpdateLoadedRoute
     | LoopRouteFetched (Result Http.Error LoopRouteResponse)
     | SelectLoopCandidate Int
     | AddWaypoint Coordinate
