@@ -232,6 +232,14 @@
   --map-reference: var(--accent-forest);
   --map-osm-unpaved: var(--accent-forest-light);
   --map-hillshade: #473b24;
+
+  /* Fond « Chemin noir » : la hiérarchie du Plan IGN retournée. Les tuiles IGN
+     sont claires, donc c'est le chemin qui porte l'encre et le goudron qui
+     s'efface — ce que le nom de l'application dit depuis le début. L'encre est
+     un noir légèrement chaud, pas un noir pur : le tracé calculé est en laiton
+     et doit rester la chose la plus présente de l'écran. */
+  --map-chemin-ink: #1b1710;
+  --map-bitume-pale: #dcd8d2;
   --map-bbox: var(--text-muted);
 
   --map-marker-face: var(--text-primary);
@@ -773,6 +781,7 @@ button[disabled] {
 }
 
 .panel-tab {
+  position: relative;
   flex: 1;
   background: none;
   border: none;
@@ -902,6 +911,7 @@ button[disabled] {
    chiffres en chasse fixe et les actions révélées au survol ramènent une
    entrée à ~56 px. */
 .route-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -2909,5 +2919,149 @@ body.shell #map .maplibregl-ctrl-bottom-right {
   .route-row-dot {
     align-self: center;
     margin-top: 0;
+  }
+}
+
+
+/* ─── Micro-interactions ─────────────────────────────────────────────────────
+
+   Relevé chez higglo.io, et c'est la seule partie de sa feuille qui soit écrite
+   à la main : le reste est de la sortie Tailwind v4, mais ses vingt-cinq
+   @keyframes ne viennent d'aucun compilateur, et il n'embarque ni GSAP ni
+   Framer Motion.
+
+   Trois règles font la qualité de son système, et elles sont reprises telles
+   quelles :
+
+   1. Le clavier reçoit la même récompense que la souris. `:hover` et
+      `:focus-visible` déclenchent la même chose, et chez lui deux effets sur
+      quatre n'existent *que* au focus. Le clavier n'est pas un repli.
+
+   2. Chaque animation part de `opacity: 0` et y revient. C'est un événement,
+      pas un état : rien ne s'accumule, rien n'est à défaire, et `forwards` ne
+      fige qu'un zéro.
+
+   3. `pointer-events: none` sur le pseudo-élément. L'effet ne doit jamais
+      intercepter un clic destiné à ce qu'il recouvre.
+
+   Une adaptation, pas une copie : higglo balaie ses cartes en déplaçant le
+   pseudo-élément hors de ses bornes, ce qui oblige à un `overflow: hidden` sur
+   le parent. Posé sur `.route-row`, cet `overflow` rognerait l'anneau de focus
+   des boutons d'action en bord de ligne — on vient de passer la session à le
+   rendre visible. Le balayage de la ligne déplace donc un fond, pas une boîte :
+   rien ne sort jamais du cadre, et rien n'a besoin d'être rogné.
+
+   Les durées sont les siennes, mesurées : .85s à 1,1s pour un balayage ponctuel.
+   La garde globale `prefers-reduced-motion` ramène déjà toute animation à
+   0,01 ms, mais les déclencheurs sont quand même posés sous
+   `no-preference` — une intention vaut mieux qu'un effet de bord. */
+
+@keyframes micro-balayage-ligne {
+  0% {
+    opacity: 0;
+    background-position: 0% 50%;
+  }
+  45% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 0;
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes micro-reflet-bouton {
+  0% {
+    opacity: 0;
+    transform: translateX(-120%) skewX(-18deg);
+  }
+  45% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(120%) skewX(-18deg);
+  }
+}
+
+@keyframes micro-etincelle-onglet {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.85);
+  }
+  60% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Le fond fait trois fois la largeur de la ligne : déplacer sa position d'un
+   bout à l'autre fait passer la bande claire, sans jamais déborder. */
+.route-row::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  mix-blend-mode: screen;
+  background: linear-gradient(
+    100deg,
+    transparent 35%,
+    var(--accent-brass-dim) 50%,
+    transparent 65%
+  );
+  background-size: 300% 100%;
+}
+
+/* `.btn-submit` porte déjà `position: relative` et `overflow: hidden` pour son
+   dégradé : le reflet est donc rogné sans qu'on ajoute quoi que ce soit. Son
+   anneau de focus est un `outline`, que le dépassement du parent ne rogne pas. */
+.btn-submit::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 45%;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.55),
+    transparent
+  );
+}
+
+.panel-tab::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 26px;
+  height: 2px;
+  margin-left: -13px;
+  border-radius: 2px;
+  background: var(--accent-brass);
+  pointer-events: none;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .route-row:hover::after,
+  .route-row:focus-within::after {
+    animation: micro-balayage-ligne 1.1s forwards;
+  }
+
+  .btn-submit:hover::after,
+  .btn-submit:focus-visible::after {
+    animation: micro-reflet-bouton 0.85s forwards;
+  }
+
+  .panel-tab:focus-visible::before {
+    animation: micro-etincelle-onglet 0.85s forwards;
   }
 }

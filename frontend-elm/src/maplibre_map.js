@@ -624,6 +624,7 @@ function createStyleSwitcherControl() {
   const STYLES = [
     { id: 'topo',      label: 'Topo',      icon: '◈' },
     { id: 'ign-plan',  label: 'Plan IGN',  icon: '◆' },
+    { id: 'chemin-noir', label: 'Chemin noir', icon: '◐' },
     { id: 'ign-ortho', label: 'Ortho IGN', icon: '◈' },
     { id: 'satellite', label: 'Satellite', icon: '◉' },
     { id: 'hybrid',    label: 'Hybride',   icon: '◎' }
@@ -1510,6 +1511,8 @@ function setLayerVisible(layerId, visible) {
 }
 
 let ignVectorLayerIds = []; // Injected Plan IGN vector layers, empty until loaded
+let ignVectorMeta = {}; // id de couche -> { sourceLayer, symbo, role }
+let ignPeintureOrigine = {}; // id -> peinture d'origine, pour revenir en arrière
 let ignVectorPromise = null;
 
 /** Pull the Plan IGN vector style into the running map.
@@ -1521,6 +1524,192 @@ let ignVectorPromise = null;
  *
  * The raster Plan IGN stays as the fallback if this fails.
  */
+/* ── Fond « Chemin noir » : la hiérarchie du Plan IGN, retournée ──────────────
+
+   Toutes les cartes du monde dessinent l'autoroute en gras et le sentier en
+   pointillé fin. Mesuré dans le style IGN, au zoom 17 : une route fait 16,8 à
+   22 px de large, un sentier en fait 2. Un facteur dix en faveur de ce que
+   cette application passe son temps à éviter.
+
+   Le schéma vectoriel IGN sépare déjà `routier_route` de `routier_chemin`, et
+   classe chaque objet par un attribut `symbo`. L'inversion ne demande donc
+   aucune donnée nouvelle : elle échange le poids visuel de deux classes qui
+   existent.
+
+   Une trouvaille dans le schéma : `NON_REVETUE_CARRO` et
+   `NON_REVETUE_CARRO_RESTREINT` désignent des routes **carrossables mais non
+   revêtues**, rangées du côté des routes. Ce sont exactement des chemins
+   noirs. On les promeut.
+
+   Limite honnête : `CHEMIN` n'apparaît dans les tuiles qu'à partir du zoom 12,
+   `SENTIER` du zoom 13. En dessous il n'y a rien à mettre en avant, et la
+   carte retombe sur un réseau routier pâle. */
+
+const SYMBO_CHEMIN = new Set([
+  'CHEMIN',
+  'SENTIER',
+  'VOIE_VERTE',
+  'PISTE_CYCLABLE',
+  'RUE_PIETONNE',
+  'ESCALIER'
+]);
+
+const SYMBO_ROUTE_NON_REVETUE = new Set([
+  'NON_REVETUE_CARRO',
+  'NON_REVETUE_CARRO_RESTREINT'
+]);
+
+/* Le schéma décline chaque classe en trois : au niveau du sol, en souterrain
+   (`_SOU`) et en ouvrage d'art (`_SUP`). `NON_REVETUE_CARRO` a donc trois
+   écritures, et ne reconnaître que la première renvoyait au goudron les routes
+   non revêtues en tunnel ou sur pont. Trouvé en comptant les castes contre le
+   style réel, pas en relisant. */
+function symboNu(valeur) {
+  return String(valeur).replace(/_(SOU|SUP)$/, '');
+}
+
+/** Valeurs de `symbo` qu'un filtre de style IGN laisse passer. */
+function symboDuFiltre(filtre) {
+  if (!Array.isArray(filtre)) return [];
+  const [operateur, champ, ...valeurs] = filtre;
+  if ((operateur === '==' || operateur === 'in') && champ === 'symbo') return valeurs;
+  // Les filtres composés (all/any) enveloppent les précédents.
+  if (operateur === 'all' || operateur === 'any') {
+    return filtre.slice(1).flatMap(symboDuFiltre);
+  }
+  return [];
+}
+
+/**
+ * Trois castes, et rien d'autre.
+ *
+ * `matiere`   ce qu'on cherche : chemins, sentiers, voies vertes, et les
+ *             routes non revêtues promues depuis les routes.
+ * `cicatrice` le goudron, réduit à un trait pâle.
+ * `nulle`     tout le reste, laissé tel quel — relief, forêt, eau, toponymes.
+ *             La forêt et l'eau restent lisibles parce que le moteur les
+ *             récompense : les effacer reviendrait à cacher le raisonnement.
+ */
+function casteIgn(meta) {
+  const sl = meta.sourceLayer || '';
+  if (sl.startsWith('routier_chemin')) return 'matiere';
+  if (sl.startsWith('routier_route')) {
+    const s = meta.symbo;
+    if (s.length > 0 && s.every((v) => SYMBO_ROUTE_NON_REVETUE.has(symboNu(v)))) return 'matiere';
+    return 'cicatrice';
+  }
+  if (sl === 'routier_surf' || sl.startsWith('routier_liaison')) return 'cicatrice';
+  return 'nulle';
+}
+
+/** Met une valeur de largeur à l'échelle, qu'elle soit un nombre ou des paliers. */
+function largeurMiseALEchelle(valeur, facteur, plancher, plafond) {
+  const borne = (x) => Math.min(plafond, Math.max(plancher, x * facteur));
+  if (typeof valeur === 'number') return borne(valeur);
+  if (valeur && Array.isArray(valeur.stops)) {
+    return { ...valeur, stops: valeur.stops.map(([z, w]) => [z, borne(w)]) };
+  }
+  // Expression : on multiplie sans borner, faute de pouvoir lire la valeur.
+  if (Array.isArray(valeur)) return ['*', valeur, facteur];
+  return undefined;
+}
+
+/* Les propriétés à relever dépendent du type de couche : demander `fill-color`
+   à une couche `line` ne renvoie pas `undefined`, ça lève une exception au
+   fond de MapLibre. Mesuré ici, et la facture était lourde : l'exception
+   remontait jusqu'au `.catch` du chargement vectoriel, qui concluait que le
+   Plan IGN était indisponible et rebasculait les 425 couches sur le raster.
+   Un relevé de trop faisait perdre tout le style. */
+const PROPS_PAR_TYPE = {
+  line: ['line-color', 'line-width', 'line-opacity', 'line-dasharray'],
+  fill: ['fill-color', 'fill-opacity'],
+  symbol: [],
+  circle: ['circle-color', 'circle-radius']
+};
+
+function peintureOrigine(id, type) {
+  if (!ignPeintureOrigine[id]) {
+    const garde = {};
+    (PROPS_PAR_TYPE[type] || []).forEach((prop) => {
+      try {
+        garde[prop] = mapInstance.getPaintProperty(id, prop);
+      } catch (e) {
+        /* propriété absente de ce type de couche */
+      }
+    });
+    ignPeintureOrigine[id] = garde;
+  }
+  return ignPeintureOrigine[id];
+}
+
+/**
+ * Applique ou retire l'inversion sur les couches IGN déjà injectées.
+ *
+ * On repeint les mêmes couches plutôt que d'en injecter 425 de plus : passer
+ * de « Plan IGN » à « Chemin noir » devient un changement de peinture, pas un
+ * rechargement de style.
+ */
+function appliquerCheminNoir(actif) {
+  if (ignVectorLayerIds.length === 0) return;
+
+  const encreChemin = mapColor('--map-chemin-ink');
+  const paleBitume = mapColor('--map-bitume-pale');
+
+  ignVectorLayerIds.forEach((id) => {
+    const meta = ignVectorMeta[id];
+    if (!meta) return;
+    const caste = casteIgn(meta);
+    if (caste === 'nulle') return;
+
+    const origine = peintureOrigine(id, meta.type);
+
+    if (!actif) {
+      Object.entries(origine).forEach(([prop, valeur]) => {
+        try {
+          mapInstance.setPaintProperty(id, prop, valeur);
+        } catch (e) {
+          /* propriété absente de ce type de couche */
+        }
+      });
+      setLayerVisible(id, true);
+      return;
+    }
+
+    // Les « filets extérieurs » sont les contours qui donnent du poids à une
+    // route. C'est exactement le poids qu'on lui retire.
+    if (caste === 'cicatrice' && meta.role === 'ext') {
+      setLayerVisible(id, false);
+      return;
+    }
+    setLayerVisible(id, true);
+
+    if (meta.type !== 'line') {
+      if (caste === 'cicatrice' && origine['fill-color'] !== undefined) {
+        mapInstance.setPaintProperty(id, 'fill-color', paleBitume);
+      }
+      return;
+    }
+
+    if (caste === 'matiere') {
+      mapInstance.setPaintProperty(id, 'line-color', encreChemin);
+      mapInstance.setPaintProperty(id, 'line-opacity', 1);
+      // Un tireté se lit comme « incertain ». Un chemin noir ne l'est pas.
+      mapInstance.setPaintProperty(id, 'line-dasharray', undefined);
+      const largeur = largeurMiseALEchelle(origine['line-width'], 3.5, 1.6, 11);
+      if (largeur !== undefined) mapInstance.setPaintProperty(id, 'line-width', largeur);
+    } else {
+      mapInstance.setPaintProperty(id, 'line-color', paleBitume);
+      mapInstance.setPaintProperty(id, 'line-opacity', 1);
+      const largeur = largeurMiseALEchelle(origine['line-width'], 1 / 6, 0.5, 2);
+      if (largeur !== undefined) mapInstance.setPaintProperty(id, 'line-width', largeur);
+    }
+  });
+
+  // Le tracé calculé doit rester au-dessus de tout, y compris des chemins
+  // qu'on vient d'épaissir.
+  ensureRouteLayers();
+}
+
 async function loadIgnVectorLayers() {
   const style = await fetch(IGN_VECTOR_STYLE_URL).then((r) => {
     if (!r.ok) throw new Error('style HTTP ' + r.status);
@@ -1545,6 +1734,12 @@ async function loadIgnVectorLayers() {
   const ids = [];
   for (const layer of style.layers) {
     const id = 'ignv-' + layer.id;
+    ignVectorMeta[id] = {
+      sourceLayer: layer['source-layer'],
+      symbo: symboDuFiltre(layer.filter),
+      role: /\bext/i.test(layer.id) ? 'ext' : /\bint/i.test(layer.id) ? 'int' : 'autre',
+      type: layer.type
+    };
     if (!mapInstance.getLayer(id)) {
       mapInstance.addLayer(
         { ...layer, id, layout: { ...(layer.layout || {}), visibility: 'none' } },
@@ -1563,15 +1758,31 @@ function setIgnVectorVisible(visible) {
   ignVectorLayerIds.forEach((id) => setLayerVisible(id, visible));
 }
 
+/** Les deux styles qui s'appuient sur le Plan IGN vectoriel. */
+function estPlanVectoriel(style) {
+  return style === 'ign-plan' || style === 'chemin-noir';
+}
+
 /** Show the Plan IGN, vector if we can get it, raster meanwhile. */
 function applyIgnPlan(wanted) {
   if (wanted && !ignVectorPromise) {
     ignVectorPromise = loadIgnVectorLayers()
-      .then(() => applyIgnPlan(currentMapStyle === 'ign-plan'))
+      .then(() => {
+        applyIgnPlan(estPlanVectoriel(currentMapStyle));
+        // Les couches arrivent après coup : si « Chemin noir » était déjà
+        // demandé, c'est ici qu'il faut repeindre. Isolé dans son propre
+        // `try` : un défaut de repeinte doit coûter l'inversion, pas le fond
+        // de carte entier.
+        try {
+          appliquerCheminNoir(currentMapStyle === 'chemin-noir');
+        } catch (err) {
+          console.warn('[maplibre] inversion Chemin noir impossible', err);
+        }
+      })
       .catch((err) => {
         console.warn('[maplibre] Plan IGN vector unavailable, keeping raster', err);
         ignVectorLayerIds = [];
-        applyIgnPlan(currentMapStyle === 'ign-plan');
+        applyIgnPlan(estPlanVectoriel(currentMapStyle));
       });
   }
 
@@ -1601,7 +1812,9 @@ export function switchMapStyle(style) {
   // Same lazy pattern for the IGN backgrounds: created on first use, below OSM.
   ensureRasterLayer('ign-ortho-tiles', 'ign-ortho', style === 'ign-ortho');
 
-  const isIgn = style === 'ign-plan' || style === 'ign-ortho';
+  // « Chemin noir » est le Plan IGN vectoriel repeint : mêmes couches, mêmes
+  // tuiles, hiérarchie retournée.
+  const isIgn = style === 'ign-plan' || style === 'ign-ortho' || style === 'chemin-noir';
   const showOsm = style === 'topo' || style === 'hybrid';
   const showSatellite = style === 'satellite' || style === 'hybrid';
 
@@ -1610,7 +1823,8 @@ export function switchMapStyle(style) {
     mapInstance.setLayoutProperty('satellite-tiles', 'visibility', showSatellite ? 'visible' : 'none');
   }
 
-  applyIgnPlan(style === 'ign-plan');
+  applyIgnPlan(style === 'ign-plan' || style === 'chemin-noir');
+  appliquerCheminNoir(style === 'chemin-noir');
   setLayerVisible('ign-ortho-tiles', style === 'ign-ortho');
 
   // Set OSM visibility and opacity
