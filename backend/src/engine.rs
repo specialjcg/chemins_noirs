@@ -1023,30 +1023,6 @@ impl RouteEngine {
         roads
     }
 
-    /// Nearest edge to a coordinate, with its distance in degrees.
-    /// Same projection logic as `closest_nodes`, but keeps the edge instead of
-    /// its endpoints — scoring a trace needs the surface, not the intersection.
-    fn nearest_edge(&self, target: Coordinate) -> Option<(petgraph::graph::EdgeIndex, f64)> {
-        let nearest = self
-            .road_point_index
-            .nearest(&[target.lon, target.lat], 20, &squared_euclidean)
-            .ok()?;
-
-        let mut best: Option<(petgraph::graph::EdgeIndex, f64)> = None;
-        for (_, &point_id) in &nearest {
-            if let Some(edge_idx) = self.road_points[point_id].edge_idx {
-                if best.map(|(b, _)| b == edge_idx).unwrap_or(false) {
-                    continue;
-                }
-                let dist = self.project_to_edge(target, edge_idx);
-                if best.map_or(true, |(_, best_dist)| dist < best_dist) {
-                    best = Some((edge_idx, dist));
-                }
-            }
-        }
-        best
-    }
-
     /// Cost of an existing polyline under the same weights the router uses.
     ///
     /// The router only ever scores paths it built itself, so a hand-made trace
@@ -1057,6 +1033,18 @@ impl RouteEngine {
     /// A step further than `MAX_SNAP_KM` from any edge is off-graph: its length
     /// lands in `unmatched_km` and it is charged distance only, with no surface
     /// penalty invented for it.
+    ///
+    /// L'accrochage passe par `nearest_edge_or_incident` et non par l'index
+    /// seul : une route droite n'est indexée que par ses deux bouts, donc un
+    /// pas tombant en son milieu ne s'accrochait à rien. Sur les traversées de
+    /// Tronçais, 39 à 56 % des pas finissaient ainsi dans `unmatched_km`, et
+    /// les parts de forêt et de goudron étaient calculées sur le reste.
+    ///
+    /// Le biais n'était pas neutre pour `hybridize` : un pas non accroché est
+    /// facturé `step_km` seul, soit le plancher du coût, alors qu'une arête
+    /// réelle coûte toujours au moins autant. Le tracé d'origine, fait à la
+    /// main et mal accroché, était donc sous-facturé face à l'alternative
+    /// calculée, qui suit des arêtes et s'accroche partout.
     pub fn score_polyline(&self, path: &[Coordinate], weights: WeightConfig) -> PolylineScore {
         const MAX_SNAP_KM: f64 = 0.2;
 
@@ -1074,7 +1062,7 @@ impl RouteEngine {
                 lon: (pair[0].lon + pair[1].lon) / 2.0,
             };
 
-            match self.nearest_edge(mid) {
+            match self.nearest_edge_or_incident(mid) {
                 Some((edge_idx, dist_deg)) if dist_deg * 111.0 <= MAX_SNAP_KM => {
                     let edge = &self.graph[edge_idx];
                     match edge.surface {
