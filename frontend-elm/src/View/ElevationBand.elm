@@ -1,4 +1,4 @@
-module View.ElevationBand exposing (fillGaps, view)
+module View.ElevationBand exposing (fillGaps, isVisible, view)
 
 {-| Bande de dénivelé ancrée en bas de l'écran, sous la carte.
 
@@ -21,6 +21,28 @@ import Json.Decode as Decode
 import Svg
 import Svg.Attributes as SA
 import Types exposing (ElevationProfile, Model, Msg(..), RouteResponse)
+
+
+{-| La bande est-elle affichée ?
+
+La coquille en a besoin : le panneau latéral descend jusqu'en bas quand la
+bande est absente, et s'arrête au-dessus d'elle sinon. Sans cette réponse,
+il laissait une bande de vide de 148 px sous lui tant qu'aucun itinéraire
+n'était chargé.
+-}
+isVisible : Model -> Bool
+isVisible model =
+    case model.lastResponse of
+        Just route ->
+            case route.elevationProfile of
+                Just profile ->
+                    List.length (fillGaps profile.elevations) >= 2
+
+                Nothing ->
+                    False
+
+        Nothing ->
+            False
 
 
 view : Model -> Html Msg

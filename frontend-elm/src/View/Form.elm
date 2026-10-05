@@ -1,4 +1,4 @@
-module View.Form exposing (view)
+module View.Form exposing (view, viewSavedRoutesSection)
 
 {-| Module de formulaire - Interface utilisateur pour la saisie des paramètres.
 Approche fonctionnelle pure : génération déclarative du HTML.
@@ -280,63 +280,10 @@ view model =
                             Nothing ->
                                 "Sauvegarder dans la base"
                     ]
-                , button
-                    [ type_ "button"
-                    , class "load-btn"
-                    , onClick ToggleSavedRoutesPanel
-                    ]
-                    [ text <|
-                        if model.showSavedRoutes then
-                            "Masquer les tracés"
-
-                        else
-                            "Mes tracés sauvegardés ("
-                                ++ String.fromInt (List.length model.savedRoutes)
-                                ++ ")"
-                    ]
-                , if model.showSavedRoutes then
-                    div [ class "saved-routes-panel" ]
-                        [ if List.isEmpty model.savedRoutes then
-                            p [ class "empty-state" ]
-                                [ text "Aucun tracé sauvegardé" ]
-
-                          else
-                            div [] (List.map (viewSavedRoute model.referenceRouteId) model.savedRoutes)
-                        ]
-
-                  else
-                    text ""
                 ]
 
           else
-            div []
-                [ button
-                    [ type_ "button"
-                    , class "load-btn"
-                    , onClick ToggleSavedRoutesPanel
-                    ]
-                    [ text <|
-                        if model.showSavedRoutes then
-                            "Masquer les tracés"
-
-                        else
-                            "Mes tracés sauvegardés ("
-                                ++ String.fromInt (List.length model.savedRoutes)
-                                ++ ")"
-                    ]
-                , if model.showSavedRoutes then
-                    div [ class "saved-routes-panel" ]
-                        [ if List.isEmpty model.savedRoutes then
-                            p [ class "empty-state" ]
-                                [ text "Aucun tracé sauvegardé" ]
-
-                          else
-                            div [] (List.map (viewSavedRoute model.referenceRouteId) model.savedRoutes)
-                        ]
-
-                  else
-                    text ""
-                ]
+            text ""
         , button
             [ type_ "button"
             , class "btn-submit"
@@ -398,48 +345,100 @@ onEnter msg =
         )
 
 
-viewSavedRoute : Maybe Int -> SavedRoute -> Html Msg
-viewSavedRoute referenceRouteId route =
-    div [ class "saved-route-item" ]
-        [ div [ class "saved-route-header" ]
-            [ div [ class "saved-route-info" ]
-                [ h4 [ class "saved-route-name" ]
-                    [ text route.name
-                    , if route.isFavorite then
-                        span [ class "favorite-star" ] [ text "\u{2B50}" ]
+{-| Liste des itinéraires enregistrés.
 
-                      else
-                        text ""
-                    ]
-                , case route.description of
-                    Just desc ->
-                        p [ class "saved-route-desc" ]
-                            [ text desc ]
+Ce bloc était écrit deux fois, à l'identique, dans les deux branches du test
+`model.lastResponse /= Nothing` : seul le formulaire qui le précède dépendait
+de cette condition, pas la liste.
 
-                    Nothing ->
-                        text ""
-                , div [ class "saved-route-stats" ]
-                    [ text <|
-                        String.fromFloat route.distanceKm
-                            ++ " km"
-                            ++ (case ( route.totalAscentM, route.totalDescentM ) of
-                                    ( Just ascent, Just descent ) ->
-                                        " \u{2022} D+ "
-                                            ++ String.fromFloat ascent
-                                            ++ "m \u{2022} D- "
-                                            ++ String.fromFloat descent
-                                            ++ "m"
+Il portait aussi son propre bouton « Mes tracés sauvegardés » et n'affichait
+la liste que replié. Devenu un onglet, il n'a plus à s'ouvrir : l'onglet est
+déjà la commande, et un second niveau de repli laisserait un panneau vide.
+-}
+viewSavedRoutesSection : Model -> Html Msg
+viewSavedRoutesSection model =
+    if List.isEmpty model.savedRoutes then
+        p [ class "empty-state" ] [ text "Aucun tracé sauvegardé" ]
 
-                                    _ ->
-                                        ""
-                               )
-                    ]
-                ]
+    else
+        let
+            ids =
+                List.map .id model.savedRoutes
+        in
+        div
+            [ class "saved-routes-panel"
+            , attribute "role" "list"
+            , attribute "aria-label" "Itinéraires enregistrés"
             ]
-        , div [ class "saved-route-actions" ]
+            (List.indexedMap (viewSavedRoute model.referenceRouteId ids) model.savedRoutes)
+
+
+{-| Une entrée de la liste des itinéraires, sur une seule ligne.
+
+Chaque entrée occupait ~170 px : titre, description sur trois lignes, ligne de
+chiffres et quatre boutons toujours visibles. Quinze itinéraires faisaient donc
+2 550 px dans un panneau haut de 950, soit cinq visibles à la fois. La
+description part dans l'infobulle et les actions n'apparaissent qu'au survol.
+-}
+viewSavedRoute : Maybe Int -> List Int -> Int -> SavedRoute -> Html Msg
+viewSavedRoute referenceRouteId ids index route =
+    let
+        dernier =
+            List.length ids - 1
+
+        focusRang rang =
+            ids
+                |> List.drop (clamp 0 dernier rang)
+                |> List.head
+                |> Maybe.withDefault route.id
+                |> loadButtonDomId
+                |> FocusElement
+    in
+    div
+        [ classList
+            [ ( "route-row", True )
+            , ( "is-reference", referenceRouteId == Just route.id )
+            ]
+        , attribute "role" "listitem"
+        , title (Maybe.withDefault route.name route.description)
+        , onListKey
+            (\key ->
+                case key of
+                    "ArrowDown" ->
+                        Just (focusRang (index + 1))
+
+                    "ArrowUp" ->
+                        Just (focusRang (index - 1))
+
+                    "Home" ->
+                        Just (focusRang 0)
+
+                    "End" ->
+                        Just (focusRang dernier)
+
+                    "Escape" ->
+                        Just (FocusElement "panel-tab-routes")
+
+                    _ ->
+                        Nothing
+            )
+        ]
+        [ div [ class "route-row-main" ]
+            [ span [ class "route-row-name" ]
+                [ text route.name
+                , if route.isFavorite then
+                    span [ class "favorite-star" ] [ text "\u{2B50}" ]
+
+                  else
+                    text ""
+                ]
+            , span [ class "route-row-metrics t-metric" ] [ text (routeMetrics route) ]
+            ]
+        , div [ class "route-row-actions" ]
             [ button
                 [ type_ "button"
                 , class "action-load"
+                , id (loadButtonDomId route.id)
                 , onClick (LoadSavedRoute route.id)
                 ]
                 [ text "Charger" ]
@@ -474,6 +473,103 @@ viewSavedRoute referenceRouteId route =
                 [ text "\u{2715}" ]
             ]
         ]
+
+
+{-| Le bouton « Charger » sert de point d'ancrage du focus dans sa ligne.
+
+Les flèches doivent déplacer le focus de ligne en ligne, mais une ligne est un
+`div` : la focaliser demanderait un `tabindex` et la ferait entrer dans la
+tabulation en plus de ses quatre boutons. Le premier bouton de la ligne fait
+donc office de position courante, et c'est lui que les flèches visent.
+-}
+loadButtonDomId : Int -> String
+loadButtonDomId routeId =
+    "route-load-" ++ String.fromInt routeId
+
+
+{-| Touches de déplacement dans la liste.
+
+`preventDefault` est indispensable : une liste de quinze entrées dépasse la
+hauteur du panneau, et sans lui chaque flèche déplacerait le focus *et* ferait
+défiler le panneau, qui finirait par ne plus montrer la ligne focalisée.
+-}
+onListKey : (String -> Maybe Msg) -> Attribute Msg
+onListKey versMsg =
+    preventDefaultOn "keydown"
+        (Decode.field "key" Decode.string
+            |> Decode.andThen
+                (\key ->
+                    case versMsg key of
+                        Just msg ->
+                            Decode.succeed ( msg, True )
+
+                        Nothing ->
+                            Decode.fail "touche sans effet dans la liste"
+                )
+        )
+
+
+{-| Distance, dénivelé et difficulté d'un itinéraire, en une ligne.
+
+Les valeurs étaient affichées brutes : « 26.424826 km », « D+ 263.85m ». Un
+relevé se lit au dixième de kilomètre et au mètre près, pas au micron.
+-}
+routeMetrics : SavedRoute -> String
+routeMetrics route =
+    let
+        denivele =
+            case route.totalAscentM of
+                Just ascent ->
+                    " · D+ " ++ String.fromInt (round ascent) ++ " m"
+
+                Nothing ->
+                    ""
+
+        difficulte =
+            case route.routeData.difficulty of
+                Just d ->
+                    " · " ++ difficultyLabel d
+
+                Nothing ->
+                    ""
+    in
+    formatKm route.distanceKm ++ " km" ++ denivele ++ difficulte
+
+
+{-| Distance au dixième de kilomètre, décimale toujours présente.
+
+`String.fromFloat` écrit « 29 » pour 29.0 et « 30.1 » pour 30.1 : dans une
+colonne en chasse fixe, censée s'aligner, les deux ne tombent pas au même
+endroit. La virgule est celle du français, puisque c'est la langue de
+l'interface.
+-}
+formatKm : Float -> String
+formatKm valeur =
+    let
+        dixiemes =
+            round (valeur * 10)
+    in
+    String.fromInt (dixiemes // 10) ++ "," ++ String.fromInt (modBy 10 dixiemes)
+
+
+{-| Le moteur classe en anglais, l'interface parle français. -}
+difficultyLabel : String -> String
+difficultyLabel niveau =
+    case niveau of
+        "easy" ->
+            "facile"
+
+        "moderate" ->
+            "modéré"
+
+        "difficult" ->
+            "difficile"
+
+        "expert" ->
+            "expert"
+
+        autre ->
+            autre
 
 
 viewFreehandPanel : Model -> Html Msg

@@ -11,44 +11,115 @@
   --font-body: 'Barlow', 'Helvetica Neue', Helvetica, sans-serif;
   --font-mono: 'Space Mono', 'Courier New', monospace;
 
-  --bg-deep: #0c100d;
-  --bg-surface: #131a15;
-  --bg-card: #182019;
-  --bg-card-hover: #1e2a22;
-  --bg-input: #101612;
-  --bg-input-focus: #141c16;
+  /* Fonds neutres. Ils étaient tous teintés de vert — #0c100d, #131a15,
+     #182019 — et les bordures elles-mêmes en laiton transparent : il ne
+     restait aucune surface neutre sur laquelle un accent puisse ressortir.
+     Les clartés sont conservées, la teinte retirée. Le vert forêt ne sert
+     plus que sur la carte, où il désigne quelque chose. */
+  --bg-deep: #0e0e0e;
+  --bg-surface: #161616;
+  --bg-card: #1c1c1c;
+  --bg-card-hover: #242424;
+  --bg-input: #121212;
+  --bg-input-focus: #181818;
 
   --accent-brass: #c9a84c;
   --accent-brass-light: #dfc272;
   --accent-brass-dim: rgba(201, 168, 76, 0.12);
   --accent-forest: #5a7a4e;
   --accent-forest-light: #7a9e6e;
-  --accent-moss: #4a6b3e;
+  /* Même constat que pour les pastilles : le vert de la carte ne porte ni
+     l'encre claire (3,59) ni l'encre sombre (3,95). Les six aplats pleins qui
+     portent un libellé — tracer, enregistrer, charger, exporter, chercher —
+     prennent cette version éclaircie, avec l'encre sombre, à 5,55. Le vert de
+     la carte reste celui du tracé de référence, qui ne porte aucun texte. */
+  --accent-forest-fill: #6f9460;
   --accent-terracotta: #c7553e;
   --accent-terracotta-dim: rgba(199, 85, 62, 0.15);
+  /* La terre cuite de la carte ne fait que 3,89 contre une carte et 3,32 sur
+     son propre fond translucide : lisible en trait de 4 px, pas en libellé de
+     12 px. Les textes d'erreur et les boutons d'annulation prennent cette
+     variante, les remplissages et le tracé gardent la teinte de marque. */
+  --accent-terracotta-text: #d27663;
 
+  /* Les trois niveaux de texte sont mesurés sur le fond le plus clair qui
+     les porte, #242424 au survol d'une carte. Les anciennes valeurs y
+     donnaient 5,15 et 2,66 : le niveau discret passait sous le seuil WCAG AA
+     de 4,5 partout sauf sur le fond le plus sombre. L'échelle est remontée
+     en gardant trois paliers nettement distincts : 11,5 / 7,1 / 4,5. */
   --text-primary: #e4ddd0;
-  --text-secondary: #9b9484;
-  --text-muted: #6b6459;
+  --text-secondary: #b5afa4;
+  --text-muted: #92897c;
   --text-brass: #c8b078;
   --text-inverse: #0c100d;
 
   --info-blue: #5e8fb0;
   --info-blue-dim: rgba(94, 143, 176, 0.15);
+  --info-blue-text: #6a98b6;
 
-  --border-faint: rgba(201, 168, 76, 0.06);
-  --border-subtle: rgba(201, 168, 76, 0.1);
-  --border-medium: rgba(201, 168, 76, 0.18);
-  --border-strong: rgba(201, 168, 76, 0.3);
+  --border-faint: rgba(255, 255, 255, 0.05);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-medium: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.24);
 
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 20px;
 
-  --shadow-card: 0 2px 16px rgba(0, 0, 0, 0.3), 0 0 1px rgba(201, 168, 76, 0.1);
-  --shadow-elevated: 0 8px 40px rgba(0, 0, 0, 0.5), 0 0 1px rgba(201, 168, 76, 0.15);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.55);
   --shadow-glow: 0 0 20px rgba(201, 168, 76, 0.08);
+
+  /* ─── Espacement ───
+     Base de 4 px. Les 145 valeurs écrites une à une faisaient cohabiter
+     0.40, 0.45, 0.50 et 0.55 rem : des écarts que personne ne perçoit mais
+     qui empêchent deux boîtes voisines de s'aligner. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+
+  /* ─── Typographie ───
+     Même constat : neuf tailles entre 0.70 et 0.90 rem, soit 11,2 à 14,4 px.
+     L'échelle part de 11 px pour les mentions et monte par paliers lisibles.
+     L'interface est dense, son texte courant est donc à 14 px et non 16. */
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.75rem;
+  --text-3xl: 2.5rem;
+
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --leading-loose: 1.7;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ─── Coquille ───
+     La carte est l'outil principal : elle prend la fenêtre, et le reste se
+     pose dessus. Les z-index sont nommés parce qu'ils étaient devenus
+     arbitraires — on trouvait 9999 et 10000 côte à côte. */
+  --panel-width: 480px;
+  --band-height: 148px;
+  --shell-gutter: var(--space-4);
+
+  --z-map: 0;
+  --z-map-control: 10;
+  --z-panel: 20;
+  --z-band: 30;
+  --z-modal: 40;
 
   /* Fin du dégradé des boutons en laiton, et rouille pour le degré de
      difficulté le plus haut : la terre cuite servant déjà au niveau en
@@ -56,13 +127,18 @@
   --accent-brass-deep: #b8953d;
   --accent-rust: #8f3a28;
 
-  --bg-gradient-top: #0f1410;
-  --bg-gradient-mid: #0a0e0b;
-  --bg-gradient-bottom: #0d110e;
+  --bg-gradient-top: #101010;
+  --bg-gradient-mid: #0b0b0b;
+  --bg-gradient-bottom: #0e0e0e;
 
-  --difficulty-easy: var(--accent-forest);
+  /* Une pastille est un aplat plein : sa couleur doit porter du texte, pas
+     seulement se distinguer de ses voisines. Le vert forêt et la terre cuite
+     de la palette n'y arrivaient avec aucune des deux encres — 3,59 en clair,
+     3,95 en sombre pour le vert. Éclaircis, ils portent l'encre sombre à
+     5,55 et 5,42 ; la rouille, trop sombre pour cela, garde l'encre claire. */
+  --difficulty-easy: var(--accent-forest-fill);
   --difficulty-moderate: var(--accent-brass);
-  --difficulty-difficult: var(--accent-terracotta);
+  --difficulty-difficult: #d4694f;
   --difficulty-expert: var(--accent-rust);
 
   /* Les pastilles de revêtement reprennent les teintes de la carte : une
@@ -106,8 +182,9 @@
   --map-camera-discovery: var(--info-blue);
 
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-normal: 250ms;
   --transition-fast: 150ms var(--ease-out);
-  --transition-normal: 250ms var(--ease-out);
+  --transition-normal: var(--duration-normal) var(--ease-out);
   --transition-slow: 400ms var(--ease-out);
 }
 
@@ -175,7 +252,7 @@ body::before {
   max-width: 720px;
   width: 100%;
   margin: 0 auto;
-  background: linear-gradient(175deg, rgba(24, 32, 25, 0.92), rgba(18, 26, 20, 0.95));
+  background: linear-gradient(175deg, rgba(28, 28, 28, 0.92), rgba(22, 22, 22, 0.95));
   backdrop-filter: blur(12px);
   border-radius: var(--radius-xl);
   padding: 2.5rem 2rem;
@@ -244,7 +321,7 @@ fieldset {
   border-radius: 0;
   padding: 1rem 1.25rem;
   margin: 0;
-  background: rgba(24, 32, 25, 0.3);
+  background: rgba(28, 28, 28, 0.3);
   transition: border-color var(--transition-normal);
 }
 
@@ -405,8 +482,8 @@ button {
   justify-content: center;
   gap: 0.5rem;
   letter-spacing: 0.02em;
-  background: var(--accent-forest);
-  color: var(--text-primary);
+  background: var(--accent-forest-fill);
+  color: var(--text-inverse);
   outline: none;
 }
 
@@ -503,8 +580,8 @@ button[disabled] {
 
 /* Save button */
 .save-btn {
-  background: var(--accent-forest);
-  color: var(--text-primary);
+  background: var(--accent-forest-fill);
+  color: var(--text-inverse);
   width: 100%;
 }
 
@@ -562,7 +639,7 @@ button[disabled] {
 .waypoint-remove {
   background: transparent;
   border: 1px solid rgba(199, 85, 62, 0.2);
-  color: var(--accent-terracotta);
+  color: var(--accent-terracotta-text);
   padding: 0.2rem 0.5rem;
   font-size: 0.75rem;
   border-radius: var(--radius-sm);
@@ -600,6 +677,143 @@ button[disabled] {
 @keyframes slideDown {
   from { opacity: 0; transform: translateY(-8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Onglets du panneau ───
+   Un filet de 1 px sous la barre, l'onglet actif marqué par un trait de
+   2 px en laiton : la seule couleur de l'interface sert à dire où l'on est,
+   le reste reste neutre. */
+.panel-tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin: 0 calc(var(--space-5) * -1) var(--space-4);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.panel-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: var(--space-3) var(--space-2);
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.panel-tab:hover {
+  color: var(--text-secondary);
+}
+
+.panel-tab.is-active {
+  color: var(--text-brass);
+  border-bottom-color: var(--accent-brass);
+}
+
+/* ─── Liste des itinéraires, en lignes ───
+   Quinze cartes de 170 px faisaient 2 550 px dans un panneau haut de 950 :
+   cinq visibles à la fois. Des filets de 1 px à la place des cartes, les
+   chiffres en chasse fixe et les actions révélées au survol ramènent une
+   entrée à ~56 px. */
+.route-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-faint);
+  border-left: 2px solid transparent;
+  cursor: default;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.route-row:last-child {
+  border-bottom: none;
+}
+
+.route-row:hover {
+  background: var(--bg-card-hover);
+}
+
+/* L'itinéraire affiché en calque garde une marque permanente : au survol seul,
+   on ne saurait plus lequel est actif dès que la souris repart. */
+.route-row.is-reference {
+  border-left-color: var(--accent-brass);
+  background: var(--accent-brass-dim);
+}
+
+/* La ligne courante au clavier doit se voir comme celle sous le pointeur :
+   l'anneau de focus entoure le bouton, pas la ligne, et au milieu de quinze
+   lignes identiques on ne sait plus laquelle on manipule. */
+.route-row:focus-within {
+  background: var(--bg-card-hover);
+  border-left-color: var(--accent-brass-light);
+}
+
+.route-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Le nom est tronqué plutôt que replié : une ligne qui passe à deux casse le
+   rythme de toute la liste. Le nom entier reste dans l'infobulle. */
+.route-row-name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.route-row-metrics {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+
+.route-row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.route-row:hover .route-row-actions,
+.route-row:focus-within .route-row-actions {
+  opacity: 1;
+}
+
+/* Au clavier, un bouton invisible mais focalisable serait un piège : le
+   `focus-within` ci-dessus le révèle dès que la tabulation y entre. */
+.route-row-actions button {
+  flex: none;
+}
+
+/* Les actions étaient dessinées pour la carte : « Charger » prenait toute la
+   largeur sous l'entrée. Dans une ligne de 56 px elles doivent tenir à droite
+   sans la faire grandir. */
+.route-row .action-load {
+  flex: none;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-2xs);
+}
+
+.route-row .action-layer,
+.route-row .action-fav,
+.route-row .action-delete {
+  padding: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: 1;
+  min-width: 24px;
 }
 
 .saved-route-item {
@@ -661,14 +875,15 @@ button[disabled] {
 
 .action-load {
   flex: 1;
-  background: var(--accent-forest);
-  color: var(--text-primary);
+  background: var(--accent-forest-fill);
+  color: var(--text-inverse);
   padding: 0.45rem 0.8rem;
   font-size: 0.82rem;
 }
 
 .action-load:hover {
   background: var(--accent-forest-light);
+  color: var(--text-inverse);
 }
 
 .action-fav {
@@ -693,7 +908,7 @@ button[disabled] {
 .action-delete {
   background: transparent;
   border: 1px solid rgba(199, 85, 62, 0.2);
-  color: var(--accent-terracotta);
+  color: var(--accent-terracotta-text);
   padding: 0.45rem 0.65rem;
   font-size: 0.82rem;
 }
@@ -704,7 +919,7 @@ button[disabled] {
 
 /* ─── Error ─── */
 .error {
-  color: var(--accent-terracotta);
+  color: var(--accent-terracotta-text);
   background: var(--accent-terracotta-dim);
   border: 1px solid rgba(199, 85, 62, 0.2);
   border-radius: var(--radius-sm);
@@ -906,7 +1121,7 @@ small {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(12, 16, 13, 0.92);
+  background: rgba(14, 14, 14, 0.92);
   color: var(--text-brass);
   border: 1px solid var(--text-brass);
   border-radius: 6px;
@@ -980,7 +1195,7 @@ small {
 }
 
 .elevation-row .idx {
-  color: var(--info-blue);
+  color: var(--info-blue-text);
 }
 
 .elevation-row .latlon {
@@ -1019,7 +1234,7 @@ small {
 /* ─── Map Style Switcher ─── */
 .style-switcher {
   display: flex;
-  background: rgba(12, 16, 13, 0.88);
+  background: rgba(14, 14, 14, 0.88);
   backdrop-filter: blur(12px);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-medium);
@@ -1106,10 +1321,54 @@ small {
   color: var(--text-primary);
 }
 
-/* ─── Focus Visible ─── */
+/* ─── Focus Visible ───
+   Un seul anneau en laiton suffit sur les fonds du panneau, mais la moitié
+   des commandes sont posées sur la carte, dont le fond va du vert sombre au
+   blanc des routes : le laiton y disparaît par endroits. Le halo sombre
+   extérieur garantit un bord contrasté quel que soit ce qui est dessous,
+   comme le font les anneaux de focus sur fond photographique. */
 :focus-visible {
   outline: 2px solid var(--accent-brass);
   outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--map-route-halo);
+}
+
+/* ─── Saut de navigation ───
+   Le panneau compte une soixantaine d'arrêts de tabulation avant la carte.
+   Sans ce lien, atteindre la carte au clavier demande de les traverser tous.
+   Il reste hors écran jusqu'à recevoir le focus. */
+.skip-link {
+  position: fixed;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: var(--z-modal);
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-card);
+  border: 1px solid var(--accent-brass);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  transform: translateY(calc(-100% - var(--space-4)));
+  transition: transform var(--transition-fast);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+/* ─── Mouvement réduit ───
+   Quatre-vingts transitions et une dizaine d'animations, dont le survol des
+   quinze lignes de la liste. `prefers-reduced-motion` est un réglage système,
+   demandé notamment pour les troubles vestibulaires. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ─── Responsive ─── */
@@ -1174,9 +1433,9 @@ small {
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
-.difficulty-easy    { background: var(--difficulty-easy); color: var(--text-primary); }
+.difficulty-easy    { background: var(--difficulty-easy); color: var(--text-inverse); }
 .difficulty-moderate { background: var(--difficulty-moderate); color: var(--text-inverse); }
-.difficulty-difficult { background: var(--difficulty-difficult); color: var(--text-primary); }
+.difficulty-difficult { background: var(--difficulty-difficult); color: var(--text-inverse); }
 .difficulty-expert  { background: var(--difficulty-expert); color: var(--text-primary); }
 
 /* ─── Surface Breakdown Bar ─── */
@@ -1297,8 +1556,8 @@ small {
 
 /* ─── GPX Export Button ─── */
 .btn-gpx-export {
-  background: var(--accent-forest);
-  color: var(--text-primary);
+  background: var(--accent-forest-fill);
+  color: var(--text-inverse);
   border: none;
   padding: 0.4rem 0.8rem;
   border-radius: var(--radius-sm);
@@ -1314,7 +1573,7 @@ small {
 /* ─── Share Link Button ─── */
 .btn-share-link {
   background: var(--info-blue-dim);
-  color: var(--info-blue);
+  color: var(--info-blue-text);
   border: 1px solid var(--info-blue);
   padding: 0.4rem 0.8rem;
   border-radius: var(--radius-sm);
@@ -1331,7 +1590,7 @@ small {
 /* ─── GPX Import Button ─── */
 .btn-gpx-import {
   background: var(--info-blue-dim);
-  color: var(--info-blue);
+  color: var(--info-blue-text);
   border: 1px solid var(--info-blue);
   padding: 0.4rem 0.8rem;
   border-radius: var(--radius-sm);
@@ -1391,8 +1650,8 @@ small {
 }
 
 .btn-address-search {
-  background: var(--accent-forest);
-  color: var(--text-primary);
+  background: var(--accent-forest-fill);
+  color: var(--text-inverse);
   padding: 0.5rem 0.75rem;
   font-size: 0.8rem;
   border-radius: var(--radius-sm);
@@ -1468,7 +1727,7 @@ small {
 /* ─── Chemin Noir Toggle ─── */
 .chemin-noir-toggle {
   padding: 0.75rem 1rem;
-  background: rgba(24, 32, 25, 0.3);
+  background: rgba(28, 28, 28, 0.3);
   border-left: 2px solid var(--accent-forest);
   transition: border-color var(--transition-normal);
 }
@@ -1576,7 +1835,7 @@ small {
 /* ─── Freehand Panel ─── */
 .freehand-panel {
   padding: 0.75rem 1rem;
-  background: rgba(24, 32, 25, 0.3);
+  background: rgba(28, 28, 28, 0.3);
   border-left: 2px solid var(--accent-forest);
   transition: border-color var(--transition-normal);
 }
@@ -1587,7 +1846,7 @@ small {
 
 .btn-cancel-freehand {
   background: var(--accent-terracotta-dim);
-  color: var(--accent-terracotta);
+  color: var(--accent-terracotta-text);
   border: 1px solid rgba(199, 85, 62, 0.3);
   width: 100%;
   margin-top: 0.5rem;
@@ -1628,7 +1887,7 @@ small {
 .btn-clear-segment {
   background: transparent;
   border: 1px solid rgba(199, 85, 62, 0.2);
-  color: var(--accent-terracotta);
+  color: var(--accent-terracotta-text);
   padding: 0.15rem 0.4rem;
   font-size: 0.72rem;
   border-radius: var(--radius-sm);
@@ -1672,7 +1931,7 @@ small {
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     padding: 1rem;
     margin: 0;
-    background: rgba(18, 26, 20, 0.97);
+    background: rgba(22, 22, 22, 0.97);
     backdrop-filter: blur(16px);
     box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.5);
     transition: max-height 0.3s var(--ease-out);
@@ -1807,7 +2066,7 @@ body {
   /* Au-dessus de `#map.map-fullscreen` (z-index 9999) : la bande doit rester
      lisible quand la carte prend tout l'écran, c'est là qu'elle sert le plus. */
   z-index: 10000;
-  background: linear-gradient(180deg, rgba(14, 20, 15, 0.92), rgba(10, 14, 11, 0.97));
+  background: linear-gradient(180deg, rgba(17, 17, 17, 0.92), rgba(11, 11, 11, 0.97));
   backdrop-filter: blur(10px);
   border-top: 1px solid var(--border-medium);
   box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
@@ -1873,6 +2132,190 @@ body {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   COQUILLE — carte plein écran, panneau latéral
+
+   La page était un document : titre, formulaire, une carte de 560 px, puis
+   la liste, empilés dans une colonne de 720 px qu'on faisait défiler. Dans
+   un planificateur d'itinéraire la carte est l'outil, pas une illustration :
+   elle prend la fenêtre, et tout se pose dessus.
+
+   Le bouton « plein écran » de la carte était la rustine qui le prouvait.
+   ═══════════════════════════════════════════════════════════════ */
+
+body.shell {
+  padding: 0;
+  min-height: 100vh;
+  height: 100vh;
+  display: block;
+  overflow: hidden;
+}
+
+body.shell #map {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  z-index: var(--z-map);
+}
+
+/* Le panneau défile seul : la carte ne bouge pas quand on parcourt la
+   liste des itinéraires, ce qui était impossible dans l'ancienne colonne. */
+body.shell .app-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  /* Descend jusqu'en bas tant qu'aucune bande de dénivelé n'occupe la place.
+     `.app-root` est en `display: contents` : il disparaît de la mise en page
+     mais reste un ancêtre pour les sélecteurs, ce qui suffit ici. */
+  bottom: 0;
+  width: var(--panel-width);
+  max-width: 100%;
+  margin: 0;
+  border-radius: 0;
+  border: none;
+  border-right: 1px solid var(--border-medium);
+  padding: var(--space-6) var(--space-5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: var(--z-panel);
+  animation: none;
+  visibility: visible;
+  transition: transform var(--transition-normal), visibility 0s;
+}
+
+body.shell .app-root.has-band .app-container {
+  bottom: var(--band-height);
+}
+
+/* `translateX` seul sort le panneau de l'écran mais laisse ses soixante
+   commandes dans l'ordre de tabulation et dans l'arbre d'accessibilité : au
+   clavier on continuait de les traverser une à une, invisibles. `visibility`
+   les en retire, et son délai égal à la durée du glissement évite que le
+   panneau disparaisse d'un coup au lieu de rentrer. */
+body.shell .app-container.is-collapsed {
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform var(--transition-normal), visibility 0s linear var(--duration-normal);
+}
+
+/* Poignée de repli : reste visible quand le panneau est rentré, sinon on ne
+   pourrait plus le rouvrir. */
+.panel-toggle {
+  position: fixed;
+  top: var(--space-4);
+  left: var(--panel-width);
+  z-index: var(--z-panel);
+  width: 28px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(22, 22, 22, 0.95);
+  color: var(--text-brass);
+  border: 1px solid var(--border-medium);
+  border-left: none;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  cursor: pointer;
+  transition: left var(--transition-normal);
+}
+
+.panel-toggle.is-collapsed {
+  left: 0;
+}
+
+.panel-toggle:hover {
+  background: var(--bg-card-hover);
+}
+
+/* Sous 900 px le panneau devient une feuille basse : une colonne de 400 px
+   ne laisserait pas assez de carte sur un téléphone. */
+@media (max-width: 900px) {
+  body.shell .app-container {
+    top: auto;
+    bottom: var(--band-height);
+    width: 100%;
+    max-height: 55vh;
+    border-right: none;
+    border-top: 1px solid var(--border-medium);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+
+  body.shell .app-container.is-collapsed {
+    transform: translateY(100%);
+  }
+
+  .panel-toggle {
+    top: auto;
+    left: var(--space-4);
+    bottom: calc(var(--band-height) + 55vh);
+    width: 56px;
+    height: 28px;
+    border: 1px solid var(--border-medium);
+    border-bottom: none;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  }
+
+  .panel-toggle.is-collapsed {
+    bottom: var(--band-height);
+  }
+}
+
+/* ─── Rôles typographiques ───
+   Une taille seule ne suffit pas : un rôle lie famille, taille, graisse,
+   interligne et interlettrage. C'est ce qui manquait le plus ici, où neuf
+   tailles voisines coexistaient sans qu'aucune ne dise à quoi elle sert. */
+.t-display {
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+}
+
+.t-heading {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.t-body {
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
+}
+
+.t-label {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.t-caption {
+  font-family: var(--font-body);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+}
+
+/* Les chiffres d'un relevé se lisent en chasse fixe : distances, dénivelés,
+   coordonnées s'alignent alors en colonnes. */
+.t-metric {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-tight);
 }
 
 /* Les deux vues SVG sont bâties en Elm, où une couleur écrite dans un
@@ -2058,7 +2501,7 @@ body {
   gap: 0.55rem;
   max-width: min(420px, calc(100vw - 24px));
   padding: 0.4rem 0.5rem 0.4rem 0.65rem;
-  background: rgba(12, 16, 13, 0.92);
+  background: rgba(14, 14, 14, 0.92);
   border: 1px solid rgba(201, 168, 76, 0.45);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-elevated);

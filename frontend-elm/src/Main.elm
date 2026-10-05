@@ -7,6 +7,7 @@ Approche fonctionnelle pure : pas de mutations, fonctions pures, gestion explici
 import Api
 import Array
 import Browser
+import Browser.Dom
 import Browser.Events
 import Time
 import Decoders
@@ -765,6 +766,19 @@ update msg model =
                     , Cmd.none
                     )
 
+        SwitchPanelTab onglet ->
+            ( { model | panelTab = onglet }
+            , focusOn (tabDomId onglet)
+            )
+
+        FocusElement domId ->
+            ( model, focusOn domId )
+
+        TogglePanel ->
+            ( { model | panelCollapsed = not model.panelCollapsed }
+            , Cmd.none
+            )
+
         UpdateLoadedRoute ->
             case ( model.loadedRouteId, model.lastResponse ) of
                 ( Just id, Just route ) ->
@@ -1225,6 +1239,136 @@ elevationMarkerCmd model maybeIdx =
         (Maybe.map (\c -> { lat = c.lat, lon = c.lon }) coord)
 
 
+{-| Barre d'onglets du panneau latéral.
+
+Le formulaire et la liste partageaient un seul rouleau : titre, type de tracé,
+mode, recherche, import, statistiques, vue de la carte, puis quinze
+itinéraires. Séparés, chacun reçoit toute la hauteur du panneau.
+-}
+viewPanelTabs : Model -> Html Msg
+viewPanelTabs model =
+    let
+        autre =
+            case model.panelTab of
+                TabPlan ->
+                    TabRoutes
+
+                TabRoutes ->
+                    TabPlan
+
+        onglet cible libelle =
+            let
+                actif =
+                    model.panelTab == cible
+            in
+            Html.button
+                [ Html.Attributes.classList
+                    [ ( "panel-tab", True )
+                    , ( "is-active", actif )
+                    ]
+                , Html.Attributes.type_ "button"
+                , Html.Attributes.id (tabDomId cible)
+                , Html.Attributes.attribute "role" "tab"
+                , Html.Attributes.attribute "aria-selected" (boolAttr actif)
+                , Html.Attributes.attribute "aria-controls" panelBodyDomId
+
+                -- Tabulation mobile : un groupe d'onglets est un seul arrêt de
+                -- tabulation, et les flèches circulent dedans. Deux arrêts pour
+                -- deux onglets obligeraient à traverser le second pour atteindre
+                -- le contenu du premier.
+                , Html.Attributes.tabindex
+                    (if actif then
+                        0
+
+                     else
+                        -1
+                    )
+                , Html.Events.onClick (SwitchPanelTab cible)
+                ]
+                [ text libelle ]
+    in
+    div
+        [ class "panel-tabs"
+        , Html.Attributes.attribute "role" "tablist"
+        , Html.Attributes.attribute "aria-label" "Sections du panneau"
+        , onArrowSwitch (SwitchPanelTab autre)
+        ]
+        [ onglet TabPlan "Tracer"
+        , onglet TabRoutes
+            ("Mes tracés (" ++ String.fromInt (List.length model.savedRoutes) ++ ")")
+        ]
+
+
+{-| Identifiants DOM de la coquille.
+
+Ils sont écrits une fois ici parce que trois endroits doivent s'accorder : le
+bouton d'onglet que `SwitchPanelTab` va focaliser, l'`aria-controls` qui le
+relie au corps du panneau, et le `aria-labelledby` qui fait le lien inverse.
+Une faute de frappe dans l'un des trois ne casse rien de visible — elle rend
+seulement l'annonce muette.
+-}
+tabDomId : PanelTab -> String
+tabDomId onglet =
+    case onglet of
+        TabPlan ->
+            "panel-tab-plan"
+
+        TabRoutes ->
+            "panel-tab-routes"
+
+
+panelBodyDomId : String
+panelBodyDomId =
+    "panel-body"
+
+
+mapDomId : String
+mapDomId =
+    "map"
+
+
+boolAttr : Bool -> String
+boolAttr valeur =
+    if valeur then
+        "true"
+
+    else
+        "false"
+
+
+{-| Déplace le focus clavier, en ignorant l'échec.
+
+`Browser.Dom.focus` échoue si l'identifiant n'existe pas encore. C'est le cas
+normal ici : la commande part dans le même tour que le changement de modèle,
+donc avant que le nouveau HTML ne soit posé pour certains éléments. Rien à
+signaler à l'utilisateur dans ce cas, le focus reste simplement sur place.
+-}
+focusOn : String -> Cmd Msg
+focusOn domId =
+    Browser.Dom.focus domId |> Task.attempt (\_ -> NoOp)
+
+
+{-| Flèches gauche/droite dans le groupe d'onglets.
+
+`preventDefault` est nécessaire : sans lui, la flèche fait aussi défiler le
+panneau pendant que l'onglet change.
+-}
+onArrowSwitch : Msg -> Html.Attribute Msg
+onArrowSwitch msg =
+    Html.Events.preventDefaultOn "keydown"
+        (Json.Decode.field "key" Json.Decode.string
+            |> Json.Decode.andThen
+                (\key ->
+                    if List.member key [ "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown" ] then
+                        Json.Decode.succeed ( msg, True )
+
+                    else
+                        Json.Decode.fail "touche sans effet sur les onglets"
+                )
+        )
+
+
+
 {-| Rappel de l'itinéraire affiché en calque.
 
 Le seul indice était un bouton doré dans le panneau des itinéraires, invisible
@@ -1264,14 +1408,83 @@ view model =
     -- `app-root` est en `display: contents` : il disparaît de la mise en page,
     -- mais il sort la bande du `.app-container`, dont le `backdrop-filter` en
     -- ferait un bloc conteneur pour les enfants `position: fixed`.
-    div [ class "app-root" ]
-        [ div [ class "app-container" ]
+    div
+        [ Html.Attributes.classList
+            [ ( "app-root", True )
+            , ( "has-band", ElevationBand.isVisible model )
+            ]
+        ]
+        [ -- Le panneau compte une soixantaine d'arrêts de tabulation : sans ce
+          -- lien, atteindre la carte au clavier demande de les traverser tous.
+          Html.a
+            [ class "skip-link"
+            , Html.Attributes.href ("#" ++ mapDomId)
+            ]
+            [ text "Aller à la carte" ]
+        , div
+            [ Html.Attributes.classList
+                [ ( "app-container", True )
+                , ( "is-collapsed", model.panelCollapsed )
+                ]
+            , Html.Attributes.id "app-panel"
+            ]
             [ header [ class "app-header" ]
                 [ h1 [] [ text "Chemins Noirs" ]
                 , p [ class "app-subtitle" ] [ text "Générateur GPX anti-bitume" ]
                 ]
-            , Form.view model
-            , Preview.view model
+            , viewPanelTabs model
+            , div
+                [ Html.Attributes.id panelBodyDomId
+                , Html.Attributes.attribute "role" "tabpanel"
+                , Html.Attributes.attribute "aria-labelledby" (tabDomId model.panelTab)
+                ]
+                [ case model.panelTab of
+                    TabPlan ->
+                        div []
+                            [ Form.view model
+                            , Preview.view model
+                            ]
+
+                    TabRoutes ->
+                        Form.viewSavedRoutesSection model
+                ]
+            ]
+        , Html.button
+            [ Html.Attributes.classList
+                [ ( "panel-toggle", True )
+                , ( "is-collapsed", model.panelCollapsed )
+                ]
+            , Html.Attributes.type_ "button"
+
+            -- Le chevron est décoratif : lu seul, il s'annonce « signe
+            -- supérieur ». Le libellé porte l'action, `aria-expanded` l'état.
+            , Html.Attributes.attribute "aria-label"
+                (if model.panelCollapsed then
+                    "Afficher les réglages"
+
+                 else
+                    "Masquer les réglages, agrandir la carte"
+                )
+            , Html.Attributes.attribute "aria-expanded" (boolAttr (not model.panelCollapsed))
+            , Html.Attributes.attribute "aria-controls" "app-panel"
+            , Html.Attributes.title
+                (if model.panelCollapsed then
+                    "Afficher les réglages"
+
+                 else
+                    "Masquer les réglages, agrandir la carte"
+                )
+            , Html.Events.onClick TogglePanel
+            ]
+            [ Html.span [ Html.Attributes.attribute "aria-hidden" "true" ]
+                [ text
+                    (if model.panelCollapsed then
+                        "›"
+
+                     else
+                        "‹"
+                    )
+                ]
             ]
         , viewReferenceBadge model
         , ElevationBand.view model

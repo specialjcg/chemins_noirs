@@ -8,6 +8,14 @@ import Dict exposing (Dict)
 
 -- MODEL
 
+{-| Les deux sujets du panneau latéral : régler un tracé, ou retrouver les
+siens. Chacun prend toute la hauteur plutôt que de partager un rouleau.
+-}
+type PanelTab
+    = TabPlan
+    | TabRoutes
+
+
 type alias Model =
     { form : RouteForm
     , loopForm : LoopForm
@@ -23,6 +31,13 @@ type alias Model =
     -- Sans lui, retoucher un itinéraire chargé puis sauvegarder créait une
     -- ligne de plus au lieu de reprendre la sienne.
     , loadedRouteId : Maybe Int
+    -- Panneau latéral rentré : la carte reprend toute la fenêtre. Utile dès
+    -- qu'on lit le terrain plutôt qu'on ne règle les paramètres.
+    , panelCollapsed : Bool
+    -- Onglet affiché dans le panneau. Le formulaire et la liste des
+    -- itinéraires défilaient dans la même colonne : deux sujets distincts,
+    -- dont aucun ne tenait en entier.
+    , panelTab : PanelTab
     , lastResponse : Maybe RouteResponse
     , loopCandidates : List LoopCandidate
     , loopMeta : Maybe LoopMeta
@@ -122,6 +137,8 @@ initialModel =
     , pending = False
     , pendingSeconds = 0
     , loadedRouteId = Nothing
+    , panelCollapsed = False
+    , panelTab = TabPlan
     , lastResponse = Nothing
     , loopCandidates = []
     , loopMeta = Nothing
@@ -193,6 +210,14 @@ type Msg
     | PendingTick
     | SurfacesLoaded (Result Http.Error (List Bool))
     | UpdateLoadedRoute
+    | TogglePanel
+    | SwitchPanelTab PanelTab
+      -- Déplacement du focus clavier vers un élément désigné par son `id`.
+      -- Les flèches dans un onglet ou une liste doivent emmener le focus avec
+      -- elles : sans cela la touche change bien la sélection, mais le clavier
+      -- reste posé sur l'élément quitté et la tabulation suivante repart du
+      -- mauvais endroit.
+    | FocusElement String
     | LoopRouteFetched (Result Http.Error LoopRouteResponse)
     | SelectLoopCandidate Int
     | AddWaypoint Coordinate
