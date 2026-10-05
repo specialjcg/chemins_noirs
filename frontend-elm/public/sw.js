@@ -1,4 +1,17 @@
-const CACHE_NAME = 'chemins-noirs-v1';
+// La clé est estampillée au build : `__BUILD_ID__` est remplacé dans
+// `dist/sw.js` par une empreinte du contenu réellement pré-mis en cache
+// (voir le greffon `estampiller-service-worker` dans vite.config.js).
+//
+// Elle valait `chemins-noirs-v1` en dur, et c'est ce qui rendait tout
+// déploiement invisible : la purge à l'activation ne supprime que les caches
+// dont la clé diffère de la clé courante, or celle-ci ne changeait jamais. Un
+// visiteur gardait donc indéfiniment la feuille de style du jour de sa
+// première visite.
+//
+// L'empreinte couvre `index.html`, `style.css` et `manifest.json`, et pas
+// seulement le nom haché du bundle : une passe qui ne touche qu'au CSS ne
+// change pas le nom du bundle, et serait repassée à travers.
+const CACHE_NAME = 'chemins-noirs-__BUILD_ID__';
 
 // Assets to pre-cache
 const PRECACHE_URLS = [
@@ -74,10 +87,31 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Other assets: cache-first
+  // Le reste : cache d'abord, puis revalidation en arrière-plan. On répond
+  // immédiatement avec la copie locale — c'est ce qui garde l'application
+  // utilisable hors couverture — mais on va chercher la version fraîche dans
+  // la foulée, pour la visite suivante. L'ancienne stratégie s'arrêtait à
+  // `cached || fetch(...)` : une fois une ressource en cache, elle n'était
+  // plus jamais rechargée.
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return cached || fetch(event.request);
+    caches.match(event.request).then((enCache) => {
+      const surLeReseau = fetch(event.request)
+        .then((reponse) => {
+          // On ne range que ce qui vient de chez nous et qui a abouti : une
+          // réponse opaque d'un tiers ou une 404 n'ont rien à faire en cache.
+          if (reponse && reponse.ok && url.origin === self.location.origin) {
+            const copie = reponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copie));
+          }
+          return reponse;
+        })
+        .catch(() => enCache);
+
+      return enCache || surLeReseau;
     })
   );
 });
