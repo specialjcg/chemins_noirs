@@ -1505,6 +1505,8 @@ subscriptions model =
           else
             Sub.none
         , Ports.mapClickReceived (\{ lat, lon } -> MapClicked lat lon)
+        , Ports.routeLineClicked
+            (\{ lat, lon } -> insertOnRouteLine { lat = lat, lon = lon } model)
         , Ports.waypointDragged (\{ index, lat, lon } -> MoveWaypoint index lat lon)
         , Ports.waypointDeleted (\{ index } -> RemoveWaypoint index)
         , Ports.routeLoadedFromLocalStorage
@@ -1619,7 +1621,12 @@ handleMapClick lat lon model =
         update (AddWaypoint coord) model
 
     else
-        ( model, Cmd.none )
+        -- Le clic était avalé sans un mot : passé le plafond du mode, la carte
+        -- devenait muette et rien ne disait que c'était voulu. On ne refuse pas
+        -- en silence une action que l'utilisateur vient de tenter.
+        ( { model | error = Just (clicIgnoreMessage model.routeMode) }
+        , Cmd.none
+        )
 
 
 applyFreehandOverrides : Dict Int (List Coordinate) -> Maybe FreehandDrawingState -> List Coordinate -> RouteResponse -> RouteResponse
@@ -1810,6 +1817,47 @@ pushWaypointHistory model =
         , freehandSegments = Dict.empty
         , freehandDrawing = Nothing
     }
+
+
+{-| Pourquoi un clic de plus n'ajoute rien, selon le mode.
+
+Chaque mode a son plafond — deux points en aller simple, un seul en boucle —
+et le message nomme la sortie plutôt que la règle : ce que l'utilisateur veut
+savoir, c'est quoi faire ensuite.
+-}
+clicIgnoreMessage : RouteMode -> String
+clicIgnoreMessage mode =
+    case mode of
+        PointToPoint ->
+            "Un aller simple n'a que deux points. Glissez un marqueur pour le déplacer, cliquez sur le tracé pour insérer une étape, ou cochez Multi-points pour en ajouter d'autres."
+
+        Loop ->
+            "Une boucle part d'un seul point. Glissez le marqueur pour changer de départ, ou cochez Multi-points."
+
+        MultiPoint ->
+            -- Le plafond du mode est à 999 : on n'arrive ici qu'en l'atteignant.
+            "Trop de points sur ce tracé."
+
+
+{-| Insère un point sur le tracé, au bon rang.
+
+Le clic sur la ligne vise un endroit *entre* deux points existants, et c'est
+tout l'intérêt : jusqu'ici on ne pouvait qu'ajouter un point à la fin ou
+déplacer un marqueur, donc détourner un tracé chargé demandait de défaire
+l'ordre des étapes. `findInsertionIndex` cherche le segment le plus proche du
+clic et rend le rang de son départ.
+
+Hors multi-points le tracé n'a pas de segment intérieur où insérer quoi que ce
+soit, et `InsertWaypoint` recalcule de toute façon en multi-points : on renvoie
+donc vers le mode plutôt que de basculer dans le dos de l'utilisateur.
+-}
+insertOnRouteLine : Coordinate -> Model -> Msg
+insertOnRouteLine coord model =
+    if model.routeMode == MultiPoint && List.length model.waypoints >= 2 then
+        InsertWaypoint (findInsertionIndex coord model.waypoints) coord
+
+    else
+        MapClicked coord.lat coord.lon
 
 
 findInsertionIndex : Coordinate -> List Coordinate -> Int

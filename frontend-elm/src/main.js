@@ -197,6 +197,16 @@ window.addEventListener('map-click', (event) => {
   });
 });
 
+// Écouter les clics tombés sur le tracé : ils insèrent un point au lieu d'en
+// ajouter un à la fin.
+window.addEventListener('route-line-click', (event) => {
+  console.log('[JS→Elm] route-line-click', event.detail);
+  app.ports.routeLineClicked.send({
+    lat: event.detail.lat,
+    lon: event.detail.lon
+  });
+});
+
 // Écouter le déplacement d'un waypoint (drag & drop)
 window.addEventListener('waypoint-dragged', (event) => {
   console.log('[JS→Elm] waypoint-dragged', event.detail);

@@ -88,6 +88,14 @@ port centerMapOn : { lat : Float, lon : Float } -> Cmd msg
 port mapClickReceived : ({ lat : Float, lon : Float } -> msg) -> Sub msg
 
 
+{-| Clic tombé sur le tracé lui-même et non sur la carte nue.
+
+Le JS fait la distinction parce que lui seul sait où la ligne est dessinée à
+l'écran : la même coordonnée est sur le tracé ou à côté selon le zoom.
+-}
+port routeLineClicked : ({ lat : Float, lon : Float } -> msg) -> Sub msg
+
+
 port waypointDragged : ({ index : Int, lat : Float, lon : Float } -> msg) -> Sub msg
 
 

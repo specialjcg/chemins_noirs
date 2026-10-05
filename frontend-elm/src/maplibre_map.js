@@ -1208,14 +1208,34 @@ function createFullscreenControl() {
 export function initMap() {
   ensureMap();
   if (!clickHandlerSet) {
+    // Couches du tracé courant, des plus larges aux plus fines. Les halos sont
+    // inclus volontairement : ils doublent la cible sans rien changer au point
+    // renvoyé, et viser une ligne de 4 px à la souris n'est pas raisonnable.
+    const LIGNES_DU_TRACE = [
+      'route-line-outline',
+      'route-line',
+      'route-line-unpaved-outline',
+      'route-line-unpaved'
+    ];
+    const TOLERANCE_PX = 8;
+
     mapInstance.on('click', (event) => {
       const { lng, lat } = event.lngLat;
-      console.debug('[maplibre] click', { lat, lon: lng });
-      window.dispatchEvent(
-        new CustomEvent('map-click', {
-          detail: { lat, lon: lng }
-        })
-      );
+      const couches = LIGNES_DU_TRACE.filter((id) => mapInstance.getLayer(id));
+      const p = event.point;
+      const touche =
+        couches.length > 0 &&
+        mapInstance.queryRenderedFeatures(
+          [
+            [p.x - TOLERANCE_PX, p.y - TOLERANCE_PX],
+            [p.x + TOLERANCE_PX, p.y + TOLERANCE_PX]
+          ],
+          { layers: couches }
+        ).length > 0;
+
+      const nom = touche ? 'route-line-click' : 'map-click';
+      console.debug('[maplibre] ' + nom, { lat, lon: lng });
+      window.dispatchEvent(new CustomEvent(nom, { detail: { lat, lon: lng } }));
     });
     clickHandlerSet = true;
   }
