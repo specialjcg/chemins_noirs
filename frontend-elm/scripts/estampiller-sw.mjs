@@ -22,41 +22,78 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/**
+ * Remplace le gabarit de clé de cache par l'identifiant du build.
+ *
+ * On vise la déclaration, pas le mot : `__BUILD_ID__` apparaît aussi dans le
+ * commentaire de `sw.js` qui l'explique, et `String.replace` avec une chaîne
+ * ne remplace que la première occurrence. Le premier jet estampillait donc le
+ * commentaire, laissait la clé intacte, et annonçait quand même sa réussite.
+ * D'où l'expression régulière ancrée sur les guillemets, et le refus net si
+ * elle ne trouve pas exactement une déclaration.
+ *
+ * @throws si le gabarit est absent ou présent plusieurs fois.
+ */
+export function remplacerCle(source, id) {
+  const gabarit = /'chemins-noirs-__BUILD_ID__'/g;
+  const trouvees = source.match(gabarit);
+  if (!trouvees || trouvees.length !== 1) {
+    throw new Error(
+      `attendu une déclaration 'chemins-noirs-__BUILD_ID__', ${trouvees ? trouvees.length : 0} trouvée(s)`
+    );
+  }
+  return source.replace(gabarit, `'chemins-noirs-${id}'`);
+}
+
+/**
+ * Empreinte des fichiers pré-mis en cache.
+ *
+ * Volontairement pas le nom haché du bundle : une passe qui ne touche qu'au
+ * CSS ne le change pas, et serait repassée à travers.
+ */
+export function empreinteDe(contenus) {
+  const h = createHash('sha1');
+  contenus.forEach((c) => h.update(c));
+  return h.digest('hex').slice(0, 10);
+}
+
 const RACINE = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = resolve(RACINE, 'dist');
 const PRECACHE = ['index.html', 'style.css', 'manifest.json'];
 
-const sw = resolve(DIST, 'sw.js');
-if (!existsSync(sw)) {
-  console.error('[sw] dist/sw.js introuvable — lancer vite build d’abord');
-  process.exit(1);
-}
-
-const empreinte = createHash('sha1');
-for (const nom of PRECACHE) {
-  const chemin = resolve(DIST, nom);
-  if (!existsSync(chemin)) {
-    console.error(`[sw] ${nom} absent de dist/ : empreinte incomplète`);
+function principal() {
+  const sw = resolve(DIST, 'sw.js');
+  if (!existsSync(sw)) {
+    console.error('[sw] dist/sw.js introuvable — lancer vite build d’abord');
     process.exit(1);
   }
-  empreinte.update(readFileSync(chemin));
+
+  const contenus = [];
+  for (const nom of PRECACHE) {
+    const chemin = resolve(DIST, nom);
+    if (!existsSync(chemin)) {
+      console.error(`[sw] ${nom} absent de dist/ : empreinte incomplète`);
+      process.exit(1);
+    }
+    contenus.push(readFileSync(chemin));
+  }
+  const id = empreinteDe(contenus);
+
+  let estampille;
+  try {
+    estampille = remplacerCle(readFileSync(sw, 'utf-8'), id);
+  } catch (erreur) {
+    console.error('[sw] ' + erreur.message);
+    process.exit(1);
+  }
+
+  writeFileSync(sw, estampille);
+  console.log(`[sw] clé de cache : chemins-noirs-${id}`);
 }
-const id = empreinte.digest('hex').slice(0, 10);
 
-// On vise la constante, pas le gabarit : le mot apparaît aussi dans le
-// commentaire qui l'explique, et un `replace` sur une chaîne ne remplace que
-// la première occurrence — il estampillait le commentaire en laissant la clé
-// intacte, tout en annonçant avoir réussi.
-const GABARIT = /'chemins-noirs-__BUILD_ID__'/g;
-
-const source = readFileSync(sw, 'utf-8');
-const trouvees = source.match(GABARIT);
-if (!trouvees || trouvees.length !== 1) {
-  console.error(
-    `[sw] attendu une déclaration 'chemins-noirs-__BUILD_ID__' dans dist/sw.js, ${trouvees ? trouvees.length : 0} trouvée(s)`
-  );
-  process.exit(1);
+// Le corps ne s'exécute que lancé en ligne de commande : les tests importent
+// ce fichier pour éprouver `remplacerCle` et `empreinteDe`, et n'ont aucune
+// raison d'aller écrire dans dist/.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  principal();
 }
-
-writeFileSync(sw, source.replace(GABARIT, `'chemins-noirs-${id}'`));
-console.log(`[sw] clé de cache : chemins-noirs-${id}`);
