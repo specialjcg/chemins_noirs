@@ -423,7 +423,14 @@ viewSavedRoute referenceRouteId ids index route =
                         Nothing
             )
         ]
-        [ div [ class "route-row-main" ]
+        [ span
+            [ class
+                ("route-row-dot "
+                    ++ difficultyClass (Maybe.withDefault "" route.routeData.difficulty)
+                )
+            ]
+            []
+        , div [ class "route-row-main" ]
             [ span [ class "route-row-name" ]
                 [ text route.name
                 , if route.isFavorite then
@@ -550,6 +557,28 @@ formatKm valeur =
             round (valeur * 10)
     in
     String.fromInt (dixiemes // 10) ++ "," ++ String.fromInt (modBy 10 dixiemes)
+
+
+{-| Classe de la pastille de difficulté.
+
+Les noms viennent de l'API en anglais ; la correspondance est écrite ici une
+fois pour la couleur et une fois pour le libellé plutôt que de laisser une
+chaîne anglaise atterrir dans une classe CSS française.
+-}
+difficultyClass : String -> String
+difficultyClass niveau =
+    case niveau of
+        "easy" ->
+            "d-easy"
+
+        "moderate" ->
+            "d-moderate"
+
+        "difficult" ->
+            "d-difficult"
+
+        _ ->
+            "d-expert"
 
 
 {-| Le moteur classe en anglais, l'interface parle français. -}

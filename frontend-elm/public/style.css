@@ -21,17 +21,18 @@
      troisième voie : aucun d'eux n'emploie de gris pur, tous tirent leurs
      neutres vers la teinte de leur propre accent à chroma très faible — 0,03
      chez Dubai Digital et DIBSEN, qui l'écrivent en oklch. Nos fonds sont donc
-     repris dans la teinte du laiton (89,5° en OKLCH) à chroma 0,016, soit huit
-     à treize points d'écart entre le rouge et le bleu : invisible isolément,
-     mais le gris cesse de contredire l'accent.
+     repris dans la teinte du laiton (89,5° en OKLCH) à chroma 0,040, soit
+     vingt-et-un à trente-deux points d'écart entre le rouge et le bleu. Le
+     premier essai à 0,016 ne se distinguait du gris pur que posé juste à côté
+     de lui : rigoureux et invisible, donc inutile.
      La clarté WCAG de chacun est conservée à moins d'un pour cent près, ce qui
      laisse intacte la matrice de contrastes mesurée. */
-  --bg-deep: #110e06;
-  --bg-surface: #19160d;
-  --bg-card: #1f1b13;
-  --bg-card-hover: #27241b;
-  --bg-input: #15120a;
-  --bg-input-focus: #1b180f;
+  --bg-deep: #150c00;
+  --bg-surface: #1d1501;
+  --bg-card: #231b04;
+  --bg-card-hover: #2c240c;
+  --bg-input: #191100;
+  --bg-input-focus: #201701;
 
   --accent-brass: #c9a84c;
   --accent-brass-light: #dfc272;
@@ -123,6 +124,14 @@
   --text-xl: 1.25rem;
   --text-2xl: 1.75rem;
   --text-3xl: 2.5rem;
+  /* Les paliers de titre étaient trop serrés pour qu'un niveau se distingue du
+     suivant : 1 rem, 1,25 et 1,75 se ressemblent une fois à l'écran. Playfair
+     ne servait d'ailleurs que sur « Chemins Noirs ». Ces deux-là lui ouvrent
+     les titres de section et les noms d'itinéraires, avec l'écart qu'il faut
+     pour que la hiérarchie se voie sans qu'on la cherche. */
+  --text-title: 1.375rem;
+  --text-entry: 1.125rem;
+  --text-section: 0.9375rem;
 
   --leading-tight: 1.2;
   --leading-normal: 1.5;
@@ -162,9 +171,9 @@
   --accent-brass-deep: #b8953d;
   --accent-rust: #8f3a28;
 
-  --bg-gradient-top: #130f08;
-  --bg-gradient-mid: #0d0b04;
-  --bg-gradient-bottom: #110e06;
+  --bg-gradient-top: #170e00;
+  --bg-gradient-mid: #110a00;
+  --bg-gradient-bottom: #150c00;
 
   /* Une pastille est un aplat plein : sa couleur doit porter du texte, pas
      seulement se distinguer de ses voisines. Le vert forêt et la terre cuite
@@ -354,13 +363,16 @@ h1 {
   margin-bottom: 1.5rem;
 }
 
+/* Le filet de gauche était un gris à 14 % qui ne devenait doré qu'au survol :
+   une structure qu'on ne voyait qu'en la cherchant. Il est doré en
+   permanence — c'est lui qui découpe le panneau en sections. */
 fieldset {
   border: none;
-  border-left: 2px solid var(--border-medium);
+  border-left: 3px solid var(--accent-brass-edge);
   border-radius: 0;
-  padding: 1rem 1.25rem;
-  margin: 0;
-  background: rgba(28, 28, 28, 0.3);
+  padding: 0.75rem 0 0.75rem 1rem;
+  margin: 0 0 var(--space-5) 0;
+  background: none;
   transition: border-color var(--transition-normal);
 }
 
@@ -368,14 +380,19 @@ fieldset:hover {
   border-left-color: var(--accent-brass);
 }
 
+/* Les intitulés étaient en capitales de 11,5 px, le même registre que les
+   étiquettes de champ juste en dessous : rien ne disait qu'ils étaient d'un
+   cran au-dessus. En serif, à 22 px et en bas de casse, la hiérarchie se voit
+   sans qu'on la cherche, et Playfair cesse de ne servir qu'une fois. */
 legend {
-  font-family: var(--font-body);
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  color: var(--text-brass);
-  padding: 0 0.5rem;
+  font-family: var(--font-display);
+  font-size: var(--text-title);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-heading);
+  text-transform: none;
+  color: var(--text-primary);
+  padding: 0;
+  margin-bottom: var(--space-2);
 }
 
 /* ─── Input Fields ─── */
@@ -734,7 +751,7 @@ button[disabled] {
   flex: 1;
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-bottom: 3px solid transparent;
   border-radius: 0;
   padding: var(--space-3) var(--space-2);
   color: var(--text-muted);
@@ -750,8 +767,9 @@ button[disabled] {
 }
 
 .panel-tab.is-active {
-  color: var(--text-brass);
+  color: var(--accent-brass-light);
   border-bottom-color: var(--accent-brass);
+  background: var(--accent-brass-dim);
 }
 
 /* ─── Liste des itinéraires, en lignes ───
@@ -763,9 +781,9 @@ button[disabled] {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-2) var(--space-3) var(--space-3);
   border-bottom: 1px solid var(--border-faint);
-  border-left: 2px solid transparent;
+  border-left: 3px solid transparent;
   cursor: default;
   transition: background var(--transition-fast), border-color var(--transition-fast);
 }
@@ -804,20 +822,53 @@ button[disabled] {
 
 /* Le nom est tronqué plutôt que replié : une ligne qui passe à deux casse le
    rythme de toute la liste. Le nom entier reste dans l'infobulle. */
+/* Quinze lignes au même gris, à la même taille, dans la même police : rien ne
+   permettait d'en accrocher une du regard. Le nom passe à la serif des titres,
+   les chiffres reculent d'un ton, et une pastille de couleur porte le degré de
+   difficulté — la seule information de la ligne qu'on lit d'un coup d'œil. */
 .route-row-name {
-  font-size: var(--text-md);
-  font-weight: var(--weight-medium);
+  font-family: var(--font-display);
+  font-size: var(--text-entry);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-heading);
+  line-height: 1.25;
   color: var(--text-primary);
-  white-space: nowrap;
+
+  /* Sur une ligne, douze des quinze noms étaient coupés — « Traversée de
+     Tronçais — Corne de Rollay… » ne tient pas dans un panneau de 480 px, et
+     ce n'était pas nouveau : dix l'étaient déjà avant. Sur deux lignes il n'en
+     reste que deux. La liste gagne en hauteur ce qu'elle rend en lisibilité,
+     et son travail est précisément de laisser choisir un itinéraire. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .route-row-metrics {
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: var(--text-2xs);
   white-space: nowrap;
+  letter-spacing: 0.04em;
 }
+
+/* Pastille du degré de difficulté, en tête de ligne. Les quatre couleurs sont
+   celles des pastilles pleines, qui portent déjà le même sens ailleurs. */
+.route-row-dot {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: var(--space-1);
+}
+
+.route-row-dot.d-easy { background: var(--difficulty-easy); }
+.route-row-dot.d-moderate { background: var(--difficulty-moderate); }
+.route-row-dot.d-difficult { background: var(--difficulty-difficult); }
+.route-row-dot.d-expert { background: var(--difficulty-expert); }
 
 .route-row-actions {
   display: flex;
@@ -1160,7 +1211,7 @@ small {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(17, 14, 6, 0.92);
+  background: rgba(21, 12, 0, 0.92);
   color: var(--text-brass);
   border: 1px solid var(--text-brass);
   border-radius: 6px;
@@ -1272,7 +1323,7 @@ small {
 /* ─── Map Style Switcher ─── */
 .style-switcher {
   display: flex;
-  background: rgba(17, 14, 6, 0.94);
+  background: rgba(21, 12, 0, 0.94);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-medium);
   box-shadow: var(--shadow-card);
@@ -2112,9 +2163,9 @@ body {
      buter, et tout le contenu reste posé sur de l'opaque. */
   background: linear-gradient(
     180deg,
-    rgba(17, 14, 6, 0) 0,
-    rgba(17, 14, 6, 0.55) 6px,
-    rgba(17, 14, 6, 0.95) 18px,
+    rgba(21, 12, 0, 0) 0,
+    rgba(21, 12, 0, 0.55) 6px,
+    rgba(21, 12, 0, 0.95) 18px,
     var(--bg-deep) 34px,
     var(--bg-deep) 100%
   );
@@ -2585,7 +2636,7 @@ body.shell #map .maplibregl-ctrl-bottom-right {
   gap: 0.55rem;
   max-width: min(420px, calc(100vw - 24px));
   padding: 0.4rem 0.5rem 0.4rem 0.65rem;
-  background: rgba(17, 14, 6, 0.92);
+  background: rgba(21, 12, 0, 0.92);
   border: 1px solid rgba(201, 168, 76, 0.45);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-elevated);
