@@ -1406,8 +1406,9 @@ viewReferenceBadge model =
 view : Model -> Html Msg
 view model =
     -- `app-root` est en `display: contents` : il disparaît de la mise en page,
-    -- mais il sort la bande du `.app-container`, dont le `backdrop-filter` en
-    -- ferait un bloc conteneur pour les enfants `position: fixed`.
+    -- mais il sort la bande du `.app-container`, qui deviendrait sinon un bloc
+    -- conteneur pour les enfants `position: fixed` — par son `transform` quand
+    -- il est replié.
     div
         [ Html.Attributes.classList
             [ ( "app-root", True )

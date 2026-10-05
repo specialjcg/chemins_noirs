@@ -26,6 +26,10 @@
   --accent-brass: #c9a84c;
   --accent-brass-light: #dfc272;
   --accent-brass-dim: rgba(201, 168, 76, 0.12);
+  /* Zeabur décline son accent en trois intensités : 0.1 en remplissage, 0.3 en
+     bordure, plein en texte. Nous n'avions que la première et la troisième, si
+     bien qu'une surface sélectionnée se signalait par un fond sans contour. */
+  --accent-brass-edge: rgba(201, 168, 76, 0.32);
   --accent-forest: #5a7a4e;
   --accent-forest-light: #7a9e6e;
   /* Même constat que pour les pastilles : le vert de la carte ne porte ni
@@ -62,12 +66,20 @@
   --border-medium: rgba(255, 255, 255, 0.14);
   --border-strong: rgba(255, 255, 255, 0.24);
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  /* Resserrés depuis 6/10/14/20. Les interfaces techniques relevées chez les
+     lauréats 2026 tiennent toutes entre 1 et 8 px — Zeabur à 4 px sur trois
+     quarts de ses éléments, DoubleTap entre 1 et 5. Au-delà de 12 px un angle
+     adoucit, ce qui va à une page vitrine et dessert un outil. */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  /* Une ombre portée sur fond sombre ne porte rien : elle assombrit du noir.
+     DoubleTap n'en pose aucune et marque ses surfaces d'un filet clair d'un
+     pixel, sans flou — la lumière vient du haut, l'arête du dessus la reçoit.
+     Rien à flouter, donc rien à recalculer à chaque image. */
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.55);
   --shadow-glow: 0 0 20px rgba(201, 168, 76, 0.08);
 
@@ -252,8 +264,12 @@ body::before {
   max-width: 720px;
   width: 100%;
   margin: 0 auto;
-  background: linear-gradient(175deg, rgba(28, 28, 28, 0.92), rgba(22, 22, 22, 0.95));
-  backdrop-filter: blur(12px);
+  /* Le fond était à 0,92–0,95 d'opacité et portait quand même un
+     `backdrop-filter` : le flou travaillait sur ce qui ne se voyait qu'à 5 %,
+     et il le refaisait à chaque image, sur toute la surface du panneau. Le
+     fond devient franchement opaque — c'est aussi ce qui garantit les
+     contrastes, tous mesurés contre des fonds pleins. */
+  background: linear-gradient(175deg, #1c1c1c, #161616);
   border-radius: var(--radius-xl);
   padding: 2.5rem 2rem;
   border: 1px solid var(--border-subtle);
@@ -463,7 +479,7 @@ input[type="checkbox"]:checked::after {
 
 .route-type label:has(input:checked) {
   background: var(--accent-brass-dim);
-  border-color: var(--accent-brass);
+  border-color: var(--accent-brass-edge);
   color: var(--accent-brass-light);
 }
 
@@ -743,6 +759,7 @@ button[disabled] {
    on ne saurait plus lequel est actif dès que la souris repart. */
 .route-row.is-reference {
   border-left-color: var(--accent-brass);
+  border-bottom-color: var(--accent-brass-edge);
   background: var(--accent-brass-dim);
 }
 
@@ -896,7 +913,7 @@ button[disabled] {
 
 .action-fav.active {
   background: var(--accent-brass-dim);
-  border-color: var(--border-strong);
+  border-color: var(--accent-brass-edge);
   color: var(--accent-brass-light);
 }
 
@@ -1077,9 +1094,8 @@ small {
 
 .loop-choice.selected {
   background: var(--accent-brass-dim);
-  border-color: var(--accent-brass);
+  border-color: var(--accent-brass-edge);
   color: var(--accent-brass-light);
-  box-shadow: 0 0 12px rgba(201, 168, 76, 0.1);
 }
 
 /* ─── Map & 3D Container ─── */
@@ -1161,14 +1177,13 @@ small {
   max-height: 240px;
   width: 320px;
   overflow: auto;
-  background: rgba(12, 16, 13, 0.85);
+  background: rgba(12, 12, 12, 0.94);
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
   padding: 12px 14px;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 0.78rem;
-  backdrop-filter: blur(12px);
   box-shadow: var(--shadow-card);
 }
 
@@ -1234,8 +1249,7 @@ small {
 /* ─── Map Style Switcher ─── */
 .style-switcher {
   display: flex;
-  background: rgba(14, 14, 14, 0.88);
-  backdrop-filter: blur(12px);
+  background: rgba(14, 14, 14, 0.94);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-medium);
   box-shadow: var(--shadow-card);
@@ -1274,7 +1288,6 @@ small {
   background: var(--accent-brass);
   color: var(--text-inverse);
   font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
 }
 
 .style-switcher-btn.active:hover {
@@ -1931,9 +1944,8 @@ small {
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     padding: 1rem;
     margin: 0;
-    background: rgba(22, 22, 22, 0.97);
-    backdrop-filter: blur(16px);
-    box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.5);
+    background: #161616;
+    box-shadow: var(--shadow-card);
     transition: max-height 0.3s var(--ease-out);
   }
 
@@ -2047,8 +2059,10 @@ small {
 
 /* ─── Bande de dénivelé (dock bas) ─────────────────────────────────────────
    `app-root` doit rester transparent pour la mise en page : la bande est un
-   frère de `.app-container`, dont le `backdrop-filter` en ferait sinon le bloc
-   conteneur de ses enfants `position: fixed`. */
+   frère de `.app-container`, qui deviendrait sinon le bloc conteneur de ses
+   enfants `position: fixed`. C'était le `backdrop-filter` qui le provoquait ;
+   il a disparu, mais le `transform` du panneau replié fait exactement la même
+   chose, donc la contrainte tient toujours. */
 .app-root {
   display: contents;
 }
@@ -2066,10 +2080,21 @@ body {
   /* Au-dessus de `#map.map-fullscreen` (z-index 9999) : la bande doit rester
      lisible quand la carte prend tout l'écran, c'est là qu'elle sert le plus. */
   z-index: 10000;
-  background: linear-gradient(180deg, rgba(17, 17, 17, 0.92), rgba(11, 11, 11, 0.97));
-  backdrop-filter: blur(10px);
-  border-top: 1px solid var(--border-medium);
-  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+  /* La bande coupait la carte d'une barre noire à bord franc, soulignée d'une
+     ombre de 24 px qui ne portait rien sur un fond déjà sombre. Les lauréats
+     qui posent du texte sur une photo — Dubai Digital, Randolph Scott Bell —
+     n'emploient ni flou ni ombre : un seul dégradé, transparent du côté de
+     l'image et opaque du côté du texte. Ici la transition tient dans les
+     premiers pixels, pour que la carte se fonde dans la bande au lieu d'y
+     buter, et tout le contenu reste posé sur de l'opaque. */
+  background: linear-gradient(
+    180deg,
+    rgba(14, 14, 14, 0) 0,
+    rgba(14, 14, 14, 0.55) 6px,
+    rgba(14, 14, 14, 0.95) 18px,
+    #0e0e0e 34px,
+    #0e0e0e 100%
+  );
   user-select: none;
 }
 
