@@ -16,12 +16,22 @@
      restait aucune surface neutre sur laquelle un accent puisse ressortir.
      Les clartés sont conservées, la teinte retirée. Le vert forêt ne sert
      plus que sur la carte, où il désigne quelque chose. */
-  --bg-deep: #0e0e0e;
-  --bg-surface: #161616;
-  --bg-card: #1c1c1c;
-  --bg-card-hover: #242424;
-  --bg-input: #121212;
-  --bg-input-focus: #181818;
+  /* Les gris étaient purs depuis qu'on avait retiré la teinte verte, qui
+     empêchait tout accent de ressortir. Le relevé des lauréats 2026 montre une
+     troisième voie : aucun d'eux n'emploie de gris pur, tous tirent leurs
+     neutres vers la teinte de leur propre accent à chroma très faible — 0,03
+     chez Dubai Digital et DIBSEN, qui l'écrivent en oklch. Nos fonds sont donc
+     repris dans la teinte du laiton (89,5° en OKLCH) à chroma 0,016, soit huit
+     à treize points d'écart entre le rouge et le bleu : invisible isolément,
+     mais le gris cesse de contredire l'accent.
+     La clarté WCAG de chacun est conservée à moins d'un pour cent près, ce qui
+     laisse intacte la matrice de contrastes mesurée. */
+  --bg-deep: #110e06;
+  --bg-surface: #19160d;
+  --bg-card: #1f1b13;
+  --bg-card-hover: #27241b;
+  --bg-input: #15120a;
+  --bg-input-focus: #1b180f;
 
   --accent-brass: #c9a84c;
   --accent-brass-light: #dfc272;
@@ -53,7 +63,7 @@
      en gardant trois paliers nettement distincts : 11,5 / 7,1 / 4,5. */
   --text-primary: #e4ddd0;
   --text-secondary: #b5afa4;
-  --text-muted: #92897c;
+  --text-muted: #958c7e;
   --text-brass: #c8b078;
   --text-inverse: #0c100d;
 
@@ -61,10 +71,10 @@
   --info-blue-dim: rgba(94, 143, 176, 0.15);
   --info-blue-text: #6a98b6;
 
-  --border-faint: rgba(255, 255, 255, 0.05);
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-medium: rgba(255, 255, 255, 0.14);
-  --border-strong: rgba(255, 255, 255, 0.24);
+  --border-faint: rgba(236, 223, 196, 0.05);
+  --border-subtle: rgba(236, 223, 196, 0.08);
+  --border-medium: rgba(236, 223, 196, 0.14);
+  --border-strong: rgba(236, 223, 196, 0.24);
 
   /* Resserrés depuis 6/10/14/20. Les interfaces techniques relevées chez les
      lauréats 2026 tiennent toutes entre 1 et 8 px — Zeabur à 4 px sur trois
@@ -79,7 +89,7 @@
      DoubleTap n'en pose aucune et marque ses surfaces d'un filet clair d'un
      pixel, sans flou — la lumière vient du haut, l'arête du dessus la reçoit.
      Rien à flouter, donc rien à recalculer à chaque image. */
-  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --shadow-card: inset 0 1px 0 rgba(236, 223, 196, 0.08);
   --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.55);
   --shadow-glow: 0 0 20px rgba(201, 168, 76, 0.08);
 
@@ -104,7 +114,11 @@
   --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
-  --text-md: 0.875rem;
+  /* Le texte courant passe de 14 à 15 px. Les neuf lauréats mesurés sont tous
+     à 16 px, Percept à 18 — nous restons en dessous parce qu'un panneau de
+     480 px portant quinze lignes n'est pas une page de lecture, mais 14 px
+     était un cran sous tout le monde. */
+  --text-md: 0.9375rem;
   --text-lg: 1rem;
   --text-xl: 1.25rem;
   --text-2xl: 1.75rem;
@@ -113,6 +127,15 @@
   --leading-tight: 1.2;
   --leading-normal: 1.5;
   --leading-loose: 1.7;
+
+  /* Interlettrage par rôle. La règle est constante chez les lauréats relevés :
+     tracking positif sur les petites capitales — 1,5 px chez Randolph Scott
+     Bell, 1,76 chez DoubleTap, 2 chez Percept — et négatif sur le grand titre,
+     −0,65 px chez DoubleTap. Nos dix-sept valeurs étaient toutes positives, y
+     compris sur le titre, où l'espacement creuse un mot déjà large. */
+  --tracking-display: -0.02em;
+  --tracking-heading: -0.01em;
+  --tracking-label: 0.12em;
 
   --weight-regular: 400;
   --weight-medium: 500;
@@ -139,9 +162,9 @@
   --accent-brass-deep: #b8953d;
   --accent-rust: #8f3a28;
 
-  --bg-gradient-top: #101010;
-  --bg-gradient-mid: #0b0b0b;
-  --bg-gradient-bottom: #0e0e0e;
+  --bg-gradient-top: #130f08;
+  --bg-gradient-mid: #0d0b04;
+  --bg-gradient-bottom: #110e06;
 
   /* Une pastille est un aplat plein : sa couleur doit porter du texte, pas
      seulement se distinguer de ses voisines. Le vert forêt et la terre cuite
@@ -269,7 +292,7 @@ body::before {
      et il le refaisait à chaque image, sur toute la surface du panneau. Le
      fond devient franchement opaque — c'est aussi ce qui garantit les
      contrastes, tous mesurés contre des fonds pleins. */
-  background: linear-gradient(175deg, #1c1c1c, #161616);
+  background: linear-gradient(175deg, var(--bg-card), var(--bg-surface));
   border-radius: var(--radius-xl);
   padding: 2.5rem 2rem;
   border: 1px solid var(--border-subtle);
@@ -309,7 +332,7 @@ h1 {
   font-size: 2.2rem;
   font-weight: 700;
   color: var(--text-primary);
-  letter-spacing: 0.02em;
+  letter-spacing: var(--tracking-display);
   margin: 0 0 0.25rem 0;
   line-height: 1.2;
 }
@@ -543,7 +566,7 @@ button[disabled] {
   left: -100%;
   width: 100%;
   height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
+  background: linear-gradient(90deg, transparent, rgba(236, 223, 196, 0.12), transparent);
   transition: left 0.5s ease;
 }
 
@@ -1137,7 +1160,7 @@ small {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(14, 14, 14, 0.92);
+  background: rgba(17, 14, 6, 0.92);
   color: var(--text-brass);
   border: 1px solid var(--text-brass);
   border-radius: 6px;
@@ -1249,7 +1272,7 @@ small {
 /* ─── Map Style Switcher ─── */
 .style-switcher {
   display: flex;
-  background: rgba(14, 14, 14, 0.94);
+  background: rgba(17, 14, 6, 0.94);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-medium);
   box-shadow: var(--shadow-card);
@@ -1944,7 +1967,7 @@ small {
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     padding: 1rem;
     margin: 0;
-    background: #161616;
+    background: var(--bg-surface);
     box-shadow: var(--shadow-card);
     transition: max-height 0.3s var(--ease-out);
   }
@@ -2089,11 +2112,11 @@ body {
      buter, et tout le contenu reste posé sur de l'opaque. */
   background: linear-gradient(
     180deg,
-    rgba(14, 14, 14, 0) 0,
-    rgba(14, 14, 14, 0.55) 6px,
-    rgba(14, 14, 14, 0.95) 18px,
-    #0e0e0e 34px,
-    #0e0e0e 100%
+    rgba(17, 14, 6, 0) 0,
+    rgba(17, 14, 6, 0.55) 6px,
+    rgba(17, 14, 6, 0.95) 18px,
+    var(--bg-deep) 34px,
+    var(--bg-deep) 100%
   );
   user-select: none;
 }
@@ -2335,6 +2358,7 @@ body.shell #map .maplibregl-ctrl-bottom-right {
   font-size: var(--text-3xl);
   font-weight: var(--weight-bold);
   line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-display);
 }
 
 .t-heading {
@@ -2342,6 +2366,7 @@ body.shell #map .maplibregl-ctrl-bottom-right {
   font-size: var(--text-xl);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-heading);
 }
 
 .t-body {
@@ -2356,7 +2381,7 @@ body.shell #map .maplibregl-ctrl-bottom-right {
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 
@@ -2560,7 +2585,7 @@ body.shell #map .maplibregl-ctrl-bottom-right {
   gap: 0.55rem;
   max-width: min(420px, calc(100vw - 24px));
   padding: 0.4rem 0.5rem 0.4rem 0.65rem;
-  background: rgba(14, 14, 14, 0.92);
+  background: rgba(17, 14, 6, 0.92);
   border: 1px solid rgba(201, 168, 76, 0.45);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-elevated);
