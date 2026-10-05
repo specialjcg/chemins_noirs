@@ -31,26 +31,33 @@
      dans le même coin de 11°. Rien ne pouvait ressortir, puisque rien ne
      différait.
 
-     Donc l'inverse : fonds froids en 265°, chroma 0,022, accent laiton
+     Donc l'inverse : fonds froids en 265°, chroma 0,040, accent laiton
      inchangé. 175,5° d'écart, soit la quasi-complémentaire — le laiton devient
      doré par contraste simultané sans qu'on touche à sa valeur. La clarté WCAG
      de chaque fond est conservée (binaire sur L en OKLab), ce qui laisse
      intacte la matrice de contrastes mesurée.
 
+     Le chroma, lui, se mesure à ce qu'il remplace, pas à ce que font les
+     autres. Première version froide écrite à 0,022, d'après le 0,03 de Dubai
+     et DIBSEN : quinze points d'écart entre le rouge et le bleu, contre
+     trente-et-un pour le brun qu'elle remplaçait. Diviser la couleur par deux
+     en croyant la déplacer — on revoit le fond, on ne voit aucun changement,
+     et on a raison. 0,040 rend les vingt-huit points.
+
      L'encre et les bordures restent chaudes : surfaces froides, texte et
      accent chauds. C'est l'écart qui fait voir, pas la teinte. */
-  --bg-deep: #090d17;
-  --bg-surface: #111620;
-  --bg-card: #171c26;
-  --bg-card-hover: #1f2530;
-  --bg-input: #0d121c;
-  --bg-input-focus: #141823;
+  --bg-deep: #060d1f;
+  --bg-surface: #0d1528;
+  --bg-card: #131b2f;
+  --bg-card-hover: #1b2439;
+  --bg-input: #091224;
+  --bg-input-focus: #0f182b;
 
   /* Composantes nues des deux fonds employés en translucide. Elles étaient
      réécrites à la main en rgba() à six endroits, qui ont dérivé à chaque
      changement de palette. */
-  --bg-deep-rgb: 9 13 23;
-  --bg-card-hover-rgb: 31 37 48;
+  --bg-deep-rgb: 6 13 31;
+  --bg-card-hover-rgb: 27 36 57;
 
   --accent-brass: #c9a84c;
   --accent-brass-light: #dfc272;
@@ -189,9 +196,9 @@
   --accent-brass-deep: #b8953d;
   --accent-rust: #8f3a28;
 
-  --bg-gradient-top: #0b1019;
-  --bg-gradient-mid: #070b14;
-  --bg-gradient-bottom: #090d17;
+  --bg-gradient-top: #070f21;
+  --bg-gradient-mid: #040a1c;
+  --bg-gradient-bottom: #060d1f;
 
   /* Une pastille est un aplat plein : sa couleur doit porter du texte, pas
      seulement se distinguer de ses voisines. Le vert forêt et la terre cuite
