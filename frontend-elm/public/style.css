@@ -2205,6 +2205,35 @@ body.shell .app-container.is-collapsed {
   transition: transform var(--transition-normal), visibility 0s linear var(--duration-normal);
 }
 
+/* ─── Coins de commandes de la carte ───
+   La carte occupe désormais toute la fenêtre, et ses coins du bas passent donc
+   sous ce qui est posé dessus : le sélecteur de fond — Topo, Plan IGN, Ortho
+   IGN, Satellite, Hybride — est ancré en bas à gauche, c'est-à-dire derrière
+   le panneau de 480 px et, quand elle est là, sous la bande de dénivelé. La
+   mention des contributeurs, en bas à droite, disparaissait elle aussi sous la
+   bande, ce qu'OpenStreetMap n'autorise pas.
+
+   `:has()` est nécessaire parce que ces coins vivent dans `#map`, frère de
+   `#app` : aucune relation d'ancêtre ne mène de `.app-root.has-band` jusqu'à
+   eux, seul `body` les a tous les deux sous lui. */
+body.shell #map .maplibregl-ctrl-bottom-left {
+  left: var(--panel-width);
+  transition: left var(--transition-normal), bottom var(--transition-normal);
+}
+
+body.shell:has(.app-container.is-collapsed) #map .maplibregl-ctrl-bottom-left {
+  left: 0;
+}
+
+body.shell:has(.app-root.has-band) #map .maplibregl-ctrl-bottom-left,
+body.shell:has(.app-root.has-band) #map .maplibregl-ctrl-bottom-right {
+  bottom: var(--band-height);
+}
+
+body.shell #map .maplibregl-ctrl-bottom-right {
+  transition: bottom var(--transition-normal);
+}
+
 /* Poignée de repli : reste visible quand le panneau est rentré, sinon on ne
    pourrait plus le rouvrir. */
 .panel-toggle {
@@ -2264,6 +2293,11 @@ body.shell .app-container.is-collapsed {
 
   .panel-toggle.is-collapsed {
     bottom: var(--band-height);
+  }
+
+  /* Le panneau est passé en feuille basse : il ne mange plus la gauche. */
+  body.shell #map .maplibregl-ctrl-bottom-left {
+    left: 0;
   }
 }
 
