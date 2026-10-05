@@ -86,6 +86,119 @@ window._elmApp = app;
 // PORTS OUT : Elm → JavaScript
 // ============================================================
 
+// ============================================================
+// Transitions de vue sur le changement d'onglet
+// ============================================================
+//
+// `document.startViewTransition()` photographie l'écran, exécute son rappel,
+// photographie à nouveau, puis anime entre les deux. Elm ne repeint qu'au
+// `requestAnimationFrame` suivant : si on se contentait d'appeler le port, le
+// rappel se terminerait avant qu'Elm ait touché au DOM et la transition
+// comparerait deux fois la même image.
+//
+// D'où la promesse : on envoie le message à Elm, puis on attend deux trames.
+// La première laisse Elm appliquer son correctif, la seconde laisse le style
+// se recalculer. C'est seulement là qu'on résout, et que le navigateur prend
+// sa deuxième photo.
+//
+// Deux portes de sortie, dans cet ordre : pas d'API, ou refus explicite des
+// animations. Dans les deux cas on applique directement — l'onglet change,
+// sans transition. Rien ne doit pouvoir empêcher un onglet de s'ouvrir.
+function avecTransitionDeVue(sens, appliquer) {
+  const mouvementRefuse = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (typeof document.startViewTransition !== 'function' || mouvementRefuse) {
+    appliquer();
+    return;
+  }
+
+  document.documentElement.dataset.sens = sens;
+
+  // Deux trames pour laisser Elm appliquer son correctif, mais jamais
+  // d'attente infinie : `requestAnimationFrame` est gelé dans un document
+  // caché, et la promesse ne se résoudrait alors plus jamais. Mesuré : sans ce
+  // délai, un changement d'onglet déclenché dans une fenêtre d'arrière-plan
+  // laisse la transition ouverte et l'onglet ne bascule pas du tout. Le premier
+  // des deux qui arrive gagne.
+  const deuxTrames = () => new Promise((resoudre) => {
+    let rendu = false;
+    const unefois = () => {
+      if (!rendu) {
+        rendu = true;
+        resoudre();
+      }
+    };
+    requestAnimationFrame(() => requestAnimationFrame(unefois));
+    setTimeout(unefois, 100);
+  });
+
+  let transition;
+  try {
+    transition = document.startViewTransition(() => {
+      appliquer();
+      return deuxTrames();
+    });
+  } catch (erreur) {
+    // Si l'ouverture échoue, l'onglet doit changer quand même.
+    delete document.documentElement.dataset.sens;
+    appliquer();
+    return;
+  }
+
+  // `ready` rejette dans deux cas parfaitement normaux : l'onglet du navigateur
+  // est en arrière-plan (« Document hidden »), ou une seconde transition
+  // démarre avant la fin de la première et l'avorte. Mesuré ici : en fenêtre
+  // d'arrière-plan, Chrome rejette `ready` mais tient `finished` et exécute
+  // bien le rappel — le panneau change, seule l'animation saute. Sans ce
+  // `catch`, chacun de ces cas remonterait en rejet non traité dans la console.
+  transition.ready.catch(() => {});
+  transition.finished
+    .catch(() => {})
+    .finally(() => {
+      delete document.documentElement.dataset.sens;
+    });
+}
+
+// ============================================================
+// Largeur du panneau : du CSS vers le CSS
+// ============================================================
+//
+// `.app-container` porte `resize: horizontal`, donc l'utilisateur fixe sa
+// largeur à la souris, sans une ligne de JavaScript. Mais trois règles de la
+// feuille de style dépendent de `--panel-width` : la position du bouton de
+// repli, et les deux coins de commandes de MapLibre qu'on avait dégagés de
+// sous le panneau. Elles resteraient calées sur 480 px.
+//
+// D'où ce seul rôle : recopier la largeur réelle dans la variable. Pas de
+// boucle à craindre — tant que personne n'a tiré la poignée, la largeur *vient*
+// de la variable, et réécrire la même valeur ne déclenche pas d'observation ;
+// dès qu'on a tiré, un style en ligne l'emporte sur la déclaration et la
+// variable ne sert plus qu'aux voisins.
+(function suivreLargeurDuPanneau(essais) {
+  const panneau = document.querySelector('.app-container');
+  if (!panneau) {
+    // Elm n'a pas encore posé son premier rendu.
+    if (essais < 50) {
+      setTimeout(() => suivreLargeurDuPanneau(essais + 1), 50);
+    }
+    return;
+  }
+
+  let derniere = 0;
+  new ResizeObserver((entrees) => {
+    const boite = entrees[0].borderBoxSize && entrees[0].borderBoxSize[0];
+    const largeur = Math.round(boite ? boite.inlineSize : panneau.getBoundingClientRect().width);
+    if (Math.abs(largeur - derniere) < 1) {
+      return;
+    }
+    derniere = largeur;
+    document.documentElement.style.setProperty('--panel-width', largeur + 'px');
+  }).observe(panneau);
+})(0);
+
+app.ports.demanderTransitionOnglet.subscribe(({ vers, sens }) => {
+  avecTransitionDeVue(sens, () => app.ports.transitionOngletPrete.send(vers));
+});
+
 // Initialiser la carte
 app.ports.initMap.subscribe(() => {
   console.log('[Elm→JS] initMap');

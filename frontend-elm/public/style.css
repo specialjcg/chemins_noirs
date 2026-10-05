@@ -11,28 +11,46 @@
   --font-body: 'Barlow', 'Helvetica Neue', Helvetica, sans-serif;
   --font-mono: 'Space Mono', 'Courier New', monospace;
 
-  /* Fonds neutres. Ils étaient tous teintés de vert — #0c100d, #131a15,
-     #182019 — et les bordures elles-mêmes en laiton transparent : il ne
-     restait aucune surface neutre sur laquelle un accent puisse ressortir.
-     Les clartés sont conservées, la teinte retirée. Le vert forêt ne sert
-     plus que sur la carte, où il désigne quelque chose. */
-  /* Les gris étaient purs depuis qu'on avait retiré la teinte verte, qui
-     empêchait tout accent de ressortir. Le relevé des lauréats 2026 montre une
-     troisième voie : aucun d'eux n'emploie de gris pur, tous tirent leurs
-     neutres vers la teinte de leur propre accent à chroma très faible — 0,03
-     chez Dubai Digital et DIBSEN, qui l'écrivent en oklch. Nos fonds sont donc
-     repris dans la teinte du laiton (89,5° en OKLCH) à chroma 0,040, soit
-     vingt-et-un à trente-deux points d'écart entre le rouge et le bleu. Le
-     premier essai à 0,016 ne se distinguait du gris pur que posé juste à côté
-     de lui : rigoureux et invisible, donc inutile.
-     La clarté WCAG de chacun est conservée à moins d'un pour cent près, ce qui
-     laisse intacte la matrice de contrastes mesurée. */
-  --bg-deep: #150c00;
-  --bg-surface: #1d1501;
-  --bg-card: #231b04;
-  --bg-card-hover: #2c240c;
-  --bg-input: #191100;
-  --bg-input-focus: #201701;
+  /* Fonds. Trois passes sur ces neuf valeurs, et les deux premières avaient
+     tort pour la même raison : elles raisonnaient sur la teinte des fonds sans
+     regarder celle de l'accent.
+
+     Vertes au départ (#0c100d, #131a15, #182019), elles ont été ramenées au
+     gris pur — aucune surface neutre ne restait sur laquelle un accent puisse
+     ressortir. Puis le relevé des lauréats 2026 a montré que pas un seul
+     n'emploie de gris pur : tous tirent leurs neutres vers la teinte de leur
+     propre accent, à chroma 0,03, écrit en oklch chez Dubai Digital et DIBSEN.
+     Appliquée telle quelle, la règle a donné des fonds laiton à chroma 0,040 —
+     et l'app entière est devenue brune.
+
+     La règle est juste, mais elle suppose un accent froid. Dubai teinte en
+     260°, DIBSEN en 310°, Zeabur en violet : leur neutre teinté reste un gris,
+     parce que leur accent est loin du brun. Le laiton, lui, est déjà brun.
+     Mesure qui tranche : entre `--accent-brass` (89,5°) et `--bg-card` (90,5°)
+     il y avait **un degré de teinte**, et les trois niveaux de texte tenaient
+     dans le même coin de 11°. Rien ne pouvait ressortir, puisque rien ne
+     différait.
+
+     Donc l'inverse : fonds froids en 265°, chroma 0,022, accent laiton
+     inchangé. 175,5° d'écart, soit la quasi-complémentaire — le laiton devient
+     doré par contraste simultané sans qu'on touche à sa valeur. La clarté WCAG
+     de chaque fond est conservée (binaire sur L en OKLab), ce qui laisse
+     intacte la matrice de contrastes mesurée.
+
+     L'encre et les bordures restent chaudes : surfaces froides, texte et
+     accent chauds. C'est l'écart qui fait voir, pas la teinte. */
+  --bg-deep: #090d17;
+  --bg-surface: #111620;
+  --bg-card: #171c26;
+  --bg-card-hover: #1f2530;
+  --bg-input: #0d121c;
+  --bg-input-focus: #141823;
+
+  /* Composantes nues des deux fonds employés en translucide. Elles étaient
+     réécrites à la main en rgba() à six endroits, qui ont dérivé à chaque
+     changement de palette. */
+  --bg-deep-rgb: 9 13 23;
+  --bg-card-hover-rgb: 31 37 48;
 
   --accent-brass: #c9a84c;
   --accent-brass-light: #dfc272;
@@ -171,9 +189,9 @@
   --accent-brass-deep: #b8953d;
   --accent-rust: #8f3a28;
 
-  --bg-gradient-top: #170e00;
-  --bg-gradient-mid: #110a00;
-  --bg-gradient-bottom: #150c00;
+  --bg-gradient-top: #0b1019;
+  --bg-gradient-mid: #070b14;
+  --bg-gradient-bottom: #090d17;
 
   /* Une pastille est un aplat plein : sa couleur doit porter du texte, pas
      seulement se distinguer de ses voisines. Le vert forêt et la terre cuite
@@ -203,7 +221,7 @@
      Les marqueurs restent neutres pour ne jamais rivaliser avec elle. */
   --map-route-unpaved: var(--accent-brass);
   --map-route-paved: var(--accent-terracotta);
-  --map-route-halo: rgba(12, 16, 13, 0.85);
+  --map-route-halo: rgb(var(--bg-deep-rgb) / 0.85);
   --map-reference: var(--accent-forest);
   --map-osm-unpaved: var(--accent-forest-light);
   --map-hillshade: #473b24;
@@ -772,6 +790,105 @@ button[disabled] {
   background: var(--accent-brass-dim);
 }
 
+/* ─── Transition de vue entre les deux onglets ───
+
+   Relevée chez dibsen.io, seul lauréat 2026 à employer l'API. Lui s'en sert
+   entre deux pages (`@view-transition { navigation: auto }`), qui ne vaut que
+   pour la navigation multi-pages ; nous sommes en page unique, donc c'est
+   `document.startViewTransition()` côté JavaScript qui ouvre la transition, et
+   le port `demanderTransitionOnglet` qui l'orchestre.
+
+   Deux éléments seulement sont nommés, donc hissés hors de l'instantané
+   général : le corps du panneau, qui glisse, et l'onglet actif, dont le filet
+   doré se déplace d'un onglet à l'autre. Un nom doit rester unique pendant la
+   capture — `.is-active` ne désigne qu'un bouton à la fois, la règle tient.
+
+   L'instantané de la racine n'est pas animé. Le repeindre reviendrait à faire
+   fondre la carte entière sur elle-même : coûteux, et invisible puisqu'elle ne
+   change pas. Honnêteté sur le coût restant : l'API photographie la racine de
+   toute façon, carte comprise, à chaque changement d'onglet. C'est un geste
+   délibéré de l'utilisateur, pas une image par seconde, donc on l'accepte.
+
+   La garde `prefers-reduced-motion` double celle du JavaScript. Le JS évite
+   d'ouvrir la transition ; le CSS protège le cas où elle serait ouverte
+   autrement. */
+#panel-body {
+  view-transition-name: panneau-corps;
+}
+
+.panel-tab.is-active {
+  view-transition-name: onglet-actif;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+
+/* Les deux libellés n'ont pas la même largeur — « Tracer » contre « Mes tracés
+   (15) ». Sans `object-fit: none` le navigateur étire l'instantané de l'un aux
+   dimensions de l'autre et le texte se déforme en route. Calé à gauche, il
+   reste lisible pendant que la boîte, elle, se déplace. */
+::view-transition-old(onglet-actif),
+::view-transition-new(onglet-actif) {
+  height: 100%;
+  object-fit: none;
+  object-position: left center;
+  animation-duration: 180ms;
+}
+
+@keyframes panneau-sort-vers-la-gauche {
+  to {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+}
+
+@keyframes panneau-sort-vers-la-droite {
+  to {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+
+@keyframes panneau-entre-par-la-droite {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+
+@keyframes panneau-entre-par-la-gauche {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+}
+
+:root[data-sens="avant"]::view-transition-old(panneau-corps) {
+  animation: panneau-sort-vers-la-gauche 160ms ease-in both;
+}
+
+:root[data-sens="avant"]::view-transition-new(panneau-corps) {
+  animation: panneau-entre-par-la-droite 220ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+:root[data-sens="arriere"]::view-transition-old(panneau-corps) {
+  animation: panneau-sort-vers-la-droite 160ms ease-in both;
+}
+
+:root[data-sens="arriere"]::view-transition-new(panneau-corps) {
+  animation: panneau-entre-par-la-gauche 220ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+
 /* ─── Liste des itinéraires, en lignes ───
    Quinze cartes de 170 px faisaient 2 550 px dans un panneau haut de 950 :
    cinq visibles à la fois. Des filets de 1 px à la place des cartes, les
@@ -790,6 +907,38 @@ button[disabled] {
 
 .route-row:last-child {
   border-bottom: none;
+}
+
+/* Les lignes s'allument en entrant dans la zone défilante. Recette relevée chez
+   randolphscottbell.com, lauréat 2026 : sur les dix sites du relevé, c'est la
+   seule animation pilotée au défilement écrite à la main — les six autres sont
+   des sorties de compilateur Tailwind. Pur CSS, aucun observateur
+   d'intersection, aucun code Elm, aucun écouteur de scroll.
+
+   Doublement gardée, comme chez eux : @supports pour les moteurs qui ignorent
+   view(), prefers-reduced-motion pour qui n'en veut pas. Dans les deux cas la
+   liste s'affiche telle quelle, sans dégradation. Une ligne déjà entièrement
+   visible est au-delà de `entry 100 %` : le remplissage `both` la laisse donc
+   opaque, y compris quand la liste est trop courte pour défiler. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes route-row-entree {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: none;
+      }
+    }
+
+    .route-row {
+      animation: route-row-entree linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 55%;
+    }
+  }
 }
 
 .route-row:hover {
@@ -1211,7 +1360,7 @@ small {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(21, 12, 0, 0.92);
+  background: rgb(var(--bg-deep-rgb) / 0.92);
   color: var(--text-brass);
   border: 1px solid var(--text-brass);
   border-radius: 6px;
@@ -1224,7 +1373,7 @@ small {
 }
 
 #map-fullscreen-btn:hover {
-  background: rgba(40, 30, 10, 0.95);
+  background: rgb(var(--bg-card-hover-rgb) / 0.95);
   transform: translateY(-1px);
 }
 
@@ -1323,7 +1472,7 @@ small {
 /* ─── Map Style Switcher ─── */
 .style-switcher {
   display: flex;
-  background: rgba(21, 12, 0, 0.94);
+  background: rgb(var(--bg-deep-rgb) / 0.94);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-medium);
   box-shadow: var(--shadow-card);
@@ -2163,9 +2312,9 @@ body {
      buter, et tout le contenu reste posé sur de l'opaque. */
   background: linear-gradient(
     180deg,
-    rgba(21, 12, 0, 0) 0,
-    rgba(21, 12, 0, 0.55) 6px,
-    rgba(21, 12, 0, 0.95) 18px,
+    rgb(var(--bg-deep-rgb) / 0) 0,
+    rgb(var(--bg-deep-rgb) / 0.55) 6px,
+    rgb(var(--bg-deep-rgb) / 0.95) 18px,
     var(--bg-deep) 34px,
     var(--bg-deep) 100%
   );
@@ -2275,8 +2424,27 @@ body.shell .app-container {
      mais reste un ancêtre pour les sélecteurs, ce qui suffit ici. */
   bottom: 0;
   width: var(--panel-width);
-  max-width: 100%;
   margin: 0;
+
+  /* Le panneau se déclare conteneur de requêtes, puis se laisse redimensionner
+     à la souris. Les deux vont ensemble : des requêtes de conteneur sur une
+     largeur qui ne bouge jamais ne serviraient à rien.
+
+     `resize` ne demande aucun JavaScript — il suffit que le dépassement ne soit
+     pas `visible`, et `overflow-y: auto` juste au-dessous remplit la condition.
+     Le JavaScript ne sert qu'à une chose, dans `main.js` : recopier la largeur
+     réelle dans `--panel-width`, dont dépendent le bouton de repli et les
+     coins de commandes de la carte. Sans ça, élargir le panneau le ferait
+     passer par-dessus le zoom de MapLibre.
+
+     `container-type: inline-size` entraîne un confinement de mise en page, qui
+     ferait d'un descendant `position: fixed` un enfant du panneau. Vérifié
+     avant de l'écrire : le lien d'évitement et le bouton de repli sont des
+     frères de `.app-container`, pas des descendants. */
+  container: panneau / inline-size;
+  resize: horizontal;
+  min-width: 320px;
+  max-width: min(720px, 100vw);
   border-radius: 0;
   border: none;
   border-right: 1px solid var(--border-medium);
@@ -2636,7 +2804,7 @@ body.shell #map .maplibregl-ctrl-bottom-right {
   gap: 0.55rem;
   max-width: min(420px, calc(100vw - 24px));
   padding: 0.4rem 0.5rem 0.4rem 0.65rem;
-  background: rgba(21, 12, 0, 0.92);
+  background: rgb(var(--bg-deep-rgb) / 0.92);
   border: 1px solid rgba(201, 168, 76, 0.45);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-elevated);
@@ -2672,4 +2840,67 @@ body.shell #map .maplibregl-ctrl-bottom-right {
 
 .reference-badge-close:hover {
   color: var(--accent-brass-light);
+}
+
+
+/* ─── Requêtes de conteneur : le panneau se range sur sa propre largeur ───
+
+   Et non sur celle de la fenêtre. C'est toute la différence : le panneau peut
+   être étroit sur un grand écran parce qu'on l'a rétréci, ou large sur un
+   petit. Un `@media` ne verrait ni l'un ni l'autre.
+
+   Deux seuils seulement, chacun pour une raison précise. */
+
+/* Étroit : les rangées horizontales ne tiennent plus. Trois types de tracé
+   côte à côte dans 320 px se coupent en deux lignes bancales ; empilés ils se
+   lisent. Et les actions d'une ligne, qui n'apparaissent qu'au survol,
+   deviennent permanentes — au survol près, il n'y a plus la place de viser. */
+@container panneau (max-width: 380px) {
+  .route-type,
+  .address-input-row,
+  .action-buttons {
+    flex-direction: column;
+  }
+
+  .route-row-actions {
+    opacity: 1;
+  }
+
+  .app-header {
+    padding-bottom: var(--space-3);
+  }
+}
+
+/* Large : le nom d'un itinéraire et ses chiffres cessent de s'empiler et
+   passent sur une seule ligne, nom à gauche, chiffres à droite. Une entrée
+   tombe de trois lignes à une — on en voit le double sans défiler. Le nom
+   repasse donc à une seule ligne tronquée, puisqu'il a la largeur pour. */
+@container panneau (min-width: 560px) {
+  .route-row-main {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  /* `flex: 1` n'est pas décoratif : sans lui le nom se dimensionne sur son
+     contenu, `space-between` le colle à gauche et il se tronque bien avant le
+     bord alors que la place est libre. `min-width: 0` lève la taille minimale
+     automatique d'un élément flex, qui l'empêcherait de descendre sous la
+     largeur de son texte. */
+  .route-row-name {
+    flex: 1;
+    min-width: 0;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+  }
+
+  .route-row-metrics {
+    flex: none;
+  }
+
+  .route-row-dot {
+    align-self: center;
+    margin-top: 0;
+  }
 }

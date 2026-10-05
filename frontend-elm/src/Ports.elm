@@ -96,6 +96,27 @@ l'écran : la même coordonnée est sur le tracé ou à côté selon le zoom.
 port routeLineClicked : ({ lat : Float, lon : Float } -> msg) -> Sub msg
 
 
+{-| Transition de vue sur le changement d'onglet.
+
+Le va-et-vient par le JavaScript n'est pas une complication gratuite :
+`document.startViewTransition()` veut muter le DOM *dans* sa fonction de rappel,
+or Elm ne repeint qu'au `requestAnimationFrame` suivant. Si Elm changeait le
+modèle lui-même, la transition photographierait deux fois le même écran.
+
+Donc `demanderTransitionOnglet` ne touche pas au modèle : il demande au JS
+d'ouvrir la transition, le JS renvoie `transitionOngletPrete` depuis l'intérieur
+du rappel, et c'est seulement là que le modèle bascule. `sens` vaut `"avant"` ou
+`"arriere"` et sert à choisir le côté d'où glisse le nouveau contenu.
+
+Si le navigateur ignore l'API, ou si le visiteur refuse les animations, le JS
+rappelle immédiatement : l'onglet change sans transition, jamais rien ne bloque.
+-}
+port demanderTransitionOnglet : { vers : String, sens : String } -> Cmd msg
+
+
+port transitionOngletPrete : (String -> msg) -> Sub msg
+
+
 port waypointDragged : ({ index : Int, lat : Float, lon : Float } -> msg) -> Sub msg
 
 

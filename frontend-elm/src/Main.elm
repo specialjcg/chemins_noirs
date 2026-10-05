@@ -767,6 +767,27 @@ update msg model =
                     )
 
         SwitchPanelTab onglet ->
+            if onglet == model.panelTab then
+                ( model, Cmd.none )
+
+            else
+                ( model
+                , Ports.demanderTransitionOnglet
+                    { vers = tabKey onglet
+                    , sens =
+                        if onglet == TabRoutes then
+                            "avant"
+
+                        else
+                            "arriere"
+                    }
+                )
+
+        ApplyPanelTab cle ->
+            let
+                onglet =
+                    tabFromKey cle
+            in
             ( { model | panelTab = onglet }
             , focusOn (tabDomId onglet)
             )
@@ -1317,6 +1338,33 @@ tabDomId onglet =
             "panel-tab-routes"
 
 
+{-| Nom de l'onglet tel qu'il traverse le port.
+
+Il faut un aller-retour par une chaîne parce que le JavaScript ouvre la
+transition de vue entre les deux : `PanelTab` ne survit pas au voyage. Les deux
+fonctions sont volontairement l'une sous l'autre, et `tabFromKey` retombe sur
+`TabPlan` plutôt que de faillir — un nom inconnu ne peut venir que d'une faute
+de frappe de notre côté, et l'onglet de planification est l'état de départ.
+-}
+tabKey : PanelTab -> String
+tabKey onglet =
+    case onglet of
+        TabPlan ->
+            "plan"
+
+        TabRoutes ->
+            "routes"
+
+
+tabFromKey : String -> PanelTab
+tabFromKey cle =
+    if cle == "routes" then
+        TabRoutes
+
+    else
+        TabPlan
+
+
 panelBodyDomId : String
 panelBodyDomId =
     "panel-body"
@@ -1515,6 +1563,7 @@ subscriptions model =
                     (Json.Decode.decodeValue Decoders.decodeRouteResponse value)
             )
         , Ports.gotGeolocation (\{ lat, lon } -> GotGeolocation lat lon)
+        , Ports.transitionOngletPrete ApplyPanelTab
         , Ports.undoRedoReceived
             (\{ action } ->
                 if action == "undo" then

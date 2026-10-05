@@ -212,6 +212,7 @@ type Msg
     | UpdateLoadedRoute
     | TogglePanel
     | SwitchPanelTab PanelTab
+    | ApplyPanelTab String
       -- Déplacement du focus clavier vers un élément désigné par son `id`.
       -- Les flèches dans un onglet ou une liste doivent emmener le focus avec
       -- elles : sans cela la touche change bien la sélection, mais le clavier
