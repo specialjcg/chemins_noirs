@@ -251,7 +251,6 @@ function ensureMap() {
     return;
   }
 
-  window.__mapInstance = null; // Debug: expose map instance globally
   mapInstance = new maplibregl.Map({
     container: 'map',
     style: {
@@ -322,10 +321,14 @@ function ensureMap() {
     antialias: true
   });
 
+  // Poignée de debug, posée dès la construction et non sur `load` : la caméra
+  // (`fitBounds`, `cameraForBounds`, `project`) répond avant le premier rendu,
+  // et `load` ne tire pas du tout quand le contexte WebGL ne peint pas.
+  window.__mapInstance = mapInstance;
+
   // Add terrain source
   mapInstance.on('load', () => {
     console.log('[maplibre] Map loaded - MapLibre GL v5.x with advanced camera controls');
-    window.__mapInstance = mapInstance;
 
     // Using Terrarium format terrain tiles from AWS (free, global coverage)
     mapInstance.addSource('terrainSource', {
@@ -2373,8 +2376,49 @@ export function resizeMap() {
   mapInstance.resize();
 }
 
-// Center map on a coordinate (used for topo overlay centering on player)
-export function centerMapOnCoord(lat, lon) {
+/** Rayon de contexte cadré autour d'un lieu recherché, en kilomètres. */
+const RAYON_RECHERCHE_KM = 5;
+
+/**
+ * Marges à laisser libres : la carte occupe toute la fenêtre, mais le panneau
+ * et la bande de dénivelé sont posés dessus. Cadrer sans les déduire plaçait
+ * le lieu au centre géométrique de la carte, c'est-à-dire derrière le panneau
+ * de 480 px. On mesure le rendu plutôt que de relire `--panel-width` : le
+ * panneau est redimensionnable à la souris, et replié il sort de l'écran sans
+ * que la variable change.
+ */
+function margesDesCalques() {
+  const marges = { top: 40, right: 40, bottom: 40, left: 40 };
+  const visible = (el) => el && el.getBoundingClientRect().width > 0
+    && getComputedStyle(el).visibility !== 'hidden';
+
+  const panneau = document.querySelector('.app-container');
+  if (visible(panneau)) {
+    marges.left = panneau.getBoundingClientRect().right + 24;
+  }
+  const bande = document.querySelector('.elevation-band');
+  if (visible(bande)) {
+    marges.bottom = bande.getBoundingClientRect().height + 24;
+  }
+  return marges;
+}
+
+/**
+ * Cadre un lieu avec son contexte alentour.
+ *
+ * `jumpTo({ center })` ne touchait pas au zoom : depuis la vue France on
+ * restait à z5, recentré mais sans rien voir de plus. On cadre donc une boîte
+ * de `rayonKm` autour du point, et `fitBounds` en déduit le zoom que le
+ * viewport réel permet — un zoom en dur mentirait sur un écran étroit.
+ */
+export function centerMapOnCoord(lat, lon, rayonKm = RAYON_RECHERCHE_KM) {
   if (!mapInstance) return;
-  mapInstance.jumpTo({ center: [lon, lat] });
+  // Un degré de latitude vaut ~111,32 km partout ; en longitude ce pas rétrécit
+  // avec le cosinus de la latitude — à 45° il ne fait plus que 79 km.
+  const dLat = rayonKm / 111.32;
+  const dLon = rayonKm / (111.32 * Math.cos((lat * Math.PI) / 180));
+  mapInstance.fitBounds(
+    [[lon - dLon, lat - dLat], [lon + dLon, lat + dLat]],
+    { padding: margesDesCalques(), duration: 800, maxZoom: 15 }
+  );
 }
