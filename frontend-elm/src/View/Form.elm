@@ -192,14 +192,20 @@ view model =
         , small [ class "waypoints-summary" ]
             [ text <|
                 String.fromInt (List.length model.waypoints)
-                    ++ " point(s) • Distance: "
-                    ++ (case model.lastResponse of
+                    ++ " point(s) • Distance : "
+                    -- `formatKm` existe plus bas dans ce fichier, écrit pour
+                    -- exactement ça : un relevé se lit au dixième de kilomètre.
+                    -- Sans lui, le flottant du backend sortait brut —
+                    -- « 7.016201634123582 km » après un import GPX.
+                    ++ formatKm
+                        (case model.lastResponse of
                             Just r ->
-                                String.fromFloat r.distanceKm ++ " km"
+                                r.distanceKm
 
                             Nothing ->
-                                "0.0 km"
-                       )
+                                0
+                        )
+                    ++ " km"
             ]
         , viewFreehandPanel model
         , fieldset []
