@@ -3,6 +3,7 @@ module View.Preview exposing (view)
 {-| Module de prévisualisation - Affichage des résultats de route.
 -}
 
+import Format
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, on)
@@ -55,7 +56,7 @@ viewStats route =
     div [ class "stats" ]
         [ h2 [] [ text "Dernier tracé" ]
         , div [ class "stats-row" ]
-            [ p [] [ text <| formatDistance route.distanceKm ++ " km" ]
+            [ p [] [ text <| Format.km route.distanceKm ]
             , case route.estimatedTimeMinutes of
                 Just minutes ->
                     p [ class "stat-time" ] [ text <| formatTime minutes ]
@@ -72,15 +73,6 @@ viewStats route =
             ]
         , viewSurfaceBreakdown route.surfaceBreakdown
         ]
-
-
-formatDistance : Float -> String
-formatDistance km =
-    let
-        rounded =
-            toFloat (round (km * 100)) / 100
-    in
-    String.fromFloat rounded
 
 
 formatTime : Int -> String
@@ -154,7 +146,7 @@ surfaceSegment total ( name, dist ) =
     div
         [ class ("surface-segment surface-" ++ String.toLower name)
         , style "width" (String.fromFloat pct ++ "%")
-        , title (name ++ ": " ++ formatDistance dist ++ " km")
+        , title (name ++ " : " ++ Format.km dist)
         ]
         []
 
@@ -163,7 +155,7 @@ surfaceLegendItem : ( String, Float ) -> Html Msg
 surfaceLegendItem ( name, dist ) =
     span [ class "surface-legend-item" ]
         [ span [ class ("surface-dot surface-" ++ String.toLower name) ] []
-        , text (name ++ " " ++ formatDistance dist ++ " km")
+        , text (name ++ " " ++ Format.km dist)
         ]
 
 
@@ -190,10 +182,10 @@ viewSegment idx seg =
         [ span [ class "segment-label" ]
             [ text ("Segment " ++ String.fromInt (idx + 1)) ]
         , div [ class "segment-details" ]
-            [ span [] [ text (formatDistance seg.distanceKm ++ " km") ]
-            , span [] [ text ("D+ " ++ String.fromFloat seg.ascentM ++ " m") ]
-            , span [] [ text ("D- " ++ String.fromFloat seg.descentM ++ " m") ]
-            , span [] [ text (String.fromFloat seg.avgSlopePct ++ "% pente") ]
+            [ span [] [ text (Format.km seg.distanceKm) ]
+            , span [] [ text ("D+ " ++ Format.metres seg.ascentM) ]
+            , span [] [ text ("D- " ++ Format.metres seg.descentM) ]
+            , span [] [ text (Format.pourcent seg.avgSlopePct ++ " de pente") ]
             ]
         ]
 
@@ -205,24 +197,24 @@ viewMetadata maybeMeta =
             div [ class "metadata-grid" ]
                 [ metadataCard "Points" (String.fromInt meta.pointCount)
                 , metadataCard "Départ"
-                    (String.fromFloat meta.start.lat
+                    (Format.coord meta.start.lat
                         ++ " / "
-                        ++ String.fromFloat meta.start.lon
+                        ++ Format.coord meta.start.lon
                     )
                 , metadataCard "Arrivée"
-                    (String.fromFloat meta.end.lat
+                    (Format.coord meta.end.lat
                         ++ " / "
-                        ++ String.fromFloat meta.end.lon
+                        ++ Format.coord meta.end.lon
                     )
                 , metadataCard "BBox"
                     ("["
-                        ++ String.fromFloat meta.bounds.minLat
+                        ++ Format.coord meta.bounds.minLat
                         ++ "↔"
-                        ++ String.fromFloat meta.bounds.maxLat
+                        ++ Format.coord meta.bounds.maxLat
                         ++ "] lat / ["
-                        ++ String.fromFloat meta.bounds.minLon
+                        ++ Format.coord meta.bounds.minLon
                         ++ "↔"
-                        ++ String.fromFloat meta.bounds.maxLon
+                        ++ Format.coord meta.bounds.maxLon
                         ++ "] lon"
                     )
                 ]
@@ -246,23 +238,23 @@ viewElevationProfile maybeProfile =
             div [ class "elevation-section" ]
                 [ h3 [] [ text "Profil d'élévation" ]
                 , div [ class "metadata-grid" ]
-                    [ metadataCard "Dénivelé +" (String.fromFloat profile.totalAscent ++ " m")
-                    , metadataCard "Dénivelé -" (String.fromFloat profile.totalDescent ++ " m")
+                    [ metadataCard "Dénivelé +" (Format.metres profile.totalAscent)
+                    , metadataCard "Dénivelé -" (Format.metres profile.totalDescent)
                     , metadataCard "Altitude min"
                         (case profile.minElevation of
                             Just e ->
-                                String.fromFloat e ++ " m"
+                                Format.metres e
 
                             Nothing ->
-                                "N/A"
+                                "inconnue"
                         )
                     , metadataCard "Altitude max"
                         (case profile.maxElevation of
                             Just e ->
-                                String.fromFloat e ++ " m"
+                                Format.metres e
 
                             Nothing ->
-                                "N/A"
+                                "inconnue"
                         )
                     ]
                 ]
@@ -526,7 +518,7 @@ viewPathPoint maybeProfile idx coord =
         elevationText =
             case elevation of
                 Just e ->
-                    " — " ++ String.fromFloat e ++ " m"
+                    " — " ++ Format.metres e
 
                 Nothing ->
                     ""
@@ -535,9 +527,9 @@ viewPathPoint maybeProfile idx coord =
         [ text <|
             String.fromInt idx
                 ++ ": "
-                ++ String.fromFloat coord.lat
+                ++ Format.coord coord.lat
                 ++ " / "
-                ++ String.fromFloat coord.lon
+                ++ Format.coord coord.lon
                 ++ elevationText
         ]
 
@@ -553,10 +545,10 @@ viewLoopCandidates model =
                 case model.loopMeta of
                     Just meta ->
                         "Boucles proposées – cible "
-                            ++ String.fromFloat meta.targetDistanceKm
-                            ++ " km (± "
-                            ++ String.fromFloat meta.distanceToleranceKm
-                            ++ " km)"
+                            ++ Format.km meta.targetDistanceKm
+                            ++ " (± "
+                            ++ Format.km meta.distanceToleranceKm
+                            ++ ")"
 
                     Nothing ->
                         "Boucles proposées"
@@ -577,7 +569,7 @@ viewLoopCandidate selectedIdx idx candidate =
         ascentLabel =
             case candidate.route.elevationProfile of
                 Just profile ->
-                    String.fromFloat profile.totalAscent ++ " m D+"
+                    Format.metres profile.totalAscent ++ " D+"
 
                 Nothing ->
                     "D+ ?"
@@ -597,18 +589,11 @@ viewLoopCandidate selectedIdx idx candidate =
             "#"
                 ++ String.fromInt idx
                 ++ " – "
-                ++ String.fromFloat candidate.route.distanceKm
-                ++ " km • "
+                ++ Format.km candidate.route.distanceKm
+                ++ " • "
                 ++ ascentLabel
                 ++ " • Δ"
-                ++ (if candidate.distanceErrorKm >= 0 then
-                        "+"
-
-                    else
-                        ""
-                   )
-                ++ String.fromFloat candidate.distanceErrorKm
-                ++ " km • cap "
-                ++ String.fromFloat candidate.bearingDeg
-                ++ "°"
+                ++ Format.deltaKm candidate.distanceErrorKm
+                ++ " • cap "
+                ++ Format.cap candidate.bearingDeg
         ]

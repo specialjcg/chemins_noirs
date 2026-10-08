@@ -14,6 +14,7 @@ ne pas être étirés ; tout ce qui ne survivrait pas à cette déformation
 
 -}
 
+import Format
 import Html exposing (Html, button, div, input, span, text)
 import Html.Attributes as Attr exposing (class, classList, style)
 import Html.Events exposing (on, onClick, targetValue)
@@ -122,12 +123,12 @@ viewBand model route profile elevations =
                 (case activeIdx of
                     Just i ->
                         [ span [ class "elevation-band-km" ]
-                            [ text (formatKm (kmAt i) ++ " km") ]
+                            [ text (Format.km (kmAt i)) ]
                         , span [ class "elevation-band-alt" ]
                             [ text
                                 (case elevationAt i of
                                     Just e ->
-                                        String.fromInt (round e) ++ " m"
+                                        Format.metres e
 
                                     Nothing ->
                                         "—"
@@ -139,10 +140,9 @@ viewBand model route profile elevations =
                         [ span [ class "elevation-band-alt" ]
                             [ text
                                 ("D+ "
-                                    ++ String.fromInt (round profile.totalAscent)
-                                    ++ " m · D- "
-                                    ++ String.fromInt (round profile.totalDescent)
-                                    ++ " m"
+                                    ++ Format.metres profile.totalAscent
+                                    ++ " · D- "
+                                    ++ Format.metres profile.totalDescent
                                 )
                             ]
                         ]
@@ -183,8 +183,8 @@ viewBand model route profile elevations =
                             , on "input" (Decode.map ElevationCursorMoved targetInt)
                             ]
                             []
-                       , span [ class "elevation-band-max" ] [ text (String.fromInt (round maxE) ++ " m") ]
-                       , span [ class "elevation-band-min" ] [ text (String.fromInt (round minE) ++ " m") ]
+                       , span [ class "elevation-band-max" ] [ text (Format.metres maxE) ]
+                       , span [ class "elevation-band-min" ] [ text (Format.metres minE) ]
                        ]
                 )
 
@@ -310,12 +310,3 @@ fillGaps xs =
             ( firstKnown, [] )
         |> Tuple.second
         |> List.reverse
-
-
-formatKm : Float -> String
-formatKm km =
-    let
-        tenths =
-            round (km * 10)
-    in
-    String.fromInt (tenths // 10) ++ "," ++ String.fromInt (modBy 10 tenths)

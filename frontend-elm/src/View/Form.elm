@@ -4,6 +4,7 @@ module View.Form exposing (view, viewSavedRoutesSection)
 Approche fonctionnelle pure : génération déclarative du HTML.
 -}
 
+import Format
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onCheck, onClick, onInput, onMouseDown, preventDefaultOn)
@@ -193,11 +194,9 @@ view model =
             [ text <|
                 String.fromInt (List.length model.waypoints)
                     ++ " point(s) • Distance : "
-                    -- `formatKm` existe plus bas dans ce fichier, écrit pour
-                    -- exactement ça : un relevé se lit au dixième de kilomètre.
-                    -- Sans lui, le flottant du backend sortait brut —
+                    -- Sans `Format.km`, le flottant du backend sortait brut :
                     -- « 7.016201634123582 km » après un import GPX.
-                    ++ formatKm
+                    ++ Format.km
                         (case model.lastResponse of
                             Just r ->
                                 r.distanceKm
@@ -205,7 +204,6 @@ view model =
                             Nothing ->
                                 0
                         )
-                    ++ " km"
             ]
         , viewFreehandPanel model
         , fieldset []
@@ -533,7 +531,7 @@ routeMetrics route =
         denivele =
             case route.totalAscentM of
                 Just ascent ->
-                    " · D+ " ++ String.fromInt (round ascent) ++ " m"
+                    " · D+ " ++ Format.metres ascent
 
                 Nothing ->
                     ""
@@ -546,23 +544,7 @@ routeMetrics route =
                 Nothing ->
                     ""
     in
-    formatKm route.distanceKm ++ " km" ++ denivele ++ difficulte
-
-
-{-| Distance au dixième de kilomètre, décimale toujours présente.
-
-`String.fromFloat` écrit « 29 » pour 29.0 et « 30.1 » pour 30.1 : dans une
-colonne en chasse fixe, censée s'aligner, les deux ne tombent pas au même
-endroit. La virgule est celle du français, puisque c'est la langue de
-l'interface.
--}
-formatKm : Float -> String
-formatKm valeur =
-    let
-        dixiemes =
-            round (valeur * 10)
-    in
-    String.fromInt (dixiemes // 10) ++ "," ++ String.fromInt (modBy 10 dixiemes)
+    Format.km route.distanceKm ++ denivele ++ difficulte
 
 
 {-| Classe de la pastille de difficulté.
