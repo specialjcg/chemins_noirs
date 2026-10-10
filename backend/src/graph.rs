@@ -753,17 +753,19 @@ impl GraphBuilder {
         // `v3` : les caches antérieurs contiennent les chemins fermés au public,
         // que le graphe n'accepte plus ; les `v1` n'avaient en outre ni
         // `forest_ratio` ni densité bâtie. Changer le préfixe les met hors circuit.
+        // `v5` : les `v4` ignorent les voies `highway=road`.
+        // `v6` : les `v5` tiennent les `track` `grade1` pour goudronnés.
         let cache_path_bin = cache_dir
             .as_ref()
-            .join(format!("partial_v4_{}.bin", cache_key));
+            .join(format!("partial_v6_{}.bin", cache_key));
 
         // Also check legacy formats for backward compatibility
         let cache_path_compressed = cache_dir
             .as_ref()
-            .join(format!("partial_v4_{}.json.zst", cache_key));
+            .join(format!("partial_v6_{}.json.zst", cache_key));
         let cache_path_json = cache_dir
             .as_ref()
-            .join(format!("partial_v4_{}.json", cache_key));
+            .join(format!("partial_v6_{}.json", cache_key));
 
         let disk_cache_path = if cache_path_bin.exists() {
             Some(&cache_path_bin)
@@ -1609,6 +1611,9 @@ fn is_supported_highway(highway_value: &str) -> bool {
             | "primary_link"
             | "trunk"
             | "trunk_link"
+            // Voie au type inconnu : en lisière de forêt, souvent un vrai
+            // chemin que personne n'a encore qualifié.
+            | "road"
     )
 }
 
@@ -1633,12 +1638,13 @@ fn infer_surface(tags: &[(String, String)]) -> SurfaceType {
 
     // Fallback to highway classification
     if let Some(highway) = tags_map.get("highway") {
-        // An untagged track is graded by tracktype when OSM provides one:
-        // grade1 is a made surface, grade3 and below are not.
+        // An untagged track is graded by tracktype when OSM provides one.
+        // grade1 is a made surface, but in the woods that means a gravelled
+        // forest road far more often than tarmac — and a tarred one usually
+        // carries `surface=asphalt`, read above. Grade3 and below are dirt.
         if *highway == "track" {
             return match tags_map.get("tracktype").copied() {
-                Some("grade1") => SurfaceType::Paved,
-                Some("grade2") => SurfaceType::Trail,
+                Some("grade1") | Some("grade2") => SurfaceType::Trail,
                 Some("grade3") | Some("grade4") | Some("grade5") => SurfaceType::Dirt,
                 _ => SurfaceType::Trail,
             };
@@ -2003,6 +2009,14 @@ mod tests {
     }
 
     #[test]
+    fn an_untyped_road_is_walked_as_a_trail() {
+        // Les traits gris des lisières du parc national : `highway=road`.
+        let road = tags(&[("highway", "road")]);
+        assert!(has_supported_highway(&road));
+        assert_eq!(infer_surface(&road), SurfaceType::Trail);
+    }
+
+    #[test]
     fn a_path_without_access_tags_stays_open() {
         // 90 % des chemins de Sologne sont dans ce cas : le filtre ne peut rien
         // en dire, ils restent dans le graphe.
@@ -2041,7 +2055,7 @@ mod tests {
     #[test]
     fn tracktype_grades_an_untagged_track() {
         let cases = [
-            ("grade1", SurfaceType::Paved),
+            ("grade1", SurfaceType::Trail),
             ("grade2", SurfaceType::Trail),
             ("grade3", SurfaceType::Dirt),
             ("grade5", SurfaceType::Dirt),
@@ -2054,6 +2068,15 @@ mod tests {
                 grade
             );
         }
+        // A grade1 track that says it is tarred stays tarmac.
+        assert_eq!(
+            infer_surface(&tags(&[
+                ("highway", "track"),
+                ("tracktype", "grade1"),
+                ("surface", "asphalt"),
+            ])),
+            SurfaceType::Paved
+        );
         // No tracktype at all: unchanged, a track stays a trail.
         assert_eq!(
             infer_surface(&tags(&[("highway", "track")])),

@@ -1117,7 +1117,10 @@ fn prepare_graph_for_bbox(
 ) -> Result<GraphFile, (StatusCode, String)> {
     let t0 = std::time::Instant::now();
     let cache_key = bbox.cache_key();
-    let cache_path = config.cache_dir.join(format!("{}.bin", cache_key));
+    // `graph-v2_` : les graphes antérieurs ignorent les voies `highway=road`,
+    // les traits gris des lisières ; `graph-v3_` : les `v2` tiennent les
+    // `track` `grade1` pour goudronnés. Changer le nom les met hors circuit.
+    let cache_path = config.cache_dir.join(format!("graph-v3_{}.bin", cache_key));
     // Témoin posé à côté du graphe une fois la couche d'occupation du sol
     // reportée dessus. Les graphes écrits avant que `prepare_graph_for_bbox`
     // ne l'applique portent `forest_ratio` et `population_density` à zéro :
