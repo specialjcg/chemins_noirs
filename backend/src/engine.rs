@@ -148,6 +148,21 @@ fn same_edge_path(start: &RoadSnap, end: &RoadSnap) -> Option<Vec<Coordinate>> {
         return None;
     }
 
+    along_edge(start, end)
+}
+
+/// Morceau de l'arête commune entre les deux projections, où qu'elles tombent
+/// sur celle-ci, extrémités comprises.
+fn along_edge(start: &RoadSnap, end: &RoadSnap) -> Option<Vec<Coordinate>> {
+    if start.edge? != end.edge? {
+        return None;
+    }
+
+    let polyline = &start.polyline;
+    if polyline.len() < 2 {
+        return None;
+    }
+
     let forward = end.along >= start.along;
     let (lo, hi) = if forward {
         (start.along, end.along)
@@ -176,9 +191,10 @@ fn same_edge_path(start: &RoadSnap, end: &RoadSnap) -> Option<Vec<Coordinate>> {
 /// Si le premier pas d'A* retraverse l'arête du snap, on repart de la
 /// projection vers l'autre extrémité au lieu de faire l'aller-retour.
 ///
-/// Deux nœuds suffisent : les deux bouts ne peuvent pas se corriger l'un
-/// l'autre jusqu'à vider l'itinéraire, cela demanderait qu'ils partagent
-/// l'arête et `same_edge_path` a déjà traité ce cas.
+/// Les deux bouts peuvent se corriger l'un l'autre jusqu'à vider
+/// l'itinéraire : quand ils partagent l'arête et que l'un est pile sur un
+/// nœud, `same_edge_path` laisse la main à A*, qui emprunte cette arête. Voir
+/// `consumes_route`.
 fn oriented_prefix<'a>(snap: &'a RoadSnap, route: &[NodeIndex]) -> (&'a [Coordinate], usize) {
     match snap.other_node {
         Some(other) if route.len() >= 2 && route[1] == other => (&snap.other_prefix, 1),
@@ -196,6 +212,14 @@ fn oriented_suffix<'a>(snap: &'a RoadSnap, route: &[NodeIndex]) -> (&'a [Coordin
         }
         _ => (&snap.road_prefix, 0),
     }
+}
+
+/// Les corrections de sens des deux bouts retirent tout l'itinéraire d'A* :
+/// celui-ci n'était que l'arête où tombent les deux points. Coudre les deux
+/// préfixes ferait parcourir l'arête, revenir, puis repartir ; il faut suivre
+/// l'arête d'une projection à l'autre.
+fn consumes_route(route: &[NodeIndex], skip_head: usize, skip_tail: usize) -> bool {
+    skip_head + skip_tail >= route.len()
 }
 
 #[derive(Clone)]
@@ -473,11 +497,20 @@ impl RouteEngine {
             (start, end)
         };
 
+        let start_paved = matches!(start_snap.prefix_surface, SurfaceType::Paved);
+        let end_paved = matches!(end_snap.prefix_surface, SurfaceType::Paved);
+
         let (astar_coords, astar_surfaces, start_prefix, end_prefix) = {
             let excluded = HashSet::new();
             let (_, route) = self.run_astar(start, end, req, &excluded)?;
             let (start_prefix, skip_head) = oriented_prefix(&start_snap, &route);
             let (end_prefix, skip_tail) = oriented_suffix(&end_snap, &route);
+            if consumes_route(&route, skip_head, skip_tail) {
+                if let Some(direct) = along_edge(&start_snap, &end_snap) {
+                    let surfaces = vec![start_paved; direct.len()];
+                    return Some((direct, surfaces));
+                }
+            }
             let core = &route[skip_head..route.len() - skip_tail];
             let (coords, surfaces) = expand_path_with_waypoints_and_surfaces(
                 core,
@@ -487,9 +520,6 @@ impl RouteEngine {
             );
             (coords, surfaces, start_prefix.to_vec(), end_prefix.to_vec())
         };
-
-        let start_paved = matches!(start_snap.prefix_surface, SurfaceType::Paved);
-        let end_paved = matches!(end_snap.prefix_surface, SurfaceType::Paved);
 
         if let Some(direct) = same_edge_path(&start_snap, &end_snap) {
             let surfaces = vec![start_paved; direct.len()];
@@ -618,6 +648,11 @@ impl RouteEngine {
         // la géométrie sur la tranche utile de l'itinéraire.
         let (start_prefix, skip_head) = oriented_prefix(&start_snap, &route);
         let (end_prefix, skip_tail) = oriented_suffix(&end_snap, &route);
+        if consumes_route(&route, skip_head, skip_tail) {
+            if let Some(direct) = along_edge(&start_snap, &end_snap) {
+                return Some((direct, Vec::new()));
+            }
+        }
         let astar_coords = expand_path_with_waypoints(
             &route[skip_head..route.len() - skip_tail],
             &self.graph,
@@ -2219,6 +2254,30 @@ mod tests {
         assert!(
             path.iter().all(|c| c.lon >= 5.002 - 1e-9 && c.lon <= 5.008 + 1e-9),
             "le tracé sort du segment demandé — {path:?}"
+        );
+    }
+
+    #[test]
+    fn a_point_on_a_node_and_one_on_its_edge_do_not_retrace_the_edge() {
+        let engine = RouteEngine::from_graph_file(bare_line_graph()).expect("engine");
+
+        // Le départ est pile sur un nœud — c'est le cas de tout point d'étape
+        // déjà recalé par un calcul précédent — et l'arrivée sur la même arête.
+        // Les deux bouts corrigeaient alors chacun leur sens : le tracé
+        // parcourait l'arête entière, revenait au départ, puis repartait.
+        let start = Coordinate { lat: 45.0, lon: 5.020 };
+        let end = Coordinate { lat: 45.0, lon: 5.012 };
+
+        let path = engine
+            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0 })
+            .expect("path");
+
+        let travelled: f64 = path.windows(2).map(|p| straight_line_km(p[0], p[1])).sum();
+        let direct = straight_line_km(start, end);
+
+        assert!(
+            travelled < direct * 1.05,
+            "aller-retour sur l'arête : {travelled:.3} km pour {direct:.3} km — {path:?}"
         );
     }
 
