@@ -17,6 +17,16 @@ type PanelTab
     | TabRoutes
 
 
+{-| Un itinéraire en calque. Sa couleur est fixée au moment où on le coche,
+pour qu'elle ne change pas quand on en retire un autre ; son tracé arrive
+ensuite du backend (`Nothing` en attendant).
+-}
+type alias ReferenceLayer =
+    { color : String
+    , path : Maybe (List Coordinate)
+    }
+
+
 type alias Model =
     { form : RouteForm
     , loopForm : LoopForm
@@ -52,9 +62,9 @@ type alias Model =
     , saveRouteName : String
     , saveRouteDescription : String
     , showSavedRoutes : Bool
-    -- Itinéraire enregistré affiché en surimpression, pour comparer le tracé
-    -- courant à un balisage officiel. `Nothing` = aucun calque.
-    , referenceRouteId : Maybe Int
+    -- Itinéraires enregistrés affichés en surimpression, pour comparer le
+    -- tracé courant à d'autres (balisage officiel, variantes). Clé : id.
+    , referenceRoutes : Dict Int ReferenceLayer
     , showElevationChart : Bool
     , elevationHoverIndex : Maybe Int
     , elevationCursorIndex : Maybe Int
@@ -157,7 +167,7 @@ initialModel =
     , saveRouteName = ""
     , saveRouteDescription = ""
     , showSavedRoutes = False
-    , referenceRouteId = Nothing
+    , referenceRoutes = Dict.empty
     , showElevationChart = False
     , elevationHoverIndex = Nothing
     , elevationCursorIndex = Nothing

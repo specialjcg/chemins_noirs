@@ -89,36 +89,53 @@ update msg model =
             )
 
         ToggleReferenceRoute id ->
-            if model.referenceRouteId == Just id then
-                ( { model | referenceRouteId = Nothing }
-                , Ports.setReferenceRoute Nothing
-                )
+            if Dict.member id model.referenceRoutes then
+                let
+                    next =
+                        { model | referenceRoutes = Dict.remove id model.referenceRoutes }
+                in
+                ( next, referenceRoutesCmd next )
 
             else
                 -- Le tracé complet n'est pas dans la liste : il faut aller le
                 -- chercher, comme pour un chargement ordinaire.
-                ( { model | referenceRouteId = Just id }
+                ( { model
+                    | referenceRoutes =
+                        Dict.insert id
+                            { color = nextReferenceColor model.referenceRoutes, path = Nothing }
+                            model.referenceRoutes
+                  }
                 , Api.getSavedRoute id (ReferenceRouteLoaded id)
                 )
 
         ReferenceRouteLoaded id result ->
-            -- Une réponse qui arrive après un changement de calque ne doit pas
-            -- écraser le choix courant.
-            if model.referenceRouteId /= Just id then
-                ( model, Cmd.none )
+            -- Une réponse qui arrive après qu'on a décoché le calque ne doit
+            -- pas le faire réapparaître.
+            case ( Dict.get id model.referenceRoutes, result ) of
+                ( Nothing, _ ) ->
+                    ( model, Cmd.none )
 
-            else
-                case result of
-                    Ok saved ->
-                        ( model, Ports.setReferenceRoute (Just saved.routeData.path) )
+                ( Just layer, Ok saved ) ->
+                    let
+                        next =
+                            { model
+                                | referenceRoutes =
+                                    Dict.insert id
+                                        { layer | path = Just saved.routeData.path }
+                                        model.referenceRoutes
+                            }
+                    in
+                    ( next, referenceRoutesCmd next )
 
-                    Err _ ->
-                        ( { model
-                            | referenceRouteId = Nothing
-                            , error = Just "Impossible d'afficher cet itinéraire en calque"
-                          }
-                        , Ports.setReferenceRoute Nothing
-                        )
+                ( Just _, Err _ ) ->
+                    let
+                        next =
+                            { model
+                                | referenceRoutes = Dict.remove id model.referenceRoutes
+                                , error = Just "Impossible d'afficher cet itinéraire en calque"
+                            }
+                    in
+                    ( next, referenceRoutesCmd next )
 
         ForestWeightChanged val ->
             let
@@ -1465,31 +1482,78 @@ une fois celui-ci refermé : on ne savait plus quel tracé on regardait, et troi
 noms de la liste commencent par « Sologne ».
 
 -}
-viewReferenceBadge : Model -> Html Msg
-viewReferenceBadge model =
-    case model.referenceRouteId of
-        Nothing ->
-            text ""
+viewReferenceBadges : Model -> Html Msg
+viewReferenceBadges model =
+    if Dict.isEmpty model.referenceRoutes then
+        text ""
 
-        Just id ->
-            let
-                name =
-                    model.savedRoutes
-                        |> List.filter (\route -> route.id == id)
-                        |> List.head
-                        |> Maybe.map .name
-                        |> Maybe.withDefault "Itinéraire de référence"
-            in
-            div [ class "reference-badge" ]
-                [ span [ class "reference-badge-swatch" ] []
-                , span [ class "reference-badge-name" ] [ text name ]
-                , button
-                    [ class "reference-badge-close"
-                    , Html.Events.onClick (ToggleReferenceRoute id)
-                    , Html.Attributes.title "Retirer le calque"
-                    ]
-                    [ text "\u{2715}" ]
-                ]
+    else
+        div [ class "reference-badges" ]
+            (Dict.toList model.referenceRoutes
+                |> List.map (viewReferenceBadge model.savedRoutes)
+            )
+
+
+viewReferenceBadge : List SavedRoute -> ( Int, ReferenceLayer ) -> Html Msg
+viewReferenceBadge savedRoutes ( id, layer ) =
+    let
+        name =
+            savedRoutes
+                |> List.filter (\route -> route.id == id)
+                |> List.head
+                |> Maybe.map .name
+                |> Maybe.withDefault "Itinéraire de référence"
+    in
+    div [ class "reference-badge" ]
+        [ span
+            [ class "reference-badge-swatch"
+            , style "border-top-color" layer.color
+            ]
+            []
+        , span [ class "reference-badge-name" ] [ text name ]
+        , button
+            [ class "reference-badge-close"
+            , Html.Events.onClick (ToggleReferenceRoute id)
+            , Html.Attributes.title "Retirer le calque"
+            ]
+            [ text "\u{2715}" ]
+        ]
+
+
+{-| Les calques dont le tracé est arrivé, à redessiner d'un bloc. -}
+referenceRoutesCmd : Model -> Cmd Msg
+referenceRoutesCmd model =
+    model.referenceRoutes
+        |> Dict.values
+        |> List.filterMap
+            (\layer -> Maybe.map (\path -> { path = path, color = layer.color }) layer.path)
+        |> Ports.setReferenceRoutes
+
+
+{-| Couleurs des calques, choisies loin du vert du tracé courant, de son
+orange non goudronné et du rouge des obstacles. Au-delà de la palette, on
+recommence au début.
+-}
+referencePalette : List String
+referencePalette =
+    [ "#c9a84c", "#7a5ea8", "#3a7ca5", "#b0457a", "#4fa3a0", "#8a6a3a" ]
+
+
+nextReferenceColor : Dict Int ReferenceLayer -> String
+nextReferenceColor layers =
+    let
+        used =
+            Dict.values layers |> List.map .color
+    in
+    referencePalette
+        |> List.filter (\color -> not (List.member color used))
+        |> List.head
+        |> Maybe.withDefault
+            (referencePalette
+                |> List.drop (modBy (List.length referencePalette) (Dict.size layers))
+                |> List.head
+                |> Maybe.withDefault "#c9a84c"
+            )
 
 
 view : Model -> Html Msg
@@ -1576,7 +1640,7 @@ view model =
                     )
                 ]
             ]
-        , viewReferenceBadge model
+        , viewReferenceBadges model
         , ElevationBand.view model
         ]
 

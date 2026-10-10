@@ -229,7 +229,6 @@
   --map-route-unpaved: var(--accent-brass);
   --map-route-paved: var(--accent-terracotta);
   --map-route-halo: rgb(var(--bg-deep-rgb) / 0.85);
-  --map-reference: var(--accent-forest);
   --map-osm-unpaved: var(--accent-forest-light);
   --map-route-direct: var(--text-primary);
   --map-obstacle-building: var(--accent-terracotta);
@@ -2813,14 +2812,27 @@ body.shell #map .maplibregl-ctrl-bottom-right {
   border-color: rgba(201, 168, 76, 0.3);
 }
 
-/* ─── Rappel du calque actif ───────────────────────────────────────────────
-   Posé sur la carte : sans lui, rien ne dit quel itinéraire est superposé
-   une fois le panneau refermé. */
-.reference-badge {
+/* ─── Rappel des calques actifs ────────────────────────────────────────────
+   Posés sur la carte : sans eux, rien ne dit quels itinéraires sont
+   superposés une fois le panneau refermé. Un badge par calque, empilés.
+   Posés à droite du panneau et de sa poignée de repli : à 12 px du bord, ils
+   masquaient le titre du panneau. */
+.reference-badges {
   position: fixed;
   top: 12px;
-  left: 12px;
+  left: calc(var(--panel-width) + 40px);
   z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  transition: left var(--transition-normal);
+}
+
+body:has(.app-container.is-collapsed) .reference-badges {
+  left: 40px;
+}
+
+.reference-badge {
   display: flex;
   align-items: center;
   gap: 0.55rem;

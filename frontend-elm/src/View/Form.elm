@@ -377,7 +377,7 @@ viewSavedRoutesSection model =
             , attribute "role" "list"
             , attribute "aria-label" "Itinéraires enregistrés"
             ]
-            (List.indexedMap (viewSavedRoute model.referenceRouteId ids) model.savedRoutes)
+            (List.indexedMap (viewSavedRoute model.referenceRoutes ids) model.savedRoutes)
 
 
 {-| Une entrée de la liste des itinéraires, sur une seule ligne.
@@ -387,8 +387,8 @@ chiffres et quatre boutons toujours visibles. Quinze itinéraires faisaient donc
 2 550 px dans un panneau haut de 950, soit cinq visibles à la fois. La
 description part dans l'infobulle et les actions n'apparaissent qu'au survol.
 -}
-viewSavedRoute : Maybe Int -> List Int -> Int -> SavedRoute -> Html Msg
-viewSavedRoute referenceRouteId ids index route =
+viewSavedRoute : Dict.Dict Int ReferenceLayer -> List Int -> Int -> SavedRoute -> Html Msg
+viewSavedRoute referenceRoutes ids index route =
     let
         dernier =
             List.length ids - 1
@@ -404,7 +404,7 @@ viewSavedRoute referenceRouteId ids index route =
     div
         [ classList
             [ ( "route-row", True )
-            , ( "is-reference", referenceRouteId == Just route.id )
+            , ( "is-reference", Dict.member route.id referenceRoutes )
             ]
         , attribute "role" "listitem"
         , title (Maybe.withDefault route.name route.description)
@@ -460,7 +460,7 @@ viewSavedRoute referenceRouteId ids index route =
                 [ type_ "button"
                 , classList
                     [ ( "action-layer", True )
-                    , ( "active", referenceRouteId == Just route.id )
+                    , ( "active", Dict.member route.id referenceRoutes )
                     ]
                 , onClick (ToggleReferenceRoute route.id)
                 , title "Afficher en calque sur la carte, sans remplacer le tracé courant"

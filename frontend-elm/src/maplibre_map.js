@@ -417,9 +417,9 @@ function ensureMap() {
     });
 
     // Add route source (will be populated later)
-    // Calque de référence : un itinéraire enregistré affiché en surimpression,
-    // pour comparer le tracé courant à un balisage officiel. Déclaré avant la
-    // route pour rester dessous.
+    // Calques de référence : des itinéraires enregistrés affichés en
+    // surimpression, chacun de sa couleur, pour comparer le tracé courant.
+    // Déclarés avant la route pour rester dessous.
     mapInstance.addSource('reference', {
       type: 'geojson',
       data: { type: 'FeatureCollection', features: [] }
@@ -431,7 +431,7 @@ function ensureMap() {
       source: 'reference',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: {
-        'line-color': mapColor('--map-reference'),
+        'line-color': ['get', 'color'],
         // Plus large que le tracé courant et son contour blanc réunis (6 px) :
         // posé dessous à largeur égale, le calque disparaissait dès que les
         // deux lignes passaient à moins de 500 m l'une de l'autre. En
@@ -551,6 +551,7 @@ function ensureMap() {
       }
     });
     _applyDirectOverlay();
+    _applyReferenceRoutes();
 
     console.debug('[maplibre] Map loaded with terrain support');
   });
@@ -1519,39 +1520,43 @@ export function setElevationHoverMarker(coord) {
   }
 }
 
+let currentReferenceRoutes = [];
+
 /**
- * Itinéraire de référence en surimpression (tirets dorés), ou null pour l'effacer.
+ * Itinéraires en surimpression ([{ path, color }]), liste vide pour tout effacer.
+ * Redessinés aussi quand la carte finit de charger, s'ils arrivent avant.
  */
-export function setReferenceRoute(coords) {
+export function setReferenceRoutes(routes) {
   ensureMap();
-
-  const source = mapInstance.getSource('reference');
-  if (!source) {
-    console.warn('[maplibre] reference source not ready');
-    return;
+  const added = routes.length > currentReferenceRoutes.length;
+  currentReferenceRoutes = routes;
+  if (_applyReferenceRoutes() && added) {
+    _frameReferenceRoutes();
   }
+}
 
-  if (!Array.isArray(coords) || coords.length < 2) {
-    source.setData({ type: 'FeatureCollection', features: [] });
-    return;
-  }
-
-  const line = coords.map((c) => [c.lon, c.lat]);
+function _applyReferenceRoutes() {
+  const source = mapInstance && mapInstance.getSource('reference');
+  if (!source) return false;
 
   source.setData({
     type: 'FeatureCollection',
-    features: [{
-      type: 'Feature',
-      properties: {},
-      geometry: { type: 'LineString', coordinates: line }
-    }]
+    features: currentReferenceRoutes
+      .filter((route) => route.path.length >= 2)
+      .map((route) => ({
+        type: 'Feature',
+        properties: { color: route.color },
+        geometry: { type: 'LineString', coordinates: route.path.map((c) => [c.lon, c.lat]) }
+      }))
   });
+  return true;
+}
 
-  // Cadrer sur l'ensemble calque + tracé courant. Le calque déborde presque
-  // toujours de l'itinéraire affiché — un GR entier contre une de ses
-  // sections — et rien ne signalait qu'il continuait hors écran.
-  const bounds = new maplibregl.LngLatBounds(line[0], line[0]);
-  line.forEach((point) => bounds.extend(point));
+// Cadrer sur l'ensemble calques + tracé courant. Un calque déborde presque
+// toujours de l'itinéraire affiché — un GR entier contre une de ses
+// sections — et rien ne signalait qu'il continuait hors écran.
+function _frameReferenceRoutes() {
+  const points = currentReferenceRoutes.flatMap((route) => route.path.map((c) => [c.lon, c.lat]));
 
   const route = mapInstance.getSource('route');
   const routeData = route && (route.serialize ? route.serialize().data : route._data);
@@ -1560,10 +1565,13 @@ export function setReferenceRoute(coords) {
     && routeData.features[0]
     && routeData.features[0].geometry.coordinates;
   if (routeLine) {
-    routeLine.forEach((point) => bounds.extend(point));
+    points.push(...routeLine);
   }
+  if (points.length === 0) return;
 
-  mapInstance.fitBounds(bounds, { padding: 60, duration: 800 });
+  const bounds = new maplibregl.LngLatBounds(points[0], points[0]);
+  points.forEach((point) => bounds.extend(point));
+  mapInstance.fitBounds(bounds, { padding: margesDesCalques(), duration: 800 });
 }
 
 export function toggleSatelliteView(enabled) {
