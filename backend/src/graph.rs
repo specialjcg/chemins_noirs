@@ -1855,9 +1855,15 @@ impl UnionFind {
 /// then remaps edges to representative nodes, removes self-loops and
 /// deduplicates parallel edges (keeping the shortest).
 fn merge_close_nodes(edges: Vec<EdgeRecord>, node_state: &NodeCollectionState) -> Vec<EdgeRecord> {
+    // Seuls les bouts de tronçons sont candidats. Les autres points ne sont
+    // que de la géométrie, souvent espacée de moins de 10 m : la fusion,
+    // transitive, soudait de proche en proche tout un sentier en un seul nœud,
+    // et les jonctions qu'il portait disparaissaient avec ses tronçons.
+    let endpoints: std::collections::HashSet<u64> = edges.iter().flat_map(|e| [e.from, e.to]).collect();
+
     // Build grid index: cell -> list of (graph_id, lat, lon)
     let mut grid: HashMap<(i64, i64), Vec<(u64, f64, f64)>> = HashMap::new();
-    for node in &node_state.nodes {
+    for node in node_state.nodes.iter().filter(|n| endpoints.contains(&n.id)) {
         let cell = (
             (node.lat * 10_000.0).round() as i64,
             (node.lon * 10_000.0).round() as i64,
@@ -1960,6 +1966,42 @@ fn merge_close_nodes(edges: Vec<EdgeRecord>, node_state: &NodeCollectionState) -
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn merging_keeps_a_densely_drawn_track_and_its_junction() {
+        use super::*;
+
+        // Un sentier tracé point par point tous les ~5 m sur 100 m (ids 1 à
+        // 21), avec une jonction au milieu (id 11) vers un chemin qui part à
+        // 200 m (id 100). Seuls 1, 11, 21 et 100 sont des nœuds du graphe ;
+        // les autres ne sont que de la géométrie.
+        let node = |id: u64, lat: f64, lon: f64| NodeRecord { id, lat, lon, elevation: None, population_density: 0.0 };
+        let mut nodes: Vec<NodeRecord> =
+            (1..=21).map(|i| node(i, 45.0 + (i - 1) as f64 * 0.000045, 5.0)).collect();
+        nodes.push(node(100, 45.00045, 5.0025));
+        let state = NodeCollectionState {
+            coords: nodes.iter().map(|n| Coordinate { lat: n.lat, lon: n.lon }).collect(),
+            nodes,
+            osm_to_graph_id: HashMap::new(),
+        };
+        let edge = |from: u64, to: u64| EdgeRecord {
+            from,
+            to,
+            surface: SurfaceType::Trail,
+            length_m: 50.0,
+            waypoints: vec![],
+            forest_ratio: 0.0,
+            habitation_pressure: 0.0,
+        };
+
+        let merged = merge_close_nodes(vec![edge(1, 11), edge(11, 21), edge(11, 100)], &state);
+
+        // De proche en proche, les points de géométrie soudaient tout le
+        // sentier en un seul nœud : ses deux tronçons devenaient des boucles
+        // et disparaissaient, la jonction avec eux.
+        assert_eq!(merged.len(), 3, "tronçons perdus à la fusion : {:?}",
+            merged.iter().map(|e| (e.from, e.to)).collect::<Vec<_>>());
+    }
 
     #[test]
     fn apply_landcover_sees_a_hamlet_in_the_middle_of_an_edge() {
