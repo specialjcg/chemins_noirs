@@ -79,12 +79,15 @@ fetchLoopRoute request toMsg =
 {-| Chaque déplacement de point relance le calcul : la requête précédente est
 abandonnée, sa réponse ne serait jamais affichée. Le backend, voyant arriver
 la nouvelle, lâche aussi la construction de graphe qu'il menait pour elle.
+
+Elm exécute les commandes d'un batch à rebours : `Http.cancel` vient donc
+après la requête dans la liste, pour tuer l'ancienne et non la nouvelle.
+
 -}
 fetchMultiPointRoute : MultiPointRouteRequest -> (Result Http.Error RouteResponse -> msg) -> Cmd msg
 fetchMultiPointRoute request toMsg =
     Cmd.batch
-        [ Http.cancel multiPointRouteTracker
-        , Http.request
+        [ Http.request
             { method = "POST"
             , headers = []
             , url = apiRoot ++ "/multi"
@@ -93,6 +96,7 @@ fetchMultiPointRoute request toMsg =
             , timeout = Nothing
             , tracker = Just multiPointRouteTracker
             }
+        , Http.cancel multiPointRouteTracker
         ]
 
 
