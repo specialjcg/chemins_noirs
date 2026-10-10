@@ -4,7 +4,10 @@ use std::{
     io::{self, BufReader, BufWriter, Write},
     num::NonZeroUsize,
     path::Path,
-    sync::RwLock,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
 };
 
 use lru::LruCache;
@@ -343,6 +346,8 @@ pub enum GraphBuildError {
     Parse(#[from] serde_json::Error),
     #[error("graph contains no nodes")]
     EmptyGraph,
+    #[error("construction annulée")]
+    Cancelled,
 }
 
 #[derive(Default)]
@@ -352,6 +357,8 @@ pub struct GraphBuilderConfig {
 
 pub struct GraphBuilder {
     config: GraphBuilderConfig,
+    /// Levé de l'extérieur pour abandonner une construction devenue inutile.
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 // Internal helper struct for node data before final ID assignment
@@ -418,7 +425,27 @@ struct FilteredPbfData {
 
 impl GraphBuilder {
     pub fn new(config: GraphBuilderConfig) -> Self {
-        Self { config }
+        Self { config, cancel: None }
+    }
+
+    /// Construction abandonnée dès que `flag` passe à vrai, avec
+    /// `GraphBuildError::Cancelled`. Seule la lecture filtrée du PBF le
+    /// consulte : c'est elle qui prend les minutes.
+    pub fn cancellable(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(flag);
+        self
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
+
+    fn check_cancelled(&self) -> Result<(), GraphBuildError> {
+        if self.is_cancelled() {
+            Err(GraphBuildError::Cancelled)
+        } else {
+            Ok(())
+        }
     }
 
     /// Build graph from PBF with optional caching
@@ -459,6 +486,7 @@ impl GraphBuilder {
 
         // PASS 1: Read PBF once and collect all relevant elements in memory
         let filtered_data = self.filter_pbf_to_memory(path, bbox)?;
+        self.check_cancelled()?;
 
         tracing::info!(
             "Filtered data: {} nodes, {} ways (in-memory)",
@@ -860,6 +888,11 @@ impl GraphBuilder {
         // Collect as Vec of Options — avoids 13M empty HashMap/Vec allocations
         let (node_entries, ways_data): (Vec<NodeEntry>, Vec<OsmWay>) = reader.par_map_reduce(
             |element| -> (Vec<NodeEntry>, Vec<OsmWay>) {
+                // Le lecteur parcourt la France entière sans pouvoir s'arrêter :
+                // une fois annulé, on laisse filer les éléments sans les lire.
+                if self.is_cancelled() {
+                    return (Vec::new(), Vec::new());
+                }
                 match element {
                     Element::Node(node) => {
                         let lat = node.lat();
@@ -923,6 +956,8 @@ impl GraphBuilder {
             },
         )?;
 
+        self.check_cancelled()?;
+
         // Build HashMap once from collected entries
         let nodes_in_bbox: NodeCoordMap = node_entries.into_iter().collect();
 
@@ -977,6 +1012,9 @@ impl GraphBuilder {
         let reader2 = ElementReader::from_path(path)?;
         let missing_entries: Vec<NodeEntry> = reader2.par_map_reduce(
             |element| -> Vec<NodeEntry> {
+                if self.is_cancelled() {
+                    return Vec::new();
+                }
                 match element {
                     Element::Node(node) => {
                         if missing_node_ids.contains(&node.id()) {

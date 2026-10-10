@@ -76,13 +76,29 @@ fetchLoopRoute request toMsg =
 -- FETCH MULTI-POINT ROUTE
 
 
+{-| Chaque déplacement de point relance le calcul : la requête précédente est
+abandonnée, sa réponse ne serait jamais affichée. Le backend, voyant arriver
+la nouvelle, lâche aussi la construction de graphe qu'il menait pour elle.
+-}
 fetchMultiPointRoute : MultiPointRouteRequest -> (Result Http.Error RouteResponse -> msg) -> Cmd msg
 fetchMultiPointRoute request toMsg =
-    Http.post
-        { url = apiRoot ++ "/multi"
-        , body = Http.jsonBody (encodeMultiPointRouteRequest request)
-        , expect = Http.expectJson toMsg decodeRouteResponse
-        }
+    Cmd.batch
+        [ Http.cancel multiPointRouteTracker
+        , Http.request
+            { method = "POST"
+            , headers = []
+            , url = apiRoot ++ "/multi"
+            , body = Http.jsonBody (encodeMultiPointRouteRequest request)
+            , expect = Http.expectJson toMsg decodeRouteResponse
+            , timeout = Nothing
+            , tracker = Just multiPointRouteTracker
+            }
+        ]
+
+
+multiPointRouteTracker : String
+multiPointRouteTracker =
+    "multi-point-route"
 
 
 

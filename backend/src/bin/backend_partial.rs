@@ -1,4 +1,11 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use axum::{extract::State, http::StatusCode, Json};
 use backend::{
@@ -8,7 +15,7 @@ use backend::{
     engine::RouteEngine,
     landcover::LandCoverGrid,
     geo_utils::fold_overlap,
-    graph::{BoundingBox, GraphBuilder, GraphBuilderConfig, GraphFile},
+    graph::{BoundingBox, GraphBuildError, GraphBuilder, GraphBuilderConfig, GraphFile},
     loops::{self, LoopGenerationError},
     models::{Coordinate, LoopRouteRequest, LoopRouteResponse, Obstacle, ObstacleKind, RouteRequest},
     partial_graph::PartialGraphConfig,
@@ -32,34 +39,103 @@ struct CachedEngine {
 static ENGINE_CACHE: std::sync::LazyLock<tokio::sync::RwLock<Option<CachedEngine>>> =
     std::sync::LazyLock::new(|| tokio::sync::RwLock::new(None));
 
+/// Une seule construction de graphe à la fois. Elle lit le PBF de la France
+/// entière pendant des minutes : deux en parallèle se disputent le disque et
+/// les cœurs, et la seconde refait presque toujours le travail de la première.
+/// En attendant son tour, une requête trouve le plus souvent le moteur prêt.
+static BUILD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Construction en cours, pour qu'une requête d'itinéraire plus récente
+/// puisse abandonner celle d'une plus ancienne qui ne lui servira pas.
+struct RunningBuild {
+    bbox: BoundingBox,
+    cancel: Arc<AtomicBool>,
+    /// Lancée par une requête d'itinéraire, donc remplaçable. Les autres
+    /// (revêtements, boucles…) ne sont jamais annulées.
+    replaceable: bool,
+}
+
+static RUNNING_BUILD: std::sync::Mutex<Option<RunningBuild>> = std::sync::Mutex::new(None);
+
+/// Numéro de la dernière requête d'itinéraire multipoint reçue. Chaque
+/// déplacement de point en émet une : seule la plus récente compte.
+static ROUTE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn is_stale(generation: Option<u64>) -> bool {
+    generation.is_some_and(|g| g != ROUTE_GENERATION.load(Ordering::SeqCst))
+}
+
+fn superseded() -> (StatusCode, String) {
+    (
+        StatusCode::CONFLICT,
+        "requête remplacée par une plus récente".to_string(),
+    )
+}
+
+async fn cached_engine_covering(needed_bbox: &BoundingBox) -> Option<(Arc<RouteEngine>, BoundingBox)> {
+    let guard = ENGINE_CACHE.read().await;
+    let cached = guard.as_ref()?;
+    cached.bbox.contains_bbox(needed_bbox).then(|| {
+        tracing::info!("PERF ENGINE_CACHE HIT — reusing in-memory engine");
+        (Arc::clone(&cached.engine), cached.bbox)
+    })
+}
+
 /// Build or reuse an engine for the given bbox.
 /// On cache miss, builds with generous padding so nearby future requests hit.
+///
+/// `generation` : numéro de la requête d'itinéraire qui appelle, `None` pour
+/// les autres. Une requête numérotée abandonne la construction remplaçable en
+/// cours si elle ne couvre pas son emprise, et répond 409 dès qu'une plus
+/// récente est arrivée.
 async fn get_or_build_engine(
     config: &Arc<PartialGraphConfig>,
     needed_bbox: BoundingBox,
+    generation: Option<u64>,
 ) -> Result<(Arc<RouteEngine>, BoundingBox), (StatusCode, String)> {
     // Fast path: check if cached engine covers the needed bbox
-    {
-        let guard = ENGINE_CACHE.read().await;
-        if let Some(cached) = guard.as_ref() {
-            if cached.bbox.contains_bbox(&needed_bbox) {
-                tracing::info!("PERF ENGINE_CACHE HIT — reusing in-memory engine");
-                return Ok((Arc::clone(&cached.engine), cached.bbox));
+    if let Some(hit) = cached_engine_covering(&needed_bbox).await {
+        return Ok(hit);
+    }
+
+    if generation.is_some() {
+        if let Some(running) = RUNNING_BUILD.lock().unwrap().as_ref() {
+            if running.replaceable && !running.bbox.contains_bbox(&needed_bbox) {
+                tracing::info!("construction en cours abandonnée : emprise d'une requête plus ancienne");
+                running.cancel.store(true, Ordering::Relaxed);
             }
         }
+    }
+
+    let _build = BUILD_LOCK.lock().await;
+    if is_stale(generation) {
+        return Err(superseded());
+    }
+    // Construit par la requête qu'on attendait ?
+    if let Some(hit) = cached_engine_covering(&needed_bbox).await {
+        return Ok(hit);
     }
 
     // Cache miss: build graph with generous bbox (2x padding)
     let padded_bbox = pad_bbox(&needed_bbox);
     tracing::info!("PERF ENGINE_CACHE MISS — building engine for padded bbox: {:?}", padded_bbox);
 
+    let cancel = Arc::new(AtomicBool::new(false));
+    *RUNNING_BUILD.lock().unwrap() = Some(RunningBuild {
+        bbox: padded_bbox,
+        cancel: Arc::clone(&cancel),
+        replaceable: generation.is_some(),
+    });
+
     let t_graph = std::time::Instant::now();
     let config_clone = config.clone();
-    let graph = tokio::task::spawn_blocking(move || {
-        prepare_graph_for_bbox(&config_clone, padded_bbox)
+    let built = tokio::task::spawn_blocking(move || {
+        prepare_graph_for_bbox(&config_clone, padded_bbox, &cancel)
     })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task spawn error: {}", e)))??;
+    .await;
+    *RUNNING_BUILD.lock().unwrap() = None;
+    let graph = built
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task spawn error: {}", e)))??;
     tracing::info!(
         "PERF graph: {:.0}ms ({} nodes, {} edges)",
         t_graph.elapsed().as_secs_f64() * 1000.0,
@@ -126,13 +202,21 @@ fn pad_bbox(bbox: &BoundingBox) -> BoundingBox {
     let cos_lat = avg_lat.to_radians().cos().abs().max(0.1);
     let lon_pad = (lon_span * 0.2).max(min_pad_km / (111.0 * cos_lat));
 
+    // Calée vers l'extérieur sur une grille : deux requêtes aux emprises
+    // presque identiques (le tracé et ses revêtements) partagent la même
+    // emprise, donc le même graphe en cache disque.
+    let down = |v: f64| (v / BBOX_GRID_DEG).floor() * BBOX_GRID_DEG;
+    let up = |v: f64| (v / BBOX_GRID_DEG).ceil() * BBOX_GRID_DEG;
     BoundingBox {
-        min_lat: (bbox.min_lat - lat_pad).max(-90.0),
-        max_lat: (bbox.max_lat + lat_pad).min(90.0),
-        min_lon: (bbox.min_lon - lon_pad).clamp(-180.0, 180.0),
-        max_lon: (bbox.max_lon + lon_pad).clamp(-180.0, 180.0),
+        min_lat: down(bbox.min_lat - lat_pad).max(-90.0),
+        max_lat: up(bbox.max_lat + lat_pad).min(90.0),
+        min_lon: down(bbox.min_lon - lon_pad).clamp(-180.0, 180.0),
+        max_lon: up(bbox.max_lon + lon_pad).clamp(-180.0, 180.0),
     }
 }
+
+/// Pas de la grille sur laquelle `pad_bbox` cale les emprises : ~1,1 km.
+const BBOX_GRID_DEG: f64 = 0.01;
 
 /// Handler for /api/plan-stages — compute optimal daily stages from lodgings
 async fn plan_stages_handler(
@@ -220,7 +304,7 @@ async fn route_handler(
     // Calculate bounding box with margin for the route
     let bbox = BoundingBox::from_route(req.start, req.end, 5.0);
 
-    let (engine, _) = get_or_build_engine(&config, bbox).await?;
+    let (engine, _) = get_or_build_engine(&config, bbox, None).await?;
 
     let t_path = std::time::Instant::now();
     match engine.find_path_with_surfaces(&req) {
@@ -311,7 +395,7 @@ async fn loop_route_handler(
     let radius = (req.target_distance_km / 2.0).max(2.0) * 1.4 + req.distance_tolerance_km.max(1.0);
     let bbox = bbox_from_center(req.start, radius);
 
-    let (engine, _) = get_or_build_engine(&config, bbox).await?;
+    let (engine, _) = get_or_build_engine(&config, bbox, None).await?;
 
     let t_loops = std::time::Instant::now();
     match loops::generate_loops(&engine, &req).await {
@@ -363,7 +447,7 @@ async fn surfaces_handler(
 
     let t0 = std::time::Instant::now();
     let bbox = bbox_with_margin(&req.path);
-    let (engine, _) = get_or_build_engine(&config, bbox).await?;
+    let (engine, _) = get_or_build_engine(&config, bbox, None).await?;
 
     let point_surfaces = engine.surfaces_along(&req.path);
     let unpaved = point_surfaces.iter().filter(|&&paved| !paved).count();
@@ -511,6 +595,7 @@ async fn multi_route_handler(
     Json(req): Json<MultiPointRouteRequest>,
 ) -> Result<Json<RouteResponse>, (StatusCode, String)> {
     let t_total = std::time::Instant::now();
+    let generation = ROUTE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     if req.waypoints.len() < 2 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -608,7 +693,12 @@ async fn multi_route_handler(
             chunk_start + 1,
             chunk_end + 1
         );
-        let (engine, engine_bbox) = get_or_build_engine(&config, bbox).await?;
+        let (engine, engine_bbox) = get_or_build_engine(&config, bbox, Some(generation)).await?;
+        // Moteur obtenu après une longue attente : si le marcheur a déplacé un
+        // point entre-temps, ce tracé ne sera jamais affiché.
+        if is_stale(Some(generation)) {
+            return Err(superseded());
+        }
         let landcover = if (chunk_start..chunk_end).any(is_direct) {
             landcover_for(&config, engine_bbox).await
         } else {
@@ -1114,6 +1204,7 @@ fn attach_landcover(
 fn prepare_graph_for_bbox(
     config: &PartialGraphConfig,
     bbox: BoundingBox,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<GraphFile, (StatusCode, String)> {
     let t0 = std::time::Instant::now();
     let cache_key = bbox.cache_key();
@@ -1183,13 +1274,18 @@ fn prepare_graph_for_bbox(
     // Fallback to PBF-based generation (SLOW - ~2min)
     tracing::info!("Generating partial graph from PBF for bbox: {:?}", bbox);
     let builder_config = GraphBuilderConfig { bbox: Some(bbox) };
-    let builder = GraphBuilder::new(builder_config);
-    let mut graph = builder.build_from_pbf(&config.pbf_path).map_err(|e| {
-        (
+    let builder = GraphBuilder::new(builder_config).cancellable(Arc::clone(cancel));
+    let mut graph = builder.build_from_pbf(&config.pbf_path).map_err(|e| match e {
+        GraphBuildError::Cancelled => superseded(),
+        e => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to build graph: {}", e),
-        )
+        ),
     })?;
+    // L'occupation du sol relit le PBF : inutile si la requête a été remplacée.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(superseded());
+    }
     attach_landcover(&mut graph, &config.pbf_path, &config.cache_dir, &bbox, &cache_key);
     std::fs::create_dir_all(&config.cache_dir).ok();
     graph.write_to_path(&cache_path).ok();
@@ -1220,6 +1316,18 @@ mod tests {
 
     fn c(lat: f64, lon: f64) -> Coordinate {
         Coordinate { lat, lon }
+    }
+
+    #[test]
+    fn nearly_identical_bboxes_pad_to_the_same_cache_key() {
+        // Le tracé et ses revêtements, au parc national : 4 µ° d'écart.
+        let route = BoundingBox { min_lat: 47.85, max_lat: 48.05, min_lon: 4.787839, max_lon: 5.153211 };
+        let surfaces = BoundingBox { min_lon: 4.787799, max_lon: 5.153448, ..route };
+
+        let (a, b) = (pad_bbox(&route), pad_bbox(&surfaces));
+
+        assert_eq!(a.cache_key(), b.cache_key());
+        assert!(a.contains_bbox(&route) && a.contains_bbox(&surfaces));
     }
 
     /// Coordinate has no PartialEq; compare the components.
