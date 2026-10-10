@@ -2852,7 +2852,7 @@ body:has(.app-container.is-collapsed) .reference-badges {
   flex: none;
   width: 22px;
   height: 0;
-  border-top: 4px dashed var(--accent-brass);
+  border-top: 4px solid var(--accent-brass);
 }
 
 .reference-badge-name {

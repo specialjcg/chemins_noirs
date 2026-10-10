@@ -1530,13 +1530,13 @@ referenceRoutesCmd model =
         |> Ports.setReferenceRoutes
 
 
-{-| Couleurs des calques, choisies loin du vert du tracé courant, de son
-orange non goudronné et du rouge des obstacles. Au-delà de la palette, on
+{-| Couleurs des calques : vives, pour trancher sur le vert et le beige de
+la carte topo, et loin du vert du tracé courant. Au-delà de la palette, on
 recommence au début.
 -}
 referencePalette : List String
 referencePalette =
-    [ "#c9a84c", "#7a5ea8", "#3a7ca5", "#b0457a", "#4fa3a0", "#8a6a3a" ]
+    [ "#1f6feb", "#d6336c", "#7048e8", "#0c8599", "#e8590c", "#212529" ]
 
 
 nextReferenceColor : Dict Int ReferenceLayer -> String
@@ -1552,7 +1552,7 @@ nextReferenceColor layers =
             (referencePalette
                 |> List.drop (modBy (List.length referencePalette) (Dict.size layers))
                 |> List.head
-                |> Maybe.withDefault "#c9a84c"
+                |> Maybe.withDefault "#1f6feb"
             )
 
 

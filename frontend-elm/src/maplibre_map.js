@@ -425,6 +425,20 @@ function ensureMap() {
       data: { type: 'FeatureCollection', features: [] }
     });
 
+    // Fin et plein, cerné de blanc : il se lit sur tous les fonds sans
+    // masquer la carte ni le tracé courant, qui passe par-dessus.
+    mapInstance.addLayer({
+      id: 'reference-line-halo',
+      type: 'line',
+      source: 'reference',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': '#ffffff',
+        'line-width': ['interpolate', ['linear'], ['zoom'], 8, 7, 16, 9],
+        'line-opacity': 0.9
+      }
+    });
+
     mapInstance.addLayer({
       id: 'reference-line',
       type: 'line',
@@ -432,13 +446,8 @@ function ensureMap() {
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: {
         'line-color': ['get', 'color'],
-        // Plus large que le tracé courant et son contour blanc réunis (6 px) :
-        // posé dessous à largeur égale, le calque disparaissait dès que les
-        // deux lignes passaient à moins de 500 m l'une de l'autre. En
-        // débordant, il se lit comme un surlignage même là où elles coïncident.
-        'line-width': ['interpolate', ['linear'], ['zoom'], 8, 10, 12, 16, 16, 22],
-        'line-opacity': 0.75,
-        'line-dasharray': [1.6, 1]
+        'line-width': ['interpolate', ['linear'], ['zoom'], 8, 3, 16, 5],
+        'line-opacity': 0.9
       }
     });
 
