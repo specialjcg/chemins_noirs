@@ -36,8 +36,15 @@ struct CachedEngine {
     bbox: BoundingBox,
 }
 
-static ENGINE_CACHE: std::sync::LazyLock<tokio::sync::RwLock<Option<CachedEngine>>> =
-    std::sync::LazyLock::new(|| tokio::sync::RwLock::new(None));
+/// Plusieurs moteurs gardés à la fois, le plus récemment servi en tête.
+///
+/// Avec un seul, ouvrir un itinéraire enregistré ailleurs chassait le moteur
+/// du tracé en cours : le point suivant qu'on retirait coûtait une nouvelle
+/// construction de plusieurs minutes.
+const ENGINE_CACHE_SLOTS: usize = 3;
+
+static ENGINE_CACHE: std::sync::LazyLock<tokio::sync::RwLock<Vec<CachedEngine>>> =
+    std::sync::LazyLock::new(|| tokio::sync::RwLock::new(Vec::new()));
 
 /// Une seule construction de graphe à la fois. Elle lit le PBF de la France
 /// entière pendant des minutes : deux en parallèle se disputent le disque et
@@ -73,12 +80,60 @@ fn superseded() -> (StatusCode, String) {
 }
 
 async fn cached_engine_covering(needed_bbox: &BoundingBox) -> Option<(Arc<RouteEngine>, BoundingBox)> {
-    let guard = ENGINE_CACHE.read().await;
-    let cached = guard.as_ref()?;
-    cached.bbox.contains_bbox(needed_bbox).then(|| {
-        tracing::info!("PERF ENGINE_CACHE HIT — reusing in-memory engine");
-        (Arc::clone(&cached.engine), cached.bbox)
-    })
+    let mut guard = ENGINE_CACHE.write().await;
+    let at = guard.iter().position(|cached| cached.bbox.contains_bbox(needed_bbox))?;
+    let cached = guard.remove(at);
+    let hit = (Arc::clone(&cached.engine), cached.bbox);
+    guard.insert(0, cached);
+    tracing::info!("PERF ENGINE_CACHE HIT — reusing in-memory engine");
+    Some(hit)
+}
+
+/// Graphe du cache disque qui couvre l'emprise demandée, le plus petit s'il y
+/// en a plusieurs.
+///
+/// Le nom d'un graphe dérive de son emprise exacte : une requête à peine
+/// décalée ne le retrouvait pas et refaisait plusieurs minutes de lecture du
+/// PBF pour une zone déjà construite. Chaque graphe laisse donc son emprise
+/// dans un fichier `.bbox` à côté de lui.
+fn disk_graph_covering(cache_dir: &std::path::Path, needed: &BoundingBox) -> Option<BoundingBox> {
+    std::fs::read_dir(cache_dir)
+        .ok()?
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            if path.extension()? != "bbox" {
+                return None;
+            }
+            let bbox = parse_bbox(&std::fs::read_to_string(&path).ok()?)?;
+            graph_cache_path(cache_dir, &bbox).exists().then_some(bbox)
+        })
+        .filter(|bbox| bbox.contains_bbox(needed))
+        .min_by(|a, b| bbox_area(a).total_cmp(&bbox_area(b)))
+}
+
+fn graph_cache_path(cache_dir: &std::path::Path, bbox: &BoundingBox) -> std::path::PathBuf {
+    // `graph-v2_` : les graphes antérieurs ignorent les voies `highway=road`,
+    // les traits gris des lisières ; `graph-v3_` : les `v2` tiennent les
+    // `track` `grade1` pour goudronnés ; `graph-v4_` : les `v3` ont fusionné
+    // les points de géométrie entre eux et perdu des jonctions de sentiers.
+    // Changer le nom les met hors circuit.
+    cache_dir.join(format!("graph-v4_{}.bin", bbox.cache_key()))
+}
+
+fn bbox_sidecar_path(cache_dir: &std::path::Path, bbox: &BoundingBox) -> std::path::PathBuf {
+    graph_cache_path(cache_dir, bbox).with_extension("bbox")
+}
+
+fn parse_bbox(text: &str) -> Option<BoundingBox> {
+    let v: Vec<f64> = text.trim().split(',').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    match v[..] {
+        [min_lat, max_lat, min_lon, max_lon] => Some(BoundingBox { min_lat, max_lat, min_lon, max_lon }),
+        _ => None,
+    }
+}
+
+fn bbox_area(b: &BoundingBox) -> f64 {
+    (b.max_lat - b.min_lat) * (b.max_lon - b.min_lon)
 }
 
 /// Build or reuse an engine for the given bbox.
@@ -116,8 +171,10 @@ async fn get_or_build_engine(
         return Ok(hit);
     }
 
-    // Cache miss: build graph with generous bbox (2x padding)
-    let padded_bbox = pad_bbox(&needed_bbox);
+    // Pas en mémoire : un graphe déjà construit qui couvre la zone, sinon une
+    // emprise élargie pour que les requêtes voisines tombent dedans.
+    let padded_bbox = disk_graph_covering(&config.cache_dir, &needed_bbox)
+        .unwrap_or_else(|| pad_bbox(&needed_bbox));
     tracing::info!("PERF ENGINE_CACHE MISS — building engine for padded bbox: {:?}", padded_bbox);
 
     let cancel = Arc::new(AtomicBool::new(false));
@@ -136,6 +193,12 @@ async fn get_or_build_engine(
     *RUNNING_BUILD.lock().unwrap() = None;
     let graph = built
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Task spawn error: {}", e)))??;
+    let b = padded_bbox;
+    std::fs::write(
+        bbox_sidecar_path(&config.cache_dir, &b),
+        format!("{},{},{},{}", b.min_lat, b.max_lat, b.min_lon, b.max_lon),
+    )
+    .ok();
     tracing::info!(
         "PERF graph: {:.0}ms ({} nodes, {} edges)",
         t_graph.elapsed().as_secs_f64() * 1000.0,
@@ -157,10 +220,11 @@ async fn get_or_build_engine(
     // Store in cache
     {
         let mut guard = ENGINE_CACHE.write().await;
-        *guard = Some(CachedEngine {
+        guard.insert(0, CachedEngine {
             engine: Arc::clone(&engine),
             bbox: padded_bbox,
         });
+        guard.truncate(ENGINE_CACHE_SLOTS);
         tracing::info!("PERF ENGINE_CACHE stored (padded bbox: {:?})", padded_bbox);
     }
 
@@ -683,8 +747,8 @@ async fn multi_route_handler(
 
     let t_pathfinding = std::time::Instant::now();
     for (chunk_idx, &(chunk_start, chunk_end)) in chunks.iter().enumerate() {
-        // One graph per chunk. ENGINE_CACHE holds a single entry, so each chunk
-        // evicts the previous one; chunks are routed in order and appended.
+        // One graph per chunk. ENGINE_CACHE keeps the most recent few, so a long
+        // route may evict older ones; chunks are routed in order and appended.
         let bbox = bbox_with_margin(&points[chunk_start..=chunk_end]);
         tracing::info!(
             "Chunk {}/{}: waypoints {}..={}",
@@ -741,12 +805,14 @@ async fn multi_route_handler(
                     }
 
                     // Coudre le segment au précédent : si l'un descend chercher
-                    // le point d'étape au bout d'une branche et que l'autre en
+                    // une ancre insérée au bout d'une branche et que l'autre en
                     // remonte, la ligne se replie sur elle-même. Seule la
                     // jonction peut le voir.
+                    // Un point posé par le marcheur n'est jamais replié : y
+                    // aller puis revenir sur ses pas est un demi-tour voulu.
                     // Un tronçon direct est tiré tel quel : le replier le
                     // détournerait de la ligne que le marcheur a demandée.
-                    let (drop_tail, skip_head) = if direct_leg {
+                    let (drop_tail, skip_head) = if direct_leg || is_original[i] {
                         (0, 0)
                     } else {
                         fold_overlap(&all_coords, &path)
@@ -1208,10 +1274,7 @@ fn prepare_graph_for_bbox(
 ) -> Result<GraphFile, (StatusCode, String)> {
     let t0 = std::time::Instant::now();
     let cache_key = bbox.cache_key();
-    // `graph-v2_` : les graphes antérieurs ignorent les voies `highway=road`,
-    // les traits gris des lisières ; `graph-v3_` : les `v2` tiennent les
-    // `track` `grade1` pour goudronnés. Changer le nom les met hors circuit.
-    let cache_path = config.cache_dir.join(format!("graph-v3_{}.bin", cache_key));
+    let cache_path = graph_cache_path(&config.cache_dir, &bbox);
     // Témoin posé à côté du graphe une fois la couche d'occupation du sol
     // reportée dessus. Les graphes écrits avant que `prepare_graph_for_bbox`
     // ne l'applique portent `forest_ratio` et `population_density` à zéro :
@@ -1316,6 +1379,36 @@ mod tests {
 
     fn c(lat: f64, lon: f64) -> Coordinate {
         Coordinate { lat, lon }
+    }
+
+    #[test]
+    fn a_slightly_shifted_request_reuses_the_smallest_covering_graph_on_disk() {
+        let dir = std::env::temp_dir().join(format!("cn-disk-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bb = |min_lat, max_lat, min_lon, max_lon| BoundingBox { min_lat, max_lat, min_lon, max_lon };
+        let store = |b: BoundingBox| {
+            std::fs::write(graph_cache_path(&dir, &b), b"").unwrap();
+            std::fs::write(
+                bbox_sidecar_path(&dir, &b),
+                format!("{},{},{},{}", b.min_lat, b.max_lat, b.min_lon, b.max_lon),
+            )
+            .unwrap();
+        };
+        let large = bb(45.0, 47.0, 3.0, 6.0);
+        let small = bb(45.86, 46.0, 4.48, 4.67);
+        store(large);
+        store(small);
+        // Une emprise sans graphe : son `.bbox` seul ne doit pas compter.
+        let orphan = bb(45.9, 45.95, 4.5, 4.6);
+        std::fs::write(bbox_sidecar_path(&dir, &orphan), "45.9,45.95,4.5,4.6").unwrap();
+
+        let found = disk_graph_covering(&dir, &bb(45.87, 45.99, 4.5, 4.65));
+        let outside = disk_graph_covering(&dir, &bb(48.0, 48.1, 4.5, 4.6));
+        std::fs::remove_dir_all(&dir).ok();
+
+        let found = found.expect("graphe couvrant non trouvé");
+        assert_eq!(found.cache_key(), small.cache_key(), "pas le plus petit : {found:?}");
+        assert!(outside.is_none());
     }
 
     #[test]
