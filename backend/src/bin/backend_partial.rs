@@ -998,7 +998,9 @@ fn prepare_graph_for_bbox(
     // déjà construits soient repris au lieu d'être abandonnés ; et plutôt
     // qu'un test sur les valeurs, car une boîte sans le moindre bois donne
     // elle aussi des ratios nuls et serait reconstruite à chaque lecture.
-    let lc_marker = config.cache_dir.join(format!("{}.landcover", cache_key));
+    // `-v2` : la couche compte désormais les bâtiments et la pression d'habitat
+    // se mesure le long des tronçons ; un graphe marqué v1 doit être repris.
+    let lc_marker = config.cache_dir.join(format!("{}.landcover-v2", cache_key));
 
     // Check cache first
     if cache_path.exists() {

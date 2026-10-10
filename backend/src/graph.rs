@@ -122,6 +122,10 @@ pub struct EdgeRecord {
     /// Renseignée par `apply_landcover`; vaut 0 tant que la couche est absente.
     #[serde(default)]
     pub forest_ratio: f64,
+    /// Pression d'habitat moyenne le long du tronçon, dans `0.0..=1.0` (voir
+    /// `HabitationField::pressure`). Renseignée par `apply_landcover`.
+    #[serde(default)]
+    pub habitation_pressure: f64,
 }
 
 impl GraphFile {
@@ -580,6 +584,7 @@ impl GraphBuilder {
                         // Les tuiles pré-générées sont antérieures à la couche
                         // d'occupation du sol : rien à propager.
                         forest_ratio: 0.0,
+                        habitation_pressure: 0.0,
                     });
                 }
                 _ => {
@@ -650,6 +655,7 @@ impl GraphBuilder {
                     length_m: e.length_m,
                     waypoints: e.waypoints,
                     forest_ratio: e.forest_ratio,
+                    habitation_pressure: e.habitation_pressure,
                 })
             })
             .collect();
@@ -1153,6 +1159,7 @@ impl GraphBuilder {
                     surface: e.surface,
                     waypoints: e.waypoints,
                     forest_ratio: e.forest_ratio,
+                    habitation_pressure: e.habitation_pressure,
                 })
             })
             .collect();
@@ -1416,7 +1423,7 @@ pub fn load_or_build_landcover(
     bbox: &BoundingBox,
     cache_key: &str,
 ) -> Result<crate::landcover::LandCoverGrid, io::Error> {
-    let path = cache_dir.join(format!("landcover_{}.bin", cache_key));
+    let path = cache_dir.join(format!("landcover_v2_{}.bin", cache_key));
 
     if path.exists() {
         return crate::landcover::LandCoverGrid::read_from_path(&path);
@@ -1442,17 +1449,19 @@ pub fn load_or_build_landcover(
     Ok(grid)
 }
 
-/// Reporte l'occupation du sol sur le graphe : densité bâtie par nœud, part
-/// boisée par tronçon.
+/// Reporte l'occupation du sol sur le graphe : pression d'habitat par nœud,
+/// part boisée et pression d'habitat moyenne par tronçon.
 ///
 /// Les tronçons sont ré-échantillonnés tous les `FOREST_SAMPLE_M` : ne tester
 /// que leurs extrémités ferait passer pour boisé un chemin qui traverse une
-/// coupe, et inversement.
+/// coupe, et pour isolé un chemin qui longe un hameau en son milieu.
 pub fn apply_landcover(graph: &mut GraphFile, grid: &crate::landcover::LandCoverGrid) {
     const FOREST_SAMPLE_M: f64 = 50.0;
 
+    let habitation = grid.habitation_field();
+
     for node in graph.nodes.iter_mut() {
-        node.population_density = grid.built_density(node.lat, node.lon);
+        node.population_density = habitation.pressure(node.lat, node.lon);
     }
 
     let coords: HashMap<u64, Coordinate> = graph
@@ -1474,6 +1483,7 @@ pub fn apply_landcover(graph: &mut GraphFile, grid: &crate::landcover::LandCover
 
         let mut samples = 0.0;
         let mut in_forest = 0.0;
+        let mut pressure = 0.0;
 
         for pair in line.windows(2) {
             let steps = ((haversine_km(pair[0], pair[1]) * 1000.0 / FOREST_SAMPLE_M).ceil() as usize)
@@ -1488,10 +1498,12 @@ pub fn apply_landcover(graph: &mut GraphFile, grid: &crate::landcover::LandCover
                 if grid.is_forest(lat, lon) {
                     in_forest += 1.0;
                 }
+                pressure += habitation.pressure(lat, lon);
             }
         }
 
         edge.forest_ratio = if samples > 0.0 { in_forest / samples } else { 0.0 };
+        edge.habitation_pressure = if samples > 0.0 { pressure / samples } else { 0.0 };
     }
 }
 
@@ -1518,6 +1530,7 @@ fn create_edge_record(
         length_m: length_km * 1000.0,
         waypoints: Vec::new(), // No intermediate waypoints for now
         forest_ratio: 0.0,     // Renseigné plus tard par `apply_landcover`
+        habitation_pressure: 0.0,
     })
 }
 
@@ -1754,6 +1767,7 @@ fn build_edge_with_waypoints(
         length_m,
         waypoints,
         forest_ratio: 0.0, // Renseigné plus tard par `apply_landcover`
+        habitation_pressure: 0.0,
     })
 }
 
@@ -1902,6 +1916,47 @@ fn merge_close_nodes(edges: Vec<EdgeRecord>, node_state: &NodeCollectionState) -
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn apply_landcover_sees_a_hamlet_in_the_middle_of_an_edge() {
+        use crate::landcover::{Layer, LandCoverGrid};
+
+        let bbox = BoundingBox { min_lat: 47.0, max_lat: 47.02, min_lon: 2.0, max_lon: 2.04 };
+        let mut grid = LandCoverGrid::new(&bbox, 40.0);
+        // Hameau à mi-chemin du premier tronçon, à 1,5 km de chaque extrémité.
+        grid.fill_polygon(
+            &[(47.0095, 2.0195), (47.0095, 2.0205), (47.0105, 2.0205), (47.0105, 2.0195)],
+            Layer::Built,
+        );
+
+        let node = |id, lon| NodeRecord { id, lat: 47.01, lon, elevation: None, population_density: 0.0 };
+        let edge = |from, to, waypoints| EdgeRecord {
+            from,
+            to,
+            surface: SurfaceType::Dirt,
+            length_m: 1500.0,
+            waypoints,
+            forest_ratio: 0.0,
+            habitation_pressure: 0.0,
+        };
+        let mut graph = GraphFile {
+            nodes: vec![node(1, 2.0), node(2, 2.04), node(3, 2.0), node(4, 2.002)],
+            edges: vec![
+                edge(1, 2, vec![Coordinate { lat: 47.01, lon: 2.02 }]),
+                // Tronçon loin du hameau : 1,4 km au moins.
+                edge(3, 4, vec![]),
+            ],
+        };
+
+        apply_landcover(&mut graph, &grid);
+
+        assert!(
+            graph.edges[0].habitation_pressure > 0.1,
+            "le tronçon traverse le hameau : {}",
+            graph.edges[0].habitation_pressure
+        );
+        assert_eq!(graph.edges[1].habitation_pressure, 0.0);
+    }
     use super::*;
 
     fn tags(pairs: &[(&str, &str)]) -> Vec<(String, String)> {

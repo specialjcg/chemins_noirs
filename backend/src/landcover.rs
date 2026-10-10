@@ -2,8 +2,8 @@
 //!
 //! Le moteur ne sait éviter que le goudron : rien ne lui dit s'il traverse un
 //! bois ou un lotissement. Ce module rastérise deux couches OSM sur la bbox
-//! d'un itinéraire — boisement et emprise bâtie — en grilles de bits que l'on
-//! peut interroger en O(1) par coordonnée.
+//! d'un itinéraire — boisement et bâti (emprises et bâtiments) — en grilles de
+//! bits que l'on peut interroger en O(1) par coordonnée.
 //!
 //! On rastérise plutôt qu'on n'indexe les polygones : le graphe interroge la
 //! couche des dizaines de milliers de fois par calcul, et une grille de 40 m
@@ -29,10 +29,11 @@ pub const DEFAULT_RESOLUTION_M: f64 = 40.0;
 /// débordent. Un bois tronqué se rastériserait de travers.
 const POLYGON_MARGIN_DEG: f64 = 0.05;
 
-/// Demi-côté du voisinage échantillonné pour la densité bâtie, en cellules.
-/// 2 cellules à 40 m = un carré de 200 m, soit « le chemin longe le village »
-/// plutôt que « le chemin est dans le village ».
-const BUILT_NEIGHBOURHOOD: i64 = 2;
+/// Distance au bâti au-delà de laquelle une maison ne gêne plus.
+///
+/// La pression décroît linéairement de 1 sur le bâti à 0 à cette distance :
+/// une ferme vue à 150 m pèse encore, une à 700 m plus du tout.
+pub const HABITATION_REACH_M: f64 = 600.0;
 
 const M_PER_DEG_LAT: f64 = 111_320.0;
 
@@ -110,40 +111,58 @@ impl LandCoverGrid {
         }
     }
 
-    /// Fraction bâtie du voisinage du point, dans `0.0..=1.0`.
+    /// Le point tombe-t-il sur une cellule bâtie ? Hors grille répond `false`.
+    pub fn is_built(&self, lat: f64, lon: f64) -> bool {
+        match self.cell_of(lat, lon) {
+            Some((row, col)) => Self::get(&self.built, row * self.cols + col),
+            None => false,
+        }
+    }
+
+    /// Champ de distance au bâti, calculé une fois pour toute la grille.
     ///
-    /// C'est un dégradé et non un booléen : longer un lotissement doit coûter
-    /// moins cher que le traverser, sinon le moteur n'a aucune raison de
-    /// préférer la lisière.
-    pub fn built_density(&self, lat: f64, lon: f64) -> f64 {
-        let Some((row, col)) = self.cell_of(lat, lon) else {
-            return 0.0;
+    /// Chanfrein en deux passes, plafonné à `HABITATION_REACH_M` : au-delà la
+    /// pression est nulle et la distance exacte n'importe plus.
+    pub fn habitation_field(&self) -> HabitationField<'_> {
+        let cell_m = self.cell_lat * M_PER_DEG_LAT;
+        let reach = HABITATION_REACH_M as f32;
+        let (straight, diagonal) = (cell_m as f32, (cell_m * std::f64::consts::SQRT_2) as f32);
+
+        let mut dist: Vec<f32> = (0..self.rows * self.cols)
+            .map(|idx| if Self::get(&self.built, idx) { 0.0 } else { reach })
+            .collect();
+
+        let (rows, cols) = (self.rows as i64, self.cols as i64);
+        let relax = |dist: &mut Vec<f32>, row: i64, col: i64, d_row: i64, d_col: i64, step: f32| {
+            let (r, c) = (row + d_row, col + d_col);
+            if r < 0 || c < 0 || r >= rows || c >= cols {
+                return;
+            }
+            let via = dist[(r * cols + c) as usize] + step;
+            let here = &mut dist[(row * cols + col) as usize];
+            if via < *here {
+                *here = via;
+            }
         };
 
-        let mut seen = 0.0;
-        let mut built = 0.0;
-
-        for d_row in -BUILT_NEIGHBOURHOOD..=BUILT_NEIGHBOURHOOD {
-            for d_col in -BUILT_NEIGHBOURHOOD..=BUILT_NEIGHBOURHOOD {
-                let r = row as i64 + d_row;
-                let c = col as i64 + d_col;
-
-                if r < 0 || c < 0 || r >= self.rows as i64 || c >= self.cols as i64 {
-                    continue;
-                }
-
-                seen += 1.0;
-                if Self::get(&self.built, r as usize * self.cols + c as usize) {
-                    built += 1.0;
-                }
+        for row in 0..rows {
+            for col in 0..cols {
+                relax(&mut dist, row, col, -1, -1, diagonal);
+                relax(&mut dist, row, col, -1, 0, straight);
+                relax(&mut dist, row, col, -1, 1, diagonal);
+                relax(&mut dist, row, col, 0, -1, straight);
+            }
+        }
+        for row in (0..rows).rev() {
+            for col in (0..cols).rev() {
+                relax(&mut dist, row, col, 1, 1, diagonal);
+                relax(&mut dist, row, col, 1, 0, straight);
+                relax(&mut dist, row, col, 1, -1, diagonal);
+                relax(&mut dist, row, col, 0, 1, straight);
             }
         }
 
-        if seen == 0.0 {
-            0.0
-        } else {
-            built / seen
-        }
+        HabitationField { grid: self, dist }
     }
 
     /// Remplit un polygone fermé, donné en `(lat, lon)`, par balayage de lignes.
@@ -168,6 +187,16 @@ impl LandCoverGrid {
             }
             (r as usize).min(self.rows.saturating_sub(1))
         };
+
+        // Un bâtiment plus petit qu'une cellule peut ne couper aucun centre de
+        // ligne : on marque au moins les cellules de ses sommets.
+        if layer == Layer::Built {
+            for &(lat, lon) in ring {
+                if let Some((row, col)) = self.cell_of(lat, lon) {
+                    Self::set(&mut self.built, row * self.cols + col);
+                }
+            }
+        }
 
         let mut crossings: Vec<f64> = Vec::new();
 
@@ -240,6 +269,26 @@ impl LandCoverGrid {
     }
 }
 
+/// Distance de chaque cellule au bâti le plus proche, en mètres.
+pub struct HabitationField<'a> {
+    grid: &'a LandCoverGrid,
+    dist: Vec<f32>,
+}
+
+impl HabitationField<'_> {
+    /// Pression d'habitat au point, dans `0.0..=1.0` : 1 sur le bâti, 0 à
+    /// `HABITATION_REACH_M` et au-delà. Hors grille répond 0.
+    pub fn pressure(&self, lat: f64, lon: f64) -> f64 {
+        match self.grid.cell_of(lat, lon) {
+            Some((row, col)) => {
+                let d = self.dist[row * self.grid.cols + col] as f64;
+                (1.0 - d / HABITATION_REACH_M).max(0.0)
+            }
+            None => 0.0,
+        }
+    }
+}
+
 fn layer_of(tags: &[(String, String)]) -> Option<Layer> {
     let mut layer = None;
 
@@ -255,6 +304,10 @@ fn layer_of(tags: &[(String, String)]) -> Option<Layer> {
             | ("landuse", "industrial")
             | ("landuse", "commercial")
             | ("landuse", "retail") => layer = Some(Layer::Built),
+            // Les bâtiments un par un aussi : une ferme ou un hameau sans
+            // emprise résidentielle cartographiée restait sinon invisible.
+            ("building", "no") => {}
+            ("building", _) => layer = Some(Layer::Built),
             _ => {}
         }
     }
@@ -482,25 +535,43 @@ mod tests {
 
         assert!(!grid.is_forest(48.0, 2.010));
         assert!(!grid.is_forest(47.010, 3.0));
-        assert_eq!(grid.built_density(48.0, 2.010), 0.0);
+        assert_eq!(grid.habitation_field().pressure(48.0, 2.010), 0.0);
+    }
+
+    /// Mètres vers l'est, convertis en degrés de longitude à 47° de latitude.
+    fn east_m(m: f64) -> f64 {
+        m / (M_PER_DEG_LAT * 47.01_f64.to_radians().cos())
     }
 
     #[test]
-    fn built_density_grades_the_edge_of_a_village() {
+    fn pressure_fades_with_distance_to_the_nearest_building() {
         let mut grid = LandCoverGrid::new(&bbox(), 40.0);
-        // Bande bâtie sur la moitié gauche de la bbox.
+        // Bande bâtie le long du bord ouest de la bbox.
         grid.fill_polygon(
-            &[(47.000, 2.000), (47.000, 2.010), (47.020, 2.010), (47.020, 2.000)],
+            &[(47.000, 2.000), (47.000, 2.001), (47.020, 2.001), (47.020, 2.000)],
+            Layer::Built,
+        );
+        let field = grid.habitation_field();
+        let at = |m: f64| field.pressure(47.010, 2.001 + east_m(m));
+
+        assert!(at(-40.0) > 0.95, "sur le bâti : {}", at(-40.0));
+        assert!((at(300.0) - 0.5).abs() < 0.1, "à 300 m, la moitié : {}", at(300.0));
+        assert!(at(150.0) > at(300.0), "la pression décroît avec la distance");
+        assert_eq!(at(700.0), 0.0, "au-delà de 600 m, plus rien");
+    }
+
+    #[test]
+    fn a_building_smaller_than_a_cell_still_counts() {
+        let mut grid = LandCoverGrid::new(&bbox(), 40.0);
+        // Une ferme de 10 m sur 10, plus petite qu'une cellule de 40 m : la
+        // règle pair-impair peut la manquer entre deux centres de ligne.
+        grid.fill_polygon(
+            &[(47.01001, 2.01001), (47.01001, 2.01014), (47.01010, 2.01014), (47.01010, 2.01001)],
             Layer::Built,
         );
 
-        let inside = grid.built_density(47.010, 2.005);
-        let edge = grid.built_density(47.010, 2.010);
-        let outside = grid.built_density(47.010, 2.018);
-
-        assert!(inside > 0.9, "au cœur du bâti : {inside}");
-        assert!(edge > 0.2 && edge < 0.9, "en lisière, un dégradé : {edge}");
-        assert_eq!(outside, 0.0, "loin du bâti : {outside}");
+        assert!(grid.built_cells() > 0);
+        assert!(grid.habitation_field().pressure(47.0101, 2.0101) > 0.9);
     }
 
     #[test]
@@ -513,7 +584,7 @@ mod tests {
 
         assert!(grid.forest_cells() > 0);
         assert_eq!(grid.built_cells(), 0);
-        assert_eq!(grid.built_density(47.010, 2.010), 0.0);
+        assert_eq!(grid.habitation_field().pressure(47.010, 2.010), 0.0);
     }
 
     #[test]
@@ -523,6 +594,9 @@ mod tests {
         assert_eq!(layer_of(&tag("landuse", "forest")), Some(Layer::Forest));
         assert_eq!(layer_of(&tag("natural", "wood")), Some(Layer::Forest));
         assert_eq!(layer_of(&tag("landuse", "residential")), Some(Layer::Built));
+        assert_eq!(layer_of(&tag("building", "yes")), Some(Layer::Built));
+        assert_eq!(layer_of(&tag("building", "farm_auxiliary")), Some(Layer::Built));
+        assert_eq!(layer_of(&tag("building", "no")), None);
         assert_eq!(layer_of(&tag("landuse", "farmland")), None);
         assert_eq!(layer_of(&tag("highway", "track")), None);
     }
