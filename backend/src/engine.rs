@@ -1018,6 +1018,51 @@ impl RouteEngine {
         roads
     }
 
+    /// Où le segment `a`→`b` coupe une route goudronnée, en fraction de sa
+    /// longueur (0 = `a`, 1 = `b`), dans l'ordre du parcours.
+    ///
+    /// Deux tronçons qui se rejoignent sur la ligne donneraient deux fois le
+    /// même croisement : les coupures à moins de `MERGE_M` l'une de l'autre
+    /// n'en font qu'une.
+    pub fn paved_crossings(&self, a: Coordinate, b: Coordinate) -> Vec<f64> {
+        const MERGE_M: f64 = 15.0;
+
+        // Plan local : à cette échelle, la Terre est plate.
+        let kx = ((a.lat + b.lat) / 2.0).to_radians().cos();
+        let plane = |c: &Coordinate| (c.lon * kx, c.lat);
+        let (pa, pb) = (plane(&a), plane(&b));
+        let (lo_x, hi_x) = (pa.0.min(pb.0), pa.0.max(pb.0));
+        let (lo_y, hi_y) = (pa.1.min(pb.1), pa.1.max(pb.1));
+
+        let mut hits = Vec::new();
+        for edge in self.graph.edge_indices() {
+            let data = &self.graph[edge];
+            if data.surface != SurfaceType::Paved {
+                continue;
+            }
+            let (from, to) = self.graph.edge_endpoints(edge).unwrap();
+            let polyline = std::iter::once(self.nodes[from.index()].coord)
+                .chain(data.waypoints.iter().copied())
+                .chain(std::iter::once(self.nodes[to.index()].coord))
+                .map(|c| plane(&c))
+                .collect::<Vec<_>>();
+            for pair in polyline.windows(2) {
+                let (p, q) = (pair[0], pair[1]);
+                if p.0.max(q.0) < lo_x || p.0.min(q.0) > hi_x || p.1.max(q.1) < lo_y || p.1.min(q.1) > hi_y {
+                    continue;
+                }
+                if let Some(t) = segment_intersection(pa, pb, p, q) {
+                    hits.push(t);
+                }
+            }
+        }
+
+        hits.sort_by(f64::total_cmp);
+        let merge = MERGE_M / (fast_distance_km(a, b) * 1000.0).max(MERGE_M);
+        hits.dedup_by(|later, kept| *later - *kept < merge);
+        hits
+    }
+
     /// Cost of an existing polyline under the same weights the router uses.
     ///
     /// The router only ever scores paths it built itself, so a hand-made trace
@@ -1313,6 +1358,20 @@ fn expand_path_with_waypoints(
     );
 
     result
+}
+
+/// Fraction de `a`→`b` où il coupe `p`→`q`, s'ils se coupent.
+fn segment_intersection(a: (f64, f64), b: (f64, f64), p: (f64, f64), q: (f64, f64)) -> Option<f64> {
+    let r = (b.0 - a.0, b.1 - a.1);
+    let s = (q.0 - p.0, q.1 - p.1);
+    let denom = r.0 * s.1 - r.1 * s.0;
+    if denom.abs() < 1e-18 {
+        return None; // Parallèles : longer une route n'est pas la couper.
+    }
+    let ap = (p.0 - a.0, p.1 - a.1);
+    let t = (ap.0 * s.1 - ap.1 * s.0) / denom;
+    let u = (ap.0 * r.1 - ap.1 * r.0) / denom;
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some(t)
 }
 
 #[cfg(test)]
@@ -1980,6 +2039,29 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn paved_crossings_count_each_paved_road_cut_once() {
+        // Le tronçon du milieu est goudronné, les deux autres sont des sentiers.
+        let mut graph = straight_line_graph();
+        graph.edges[1].surface = SurfaceType::Paved;
+        let engine = RouteEngine::from_graph_file(graph).expect("engine");
+        let north_south = |lon: f64| {
+            (Coordinate { lat: 44.999, lon }, Coordinate { lat: 45.001, lon })
+        };
+
+        let (a, b) = north_south(5.015);
+        let hits = engine.paved_crossings(a, b);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!((hits[0] - 0.5).abs() < 1e-6);
+
+        let (a, b) = north_south(5.005);
+        assert!(engine.paved_crossings(a, b).is_empty(), "un sentier n'est pas une route");
+
+        // Au nœud partagé, les deux bouts de route ne font qu'un croisement.
+        let (a, b) = north_south(5.010);
+        assert_eq!(engine.paved_crossings(a, b).len(), 1);
+    }
 
     /// Trois nœuds alignés d'ouest en est, deux tronçons.
     fn straight_line_graph() -> crate::graph::GraphFile {

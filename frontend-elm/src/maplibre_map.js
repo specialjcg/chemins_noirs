@@ -515,6 +515,43 @@ function ensureMap() {
       paint: { 'line-color': mapColor('--map-route-unpaved'), 'line-width': 4 }
     });
 
+    // Tronçons tirés tout droit, en pointillé par-dessus le tracé, et ce
+    // qu'ils traversent.
+    mapInstance.addSource('route-direct', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+    mapInstance.addLayer({
+      id: 'route-line-direct',
+      type: 'line',
+      source: 'route-direct',
+      layout: { 'line-join': 'round', 'line-cap': 'butt' },
+      paint: { 'line-color': mapColor('--map-route-direct'), 'line-width': 3, 'line-dasharray': [2, 2] }
+    });
+    mapInstance.addSource('route-obstacles', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+    mapInstance.addLayer({
+      id: 'route-obstacles-dots',
+      type: 'circle',
+      source: 'route-obstacles',
+      paint: {
+        'circle-radius': 5,
+        'circle-stroke-width': 1.5,
+        'circle-stroke-color': mapColor('--map-route-halo'),
+        'circle-color': [
+          'match', ['get', 'kind'],
+          'building', mapColor('--map-obstacle-building'),
+          'open_ground', mapColor('--map-obstacle-open'),
+          'paved_road', mapColor('--map-obstacle-road'),
+          'steep_slope', mapColor('--map-obstacle-steep'),
+          mapColor('--map-route-direct')
+        ]
+      }
+    });
+    _applyDirectOverlay();
+
     console.debug('[maplibre] Map loaded with terrain support');
   });
 
@@ -1276,6 +1313,41 @@ export function centerOnMarkers(start, end) {
 // Latest surface flags, set by setRouteSurfaces port (null = no data)
 let currentRouteSurfaces = null;
 
+let currentDirectOverlay = null;
+
+/** Tronçons directs ({ lines, obstacles }) envoyés par Elm, redessinés quand la carte est prête. */
+export function setDirectOverlay(overlay) {
+  currentDirectOverlay = overlay;
+  _applyDirectOverlay();
+}
+
+function _applyDirectOverlay() {
+  if (!mapInstance) return;
+  const lineSrc = mapInstance.getSource('route-direct');
+  const dotSrc = mapInstance.getSource('route-obstacles');
+  if (!lineSrc || !dotSrc) return;
+
+  const overlay = currentDirectOverlay || { lines: [], obstacles: [] };
+  lineSrc.setData({
+    type: 'FeatureCollection',
+    features: overlay.lines
+      .filter(line => line.length >= 2)
+      .map(line => ({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: line.map(c => [c.lon, c.lat]) },
+        properties: {}
+      }))
+  });
+  dotSrc.setData({
+    type: 'FeatureCollection',
+    features: overlay.obstacles.map(o => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [o.lon, o.lat] },
+      properties: { kind: o.kind }
+    }))
+  });
+}
+
 export function setRouteSurfaces(surfaces) {
   currentRouteSurfaces = surfaces; // null or Array<bool>
   if (surfaces) {
@@ -1334,6 +1406,8 @@ export function updateRoute(coords) {
     currentRoute = null;
     currentRouteSurfaces = null;
     _applyUnpavedOverlay();
+    currentDirectOverlay = null;
+    _applyDirectOverlay();
     // Clear km markers when route is cleared
     kmMarkers.forEach(m => m.remove());
     kmMarkers = [];

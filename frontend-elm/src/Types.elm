@@ -4,6 +4,7 @@ import Array
 import Http
 import Json.Decode
 import Dict exposing (Dict)
+import Set exposing (Set)
 
 
 -- MODEL
@@ -58,8 +59,12 @@ type alias Model =
     , elevationHoverIndex : Maybe Int
     , elevationCursorIndex : Maybe Int
     , showElevationBand : Bool
-    , waypointHistory : List (List Coordinate)
-    , waypointFuture : List (List Coordinate)
+    -- Chaque état garde les tronçons directs avec ses points : annuler un
+    -- point sans eux décalerait la ligne droite sur le tronçon voisin.
+    , waypointHistory : List ( List Coordinate, Set Int )
+    , waypointFuture : List ( List Coordinate, Set Int )
+    -- Index des tronçons tirés en ligne droite (voir `DirectLegs`).
+    , directLegs : Set Int
     , mapRouteHoverIndex : Maybe Int
     , cheminNoir : Bool
     , mapSearch : String
@@ -159,6 +164,7 @@ initialModel =
     , showElevationBand = True
     , waypointHistory = []
     , waypointFuture = []
+    , directLegs = Set.empty
     , mapRouteHoverIndex = Nothing
     , cheminNoir = True
     , mapSearch = ""
@@ -227,6 +233,7 @@ type Msg
     | MoveWaypoint Int Float Float
     | ClearWaypoints
     | ToggleCloseLoop
+    | ToggleDirectLeg Int
     | ComputeMultiPointRoute
     | ExportGpx
     | CopyShareLink
@@ -323,6 +330,7 @@ type alias MultiPointRouteRequest =
     , wPop : Float
     , wPaved : Float
     , wForest : Float
+    , directLegs : List Bool
     }
 
 
@@ -351,6 +359,26 @@ type alias RouteResponse =
     , surfaceBreakdown : Maybe (List ( String, Float ))
     , segments : Maybe (List SegmentStats)
     , pointSurfaces : Maybe (List Bool)
+    , obstacles : List Obstacle
+    }
+
+
+{-| Ce qu'un tronçon tiré en ligne droite traverse.
+-}
+type ObstacleKind
+    = Building
+    | OpenGround
+    | PavedRoad
+    | SteepSlope
+
+
+type alias Obstacle =
+    { kind : ObstacleKind
+    , leg : Int
+    , km : Float
+    , lengthM : Float
+    , lat : Float
+    , lon : Float
     }
 
 

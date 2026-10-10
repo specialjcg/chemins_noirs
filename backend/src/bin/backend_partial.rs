@@ -3,12 +3,14 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use axum::{extract::State, http::StatusCode, Json};
 use backend::{
     database::Database,
+    direct,
     elevation::create_elevation_profile,
     engine::RouteEngine,
+    landcover::LandCoverGrid,
     geo_utils::fold_overlap,
     graph::{BoundingBox, GraphBuilder, GraphBuilderConfig, GraphFile},
     loops::{self, LoopGenerationError},
-    models::{Coordinate, LoopRouteRequest, LoopRouteResponse, RouteRequest},
+    models::{Coordinate, LoopRouteRequest, LoopRouteResponse, Obstacle, ObstacleKind, RouteRequest},
     partial_graph::PartialGraphConfig,
     poi,
     routing::{estimate_time_minutes, haversine_km, rate_difficulty},
@@ -35,14 +37,14 @@ static ENGINE_CACHE: std::sync::LazyLock<tokio::sync::RwLock<Option<CachedEngine
 async fn get_or_build_engine(
     config: &Arc<PartialGraphConfig>,
     needed_bbox: BoundingBox,
-) -> Result<Arc<RouteEngine>, (StatusCode, String)> {
+) -> Result<(Arc<RouteEngine>, BoundingBox), (StatusCode, String)> {
     // Fast path: check if cached engine covers the needed bbox
     {
         let guard = ENGINE_CACHE.read().await;
         if let Some(cached) = guard.as_ref() {
             if cached.bbox.contains_bbox(&needed_bbox) {
                 tracing::info!("PERF ENGINE_CACHE HIT — reusing in-memory engine");
-                return Ok(Arc::clone(&cached.engine));
+                return Ok((Arc::clone(&cached.engine), cached.bbox));
             }
         }
     }
@@ -86,7 +88,29 @@ async fn get_or_build_engine(
         tracing::info!("PERF ENGINE_CACHE stored (padded bbox: {:?})", padded_bbox);
     }
 
-    Ok(engine)
+    Ok((engine, padded_bbox))
+}
+
+/// Grille d'occupation du sol de l'emprise d'un moteur, pour lire ce que
+/// traversent les tronçons directs. Elle partage la clé du graphe partiel :
+/// déjà construite avec lui, elle est relue depuis le cache.
+async fn landcover_for(config: &Arc<PartialGraphConfig>, bbox: BoundingBox) -> Option<LandCoverGrid> {
+    let config = config.clone();
+    let loaded = tokio::task::spawn_blocking(move || {
+        backend::graph::load_or_build_landcover(&config.pbf_path, &config.cache_dir, &bbox, &bbox.cache_key())
+    })
+    .await;
+    match loaded {
+        Ok(Ok(grid)) => Some(grid),
+        Ok(Err(err)) => {
+            tracing::warn!("occupation du sol indisponible ({err}) : obstacles des tronçons directs sans bâti ni forêt");
+            None
+        }
+        Err(err) => {
+            tracing::warn!("chargement de l'occupation du sol interrompu ({err})");
+            None
+        }
+    }
 }
 
 /// Pad a bbox proportionally to the route spread: 20% of span, min 2km per side.
@@ -196,7 +220,7 @@ async fn route_handler(
     // Calculate bounding box with margin for the route
     let bbox = BoundingBox::from_route(req.start, req.end, 5.0);
 
-    let engine = get_or_build_engine(&config, bbox).await?;
+    let (engine, _) = get_or_build_engine(&config, bbox).await?;
 
     let t_path = std::time::Instant::now();
     match engine.find_path_with_surfaces(&req) {
@@ -252,6 +276,7 @@ async fn route_handler(
                 surface_breakdown: None,
                 segments: None,
                 point_surfaces: Some(point_surfaces),
+                obstacles: None,
             };
 
             tracing::info!("PERF TOTAL /api/route: {:.0}ms ({:.2}km)", t_total.elapsed().as_secs_f64() * 1000.0, distance_km);
@@ -286,7 +311,7 @@ async fn loop_route_handler(
     let radius = (req.target_distance_km / 2.0).max(2.0) * 1.4 + req.distance_tolerance_km.max(1.0);
     let bbox = bbox_from_center(req.start, radius);
 
-    let engine = get_or_build_engine(&config, bbox).await?;
+    let (engine, _) = get_or_build_engine(&config, bbox).await?;
 
     let t_loops = std::time::Instant::now();
     match loops::generate_loops(&engine, &req).await {
@@ -338,7 +363,7 @@ async fn surfaces_handler(
 
     let t0 = std::time::Instant::now();
     let bbox = bbox_with_margin(&req.path);
-    let engine = get_or_build_engine(&config, bbox).await?;
+    let (engine, _) = get_or_build_engine(&config, bbox).await?;
 
     let point_surfaces = engine.surfaces_along(&req.path);
     let unpaved = point_surfaces.iter().filter(|&&paved| !paved).count();
@@ -554,6 +579,23 @@ async fn multi_route_handler(
     let mut segment_boundaries: Vec<(usize, usize)> = Vec::new();
     let mut current_segment_start = 0usize;
 
+    // Tronçon demandé dont relève chaque paire densifiée : les ancres insérées
+    // sur un tronçon direct restent sur sa ligne, il reste donc droit.
+    let leg_of: Vec<usize> = is_original
+        .iter()
+        .scan(0usize, |legs, &original| {
+            if original {
+                *legs += 1;
+            }
+            Some(*legs - 1)
+        })
+        .collect();
+    let is_direct = |i: usize| req.direct_legs.get(leg_of[i]).copied().unwrap_or(false);
+    // Ce que traversent les tronçons directs, en index de `all_coords`, et
+    // l'étendue de chacun pour y chercher les pentes une fois l'altitude connue.
+    let mut direct_spans: Vec<(usize, direct::Span)> = Vec::new();
+    let mut direct_ranges: Vec<(usize, usize, usize)> = Vec::new();
+
     let t_pathfinding = std::time::Instant::now();
     for (chunk_idx, &(chunk_start, chunk_end)) in chunks.iter().enumerate() {
         // One graph per chunk. ENGINE_CACHE holds a single entry, so each chunk
@@ -566,7 +608,12 @@ async fn multi_route_handler(
             chunk_start + 1,
             chunk_end + 1
         );
-        let engine = get_or_build_engine(&config, bbox).await?;
+        let (engine, engine_bbox) = get_or_build_engine(&config, bbox).await?;
+        let landcover = if (chunk_start..chunk_end).any(is_direct) {
+            landcover_for(&config, engine_bbox).await
+        } else {
+            None
+        };
 
         for i in chunk_start..chunk_end {
             let segment_req = RouteRequest {
@@ -578,7 +625,15 @@ async fn multi_route_handler(
             };
 
             let t_seg = std::time::Instant::now();
-            match engine.find_path_with_surfaces(&segment_req) {
+            let direct_leg = is_direct(i);
+            let found = if direct_leg {
+                let line = direct::straight_line(points[i], points[i + 1], direct::STEP_M);
+                let surfaces = vec![false; line.len()];
+                Some((line, surfaces))
+            } else {
+                engine.find_path_with_surfaces(&segment_req)
+            };
+            match found {
                 Some((path, seg_surfaces)) => {
                     tracing::info!(
                         "PERF segment {}/{}: {:.0}ms ({} pts)",
@@ -599,7 +654,13 @@ async fn multi_route_handler(
                     // le point d'étape au bout d'une branche et que l'autre en
                     // remonte, la ligne se replie sur elle-même. Seule la
                     // jonction peut le voir.
-                    let (drop_tail, skip_head) = fold_overlap(&all_coords, &path);
+                    // Un tronçon direct est tiré tel quel : le replier le
+                    // détournerait de la ligne que le marcheur a demandée.
+                    let (drop_tail, skip_head) = if direct_leg {
+                        (0, 0)
+                    } else {
+                        fold_overlap(&all_coords, &path)
+                    };
                     if drop_tail > 0 {
                         let kept = all_coords.len() - drop_tail;
                         all_coords.truncate(kept);
@@ -618,6 +679,8 @@ async fn multi_route_handler(
                         }
                     }
 
+                    let line_start = all_coords.len().saturating_sub(1);
+
                     // Add the routed path (dedup avoids duplicate at segment boundaries)
                     for (&coord, &surf) in path.iter().skip(skip_head).zip(seg_surfaces.iter().skip(skip_head)) {
                         let prev_len = all_coords.len();
@@ -628,6 +691,27 @@ async fn multi_route_handler(
                     }
 
                     let end_idx = all_coords.len() - 1;
+                    if direct_leg {
+                        let leg = leg_of[i];
+                        let line = &all_coords[line_start..=end_idx];
+                        let shift = |span: direct::Span| direct::Span {
+                            from: span.from + line_start,
+                            to: span.to + line_start,
+                            ..span
+                        };
+                        if let Some(grid) = &landcover {
+                            direct_spans.extend(
+                                direct::landcover_spans(line, grid).into_iter().map(|s| (leg, shift(s))),
+                            );
+                        }
+                        let last = (line.len() - 1) as f64;
+                        direct_spans.extend(engine.paved_crossings(points[i], points[i + 1]).into_iter().map(|t| {
+                            let at = line_start + (t * last).round() as usize;
+                            (leg, direct::Span { kind: ObstacleKind::PavedRoad, from: at, to: at })
+                        }));
+                        direct_ranges.push((leg, line_start, end_idx));
+                    }
+
                     if is_original[i + 1] {
                         if let Some(&last) = path.last() {
                             snapped_waypoints.push(last);
@@ -687,6 +771,19 @@ async fn multi_route_handler(
             None
         }
     };
+
+    if let Some(profile) = &elevation_profile {
+        for &(leg, from, to) in &direct_ranges {
+            if to < all_coords.len() && to < profile.elevations.len() {
+                direct_spans.extend(
+                    direct::steep_spans(&all_coords[from..=to], &profile.elevations[from..=to])
+                        .into_iter()
+                        .map(|s| (leg, direct::Span { from: s.from + from, to: s.to + from, ..s })),
+                );
+            }
+        }
+    }
+    let obstacles = obstacles_along(&all_coords, direct_spans);
 
     let (estimated_time, difficulty) = match &elevation_profile {
         Some(profile) => {
@@ -765,10 +862,41 @@ async fn multi_route_handler(
         surface_breakdown: None,
         segments,
         point_surfaces: Some(all_surfaces),
+        obstacles: (!obstacles.is_empty()).then_some(obstacles),
     };
 
     tracing::info!("PERF TOTAL /api/route/multi: {:.0}ms ({} wps, {:.2}km)", t_total.elapsed().as_secs_f64() * 1000.0, req.waypoints.len(), total_distance);
     Ok(Json(response))
+}
+
+/// Place les obstacles des tronçons directs le long du tracé final.
+///
+/// Un tronçon suivant peut avoir raccourci la ligne en se repliant sur elle :
+/// les obstacles qui tombaient sur la partie retirée disparaissent avec elle.
+fn obstacles_along(path: &[Coordinate], spans: Vec<(usize, direct::Span)>) -> Vec<Obstacle> {
+    let mut cum_km = Vec::with_capacity(path.len());
+    let mut total = 0.0;
+    for (i, &c) in path.iter().enumerate() {
+        if i > 0 {
+            total += haversine_km(path[i - 1], c);
+        }
+        cum_km.push(total);
+    }
+
+    let mut obstacles: Vec<Obstacle> = spans
+        .into_iter()
+        .filter(|(_, span)| span.to < path.len())
+        .map(|(leg, span)| Obstacle {
+            kind: span.kind,
+            leg,
+            km: (cum_km[span.from] * 100.0).round() / 100.0,
+            length_m: ((cum_km[span.to] - cum_km[span.from]) * 1000.0).round(),
+            lat: path[span.from].lat,
+            lon: path[span.from].lon,
+        })
+        .collect();
+    obstacles.sort_by(|a, b| a.km.total_cmp(&b.km));
+    obstacles
 }
 
 /// Backend binary that uses on-demand partial graph generation
@@ -1094,6 +1222,27 @@ mod tests {
     /// Coordinate has no PartialEq; compare the components.
     fn same(a: Coordinate, b: Coordinate) -> bool {
         (a.lat - b.lat).abs() < 1e-9 && (a.lon - b.lon).abs() < 1e-9
+    }
+
+    #[test]
+    fn obstacles_along_places_spans_in_order_and_drops_the_folded_ones() {
+        let path = direct::straight_line(c(47.0, 2.0), c(47.0, 2.01), direct::STEP_M);
+        let span = |kind, from, to| direct::Span { kind, from, to };
+        let spans = vec![
+            (0, span(ObstacleKind::OpenGround, 10, 20)),
+            (0, span(ObstacleKind::PavedRoad, 4, 4)),
+            // Retiré par un repli : pointe au-delà de la ligne.
+            (1, span(ObstacleKind::Building, path.len(), path.len() + 2)),
+        ];
+
+        let obstacles = obstacles_along(&path, spans);
+
+        assert_eq!(obstacles.len(), 2);
+        assert_eq!(obstacles[0].kind, ObstacleKind::PavedRoad);
+        assert_eq!(obstacles[0].length_m, 0.0);
+        assert_eq!(obstacles[1].kind, ObstacleKind::OpenGround);
+        assert!((obstacles[1].length_m - 10.0 * direct::STEP_M).abs() < 15.0, "{}", obstacles[1].length_m);
+        assert!(obstacles[0].km < obstacles[1].km);
     }
 
     /// Une troncature peu profonde ne touche que la dernière borne.

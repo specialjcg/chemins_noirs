@@ -14,7 +14,22 @@ import Types exposing (..)
 suite : Test
 suite =
     describe "Decoders"
-        [ describe "decodeCoordinate"
+        [ describe "obstacles"
+            [ test "lit les obstacles d'un tronçon tout droit" <|
+                \_ ->
+                    """{"path": [], "distance_km": 1.0, "gpx_base64": "",
+                       "obstacles": [{"kind": "paved_road", "leg": 1, "km": 2.5, "length_m": 0, "lat": 47.0, "lon": 5.0}]}"""
+                        |> Decode.decodeString decodeRouteResponse
+                        |> Result.map (.obstacles >> List.map (\o -> ( o.kind, o.leg )))
+                        |> Expect.equal (Ok [ ( PavedRoad, 1 ) ])
+            , test "un itinéraire sans obstacles en a une liste vide" <|
+                \_ ->
+                    """{"path": [], "distance_km": 1.0, "gpx_base64": ""}"""
+                        |> Decode.decodeString decodeRouteResponse
+                        |> Result.map .obstacles
+                        |> Expect.equal (Ok [])
+            ]
+        , describe "decodeCoordinate"
             [ test "décode une coordonnée valide" <|
                 \_ ->
                     let

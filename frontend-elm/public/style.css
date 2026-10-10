@@ -231,6 +231,11 @@
   --map-route-halo: rgb(var(--bg-deep-rgb) / 0.85);
   --map-reference: var(--accent-forest);
   --map-osm-unpaved: var(--accent-forest-light);
+  --map-route-direct: var(--text-primary);
+  --map-obstacle-building: var(--accent-terracotta);
+  --map-obstacle-open: var(--accent-brass);
+  --map-obstacle-road: var(--text-primary);
+  --map-obstacle-steep: var(--info-blue);
   --map-hillshade: #473b24;
 
   /* Fond « Chemin noir » : la hiérarchie du Plan IGN retournée. Les tuiles IGN
@@ -3064,4 +3069,22 @@ body.shell #map .maplibregl-ctrl-bottom-right {
   .panel-tab:focus-visible::before {
     animation: micro-etincelle-onglet 0.85s forwards;
   }
+}
+
+/* Tronçons tout droit : interrupteurs du formulaire, obstacles de l'aperçu. */
+.direct-legs-list,
+.obstacles-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+
+.direct-legs-list li,
+.obstacle-item {
+  padding: 0.2rem 0;
+}
+
+.obstacle-km {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }

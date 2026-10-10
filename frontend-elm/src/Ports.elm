@@ -20,6 +20,14 @@ port updateRoute : List Coordinate -> Cmd msg
 port setRouteSurfaces : Maybe (List Bool) -> Cmd msg
 
 
+-- Tronçons tirés tout droit (en pointillé) et ce qu'ils traversent.
+port setDirectOverlay :
+    { lines : List (List Coordinate)
+    , obstacles : List { lat : Float, lon : Float, kind : String }
+    }
+    -> Cmd msg
+
+
 port updateSelectionMarkers :
     { start : Maybe Coordinate
     , end : Maybe Coordinate

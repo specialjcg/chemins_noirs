@@ -20,6 +20,8 @@ import Json.Decode
 import Json.Encode
 import Ports
 import Dict exposing (Dict)
+import DirectLegs
+import Set
 import Task
 import Types exposing (..)
 import View.Form as Form
@@ -325,6 +327,13 @@ update msg model =
                         , Cmd.batch
                             [ Ports.updateRoute displayRoute.path
                             , Ports.setRouteSurfaces displayRoute.pointSurfaces
+                            , Ports.setDirectOverlay
+                                { lines = DirectLegs.lines model.directLegs route
+                                , obstacles =
+                                    List.map
+                                        (\o -> { lat = o.lat, lon = o.lon, kind = Encoders.obstacleKindKey o.kind })
+                                        route.obstacles
+                                }
                             , Ports.updateWaypointMarkers markerPositions
                             ]
                         )
@@ -445,7 +454,13 @@ update msg model =
                     modelWithHistory.waypoints ++ [ coord ]
 
                 newModel =
-                    { modelWithHistory | waypoints = newWaypoints, error = Nothing }
+                    { modelWithHistory
+                        | waypoints = newWaypoints
+                        -- En boucle, le retour au départ passe derrière le
+                        -- nouveau point et garde son mode.
+                        , directLegs = DirectLegs.afterInsert (List.length model.waypoints) model.directLegs
+                        , error = Nothing
+                    }
             in
             if List.length newWaypoints >= 2 then
                 let
@@ -475,7 +490,11 @@ update msg model =
                         ++ List.drop (idx + 1) modelWithHistory.waypoints
 
                 newModel =
-                    { modelWithHistory | waypoints = newWaypoints, error = Nothing }
+                    { modelWithHistory
+                        | waypoints = newWaypoints
+                        , directLegs = DirectLegs.afterInsert (idx + 1) model.directLegs
+                        , error = Nothing
+                    }
             in
             if List.length newWaypoints >= 2 then
                 let
@@ -504,7 +523,10 @@ update msg model =
                         ++ List.drop (idx + 1) modelWithHistory.waypoints
 
                 newModel =
-                    { modelWithHistory | waypoints = newWaypoints }
+                    { modelWithHistory
+                        | waypoints = newWaypoints
+                        , directLegs = DirectLegs.afterRemove idx model.directLegs
+                    }
             in
             if List.length newWaypoints >= 2 then
                 let
@@ -562,6 +584,7 @@ update msg model =
             in
             ( { modelWithHistory
                 | waypoints = []
+                , directLegs = Set.empty
                 , lastResponse = Nothing
                 , error = Nothing
               }
@@ -573,13 +596,14 @@ update msg model =
 
         UndoWaypoints ->
             case model.waypointHistory of
-                prev :: rest ->
+                ( prev, prevDirect ) :: rest ->
                     let
                         newModel =
                             { model
                                 | waypoints = prev
+                                , directLegs = prevDirect
                                 , waypointHistory = rest
-                                , waypointFuture = model.waypoints :: model.waypointFuture
+                                , waypointFuture = ( model.waypoints, model.directLegs ) :: model.waypointFuture
                                 , error = Nothing
                                 , freehandSegments = Dict.empty
                                 , freehandDrawing = Nothing
@@ -610,13 +634,14 @@ update msg model =
 
         RedoWaypoints ->
             case model.waypointFuture of
-                next :: rest ->
+                ( next, nextDirect ) :: rest ->
                     let
                         newModel =
                             { model
                                 | waypoints = next
+                                , directLegs = nextDirect
                                 , waypointFuture = rest
-                                , waypointHistory = model.waypoints :: model.waypointHistory
+                                , waypointHistory = ( model.waypoints, model.directLegs ) :: model.waypointHistory
                                 , error = Nothing
                                 , freehandSegments = Dict.empty
                                 , freehandDrawing = Nothing
@@ -656,6 +681,20 @@ update msg model =
             else
                 ( newModel, Cmd.none )
 
+        ToggleDirectLeg leg ->
+            let
+                modelWithHistory =
+                    pushWaypointHistory model
+
+                newModel =
+                    { modelWithHistory | directLegs = DirectLegs.toggle leg model.directLegs }
+            in
+            if List.length newModel.waypoints >= 2 then
+                update ComputeMultiPointRoute newModel
+
+            else
+                ( newModel, Cmd.none )
+
         ComputeMultiPointRoute ->
             update Submit model
 
@@ -663,6 +702,7 @@ update msg model =
             ( { model
                 | routeMode = mode
                 , waypoints = []
+                , directLegs = Set.empty
                 , lastResponse = Nothing
                 , loadedRouteId = Nothing
                 , loopCandidates = []
@@ -1123,6 +1163,7 @@ update msg model =
                 newModel =
                     { modelWithHistory
                         | waypoints = coords
+                        , directLegs = Set.empty
                         , routeMode = MultiPoint
                         , error = Nothing
                     }
@@ -1861,7 +1902,7 @@ freehandDistance coords =
 pushWaypointHistory : Model -> Model
 pushWaypointHistory model =
     { model
-        | waypointHistory = List.take 50 (model.waypoints :: model.waypointHistory)
+        | waypointHistory = List.take 50 (( model.waypoints, model.directLegs ) :: model.waypointHistory)
         , waypointFuture = []
         , freehandSegments = Dict.empty
         , freehandDrawing = Nothing
@@ -2168,6 +2209,9 @@ applySavedRoute model route originalWaypoints =
         , error = Nothing
         , form = newForm
         , waypoints = originalWaypoints  -- Restore original waypoints
+        -- Les itinéraires enregistrés ne gardent pas quels tronçons étaient
+        -- directs : les points rechargés repartent tous sur les chemins.
+        , directLegs = Set.empty
         , routeMode = routeMode
     }
 
@@ -2281,6 +2325,7 @@ multiPointRequest model =
         -- Le mode « chemin noir » cache les curseurs : il embarque son propre
         -- penchant pour la forêt, mesuré à +8 points de couvert sur le GR31.
         , wForest = 2.0
+        , directLegs = directLegFlags model
         }
 
     else
@@ -2289,4 +2334,10 @@ multiPointRequest model =
         , wPop = String.toFloat model.form.wPop |> Maybe.withDefault 1.0
         , wPaved = String.toFloat model.form.wPaved |> Maybe.withDefault 1.0
         , wForest = String.toFloat model.form.wForest |> Maybe.withDefault 0.0
+        , directLegs = directLegFlags model
         }
+
+
+directLegFlags : Model -> List Bool
+directLegFlags model =
+    DirectLegs.flags (DirectLegs.legCount (List.length model.waypoints) model.closeLoop) model.directLegs

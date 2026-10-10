@@ -357,6 +357,7 @@ async fn main() -> Result<(), String> {
         surface_breakdown: None,
         segments: Some(segments),
         point_surfaces: None,
+        obstacles: None,
     };
 
     if !insert && update_id.is_none() {

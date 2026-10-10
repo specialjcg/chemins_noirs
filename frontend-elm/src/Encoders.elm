@@ -46,6 +46,7 @@ encodeMultiPointRouteRequest req =
         , ( "w_pop", Encode.float req.wPop )
         , ( "w_paved", Encode.float req.wPaved )
         , ( "w_forest", Encode.float req.wForest )
+        , ( "direct_legs", Encode.list Encode.bool req.directLegs )
         ]
 
 
@@ -116,7 +117,39 @@ encodeRouteResponse response =
         , ( "difficulty", encodeMaybe Encode.string response.difficulty )
         , ( "surface_breakdown", encodeMaybe encodeSurfaceBreakdown response.surfaceBreakdown )
         , ( "segments", encodeMaybe (Encode.list encodeSegmentStats) response.segments )
+        , ( "obstacles", Encode.list encodeObstacle response.obstacles )
         ]
+
+
+encodeObstacle : Obstacle -> Encode.Value
+encodeObstacle obstacle =
+    Encode.object
+        [ ( "kind", Encode.string (obstacleKindKey obstacle.kind) )
+        , ( "leg", Encode.int obstacle.leg )
+        , ( "km", Encode.float obstacle.km )
+        , ( "length_m", Encode.float obstacle.lengthM )
+        , ( "lat", Encode.float obstacle.lat )
+        , ( "lon", Encode.float obstacle.lon )
+        ]
+
+
+{-| Le nom que le backend donne à l'obstacle, repris par la carte pour sa
+couleur.
+-}
+obstacleKindKey : ObstacleKind -> String
+obstacleKindKey kind =
+    case kind of
+        Building ->
+            "building"
+
+        OpenGround ->
+            "open_ground"
+
+        PavedRoad ->
+            "paved_road"
+
+        SteepSlope ->
+            "steep_slope"
 
 
 encodeSegmentStats : SegmentStats -> Encode.Value

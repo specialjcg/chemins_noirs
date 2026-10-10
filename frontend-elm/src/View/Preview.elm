@@ -22,6 +22,7 @@ view model =
                 , viewStats route
                 , viewActionButtons
                 , viewSegmentStats route.segments
+                , viewObstacles route.obstacles
                 , viewMetadata route.metadata
                 , viewElevationProfile route.elevationProfile
                 , viewElevationChart model route
@@ -597,3 +598,48 @@ viewLoopCandidate selectedIdx idx candidate =
                 ++ " • cap "
                 ++ Format.cap candidate.bearingDeg
         ]
+
+
+{-| Ce que les tronçons tirés tout droit traversent, dans l'ordre du tracé.
+-}
+viewObstacles : List Obstacle -> Html Msg
+viewObstacles obstacles =
+    if List.isEmpty obstacles then
+        text ""
+
+    else
+        div [ class "obstacles" ]
+            [ h3 [] [ text "Obstacles des tronçons tout droit" ]
+            , ul [ class "obstacles-list" ] (List.map viewObstacle obstacles)
+            ]
+
+
+viewObstacle : Obstacle -> Html Msg
+viewObstacle obstacle =
+    li [ class "obstacle-item" ]
+        [ span [ class "obstacle-km" ] [ text (Format.km obstacle.km) ]
+        , text " "
+        , span [ class "obstacle-kind" ] [ text (obstacleLabel obstacle.kind) ]
+        , if obstacle.lengthM > 0 then
+            text (" sur " ++ Format.metres obstacle.lengthM)
+
+          else
+            text ""
+        , text (" (tronçon " ++ String.fromInt (obstacle.leg + 1) ++ ")")
+        ]
+
+
+obstacleLabel : ObstacleKind -> String
+obstacleLabel kind =
+    case kind of
+        Building ->
+            "Bâti"
+
+        OpenGround ->
+            "Hors forêt"
+
+        PavedRoad ->
+            "Route goudronnée à traverser"
+
+        SteepSlope ->
+            "Pente de plus de 30 %"

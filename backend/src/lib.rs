@@ -1,5 +1,6 @@
 pub mod database;
 pub mod dem;
+pub mod direct;
 pub mod elevation;
 pub mod engine;
 pub mod error;
@@ -129,6 +130,7 @@ async fn route_handler(
         surface_breakdown: None,
         segments: None,
         point_surfaces: None,
+        obstacles: None,
     };
 
     Ok(Json(response))

@@ -10,6 +10,8 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (onCheck, onClick, onInput, onMouseDown, preventDefaultOn)
 import Json.Decode as Decode
 import Dict
+import DirectLegs
+import Set
 import Types exposing (..)
 
 
@@ -182,6 +184,7 @@ view model =
           else
             text ""
 
+        , viewDirectLegs model
         , div [ class "action-buttons" ]
             [ button
                 [ type_ "button"
@@ -687,3 +690,51 @@ freehandStatusText model =
                     ++ " pts) — cliquez près du waypoint suivant"
 
 
+
+
+{-| Un interrupteur par tronçon : suivre les chemins, ou tirer tout droit.
+-}
+viewDirectLegs : Model -> Html Msg
+viewDirectLegs model =
+    let
+        points =
+            List.length model.waypoints
+
+        count =
+            DirectLegs.legCount points model.closeLoop
+
+        legLabel leg =
+            String.fromInt (leg + 1)
+                ++ " → "
+                ++ (if leg + 1 >= points then
+                        "départ"
+
+                    else
+                        String.fromInt (leg + 2)
+                   )
+    in
+    if model.routeMode /= MultiPoint || count == 0 then
+        text ""
+
+    else
+        fieldset [ class "direct-legs" ]
+            [ legend [] [ text "Tronçons" ]
+            , small [] [ text "Cochez « tout droit » pour couper à travers, sans suivre de chemin." ]
+            , ul [ class "direct-legs-list" ]
+                (List.map
+                    (\leg ->
+                        li []
+                            [ label []
+                                [ input
+                                    [ type_ "checkbox"
+                                    , checked (Set.member leg model.directLegs)
+                                    , onCheck (\_ -> ToggleDirectLeg leg)
+                                    ]
+                                    []
+                                , text (" " ++ legLabel leg ++ " : tout droit")
+                                ]
+                            ]
+                    )
+                    (List.range 0 (count - 1))
+                )
+            ]

@@ -48,6 +48,34 @@ pub struct MultiPointRouteRequest {
     /// Pénalité du hors-forêt. 0 = indifférent au couvert boisé.
     #[serde(default = "default_forest_weight")]
     pub w_forest: f64,
+    /// `direct_legs[i]` : le tronçon du point i au point i+1 est tiré en ligne
+    /// droite, sans suivre de chemin. Plus court que la liste des tronçons, ou
+    /// absent : les tronçons manquants suivent les chemins.
+    #[serde(default)]
+    pub direct_legs: Vec<bool>,
+}
+
+/// Ce qu'un tronçon tiré en ligne droite traverse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObstacleKind {
+    Building,
+    OpenGround,
+    PavedRoad,
+    SteepSlope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Obstacle {
+    pub kind: ObstacleKind,
+    /// Index du tronçon demandé (0 = du premier au deuxième point).
+    pub leg: usize,
+    /// Position du début de l'obstacle depuis le départ du tracé.
+    pub km: f64,
+    /// Longueur traversée ; 0 pour une route, qu'on coupe en un point.
+    pub length_m: f64,
+    pub lat: f64,
+    pub lon: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +153,9 @@ pub struct RouteResponse {
     /// Same length as `path`. Used by frontend to color unpaved segments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub point_surfaces: Option<Vec<bool>>,
+    /// Obstacles traversés par les tronçons tirés en ligne droite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obstacles: Option<Vec<Obstacle>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

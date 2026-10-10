@@ -53,7 +53,7 @@ decodeRouteResponse : Decoder RouteResponse
 decodeRouteResponse =
     Decode.map8
         (\path dist gpx meta elev snapped time diff ->
-            \surface segments pointSurfaces ->
+            \surface segments pointSurfaces obstacles ->
                 { path = path
                 , distanceKm = dist
                 , gpxBase64 = gpx
@@ -65,6 +65,7 @@ decodeRouteResponse =
                 , surfaceBreakdown = surface
                 , segments = segments
                 , pointSurfaces = pointSurfaces
+                , obstacles = obstacles
                 }
         )
         (Decode.field "path" (Decode.list decodeCoordinate))
@@ -77,10 +78,49 @@ decodeRouteResponse =
         (Decode.maybe (Decode.field "difficulty" Decode.string))
         |> Decode.andThen
             (\fn ->
-                Decode.map3 fn
+                Decode.map4 fn
                     (Decode.maybe (Decode.field "surface_breakdown" decodeSurfaceBreakdown))
                     (Decode.maybe (Decode.field "segments" (Decode.list decodeSegmentStats)))
                     (Decode.maybe (Decode.field "point_surfaces" (Decode.list Decode.bool)))
+                    -- Absent des itinéraires sans tronçon direct, et de ceux
+                    -- enregistrés avant que le backend ne les signale.
+                    (Decode.maybe (Decode.field "obstacles" (Decode.list decodeObstacle))
+                        |> Decode.map (Maybe.withDefault [])
+                    )
+            )
+
+
+decodeObstacle : Decoder Obstacle
+decodeObstacle =
+    Decode.map6 Obstacle
+        (Decode.field "kind" decodeObstacleKind)
+        (Decode.field "leg" Decode.int)
+        (Decode.field "km" Decode.float)
+        (Decode.field "length_m" Decode.float)
+        (Decode.field "lat" Decode.float)
+        (Decode.field "lon" Decode.float)
+
+
+decodeObstacleKind : Decoder ObstacleKind
+decodeObstacleKind =
+    Decode.string
+        |> Decode.andThen
+            (\kind ->
+                case kind of
+                    "building" ->
+                        Decode.succeed Building
+
+                    "open_ground" ->
+                        Decode.succeed OpenGround
+
+                    "paved_road" ->
+                        Decode.succeed PavedRoad
+
+                    "steep_slope" ->
+                        Decode.succeed SteepSlope
+
+                    other ->
+                        Decode.fail ("obstacle inconnu : " ++ other)
             )
 
 

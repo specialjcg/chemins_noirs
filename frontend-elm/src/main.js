@@ -218,6 +218,11 @@ app.ports.setRouteSurfaces.subscribe((surfaces) => {
   MapLibreMap.setRouteSurfaces(surfaces);
 });
 
+// Tronçons tirés tout droit et obstacles traversés
+app.ports.setDirectOverlay.subscribe((overlay) => {
+  MapLibreMap.setDirectOverlay(overlay);
+});
+
 // Mettre à jour les marqueurs de waypoints
 app.ports.updateWaypointMarkers.subscribe((waypoints) => {
   console.log('[Elm→JS] updateWaypointMarkers', waypoints.length, 'waypoints');
