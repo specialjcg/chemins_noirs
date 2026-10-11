@@ -427,3 +427,30 @@ fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
         + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlon / 2.0).sin().powi(2);
     r * 2.0 * a.sqrt().asin()
 }
+
+/// Le générateur posait son point de passage à la moitié de la distance visée,
+/// comme à vol d'oiseau : sur ce réseau les boucles sortaient 1,5 à 2 fois trop
+/// longues et une seule sur trois tenait la tolérance.
+#[tokio::test(flavor = "multi_thread")]
+async fn loop_generator_finds_every_requested_loop_near_target() {
+    if std::env::var_os("LOCAL_DEM_PATH").is_none() {
+        std::env::set_var("LOCAL_DEM_PATH", "data/dem/region.asc");
+    }
+    let (lat, lon) = WAYPOINTS[0];
+    let req: backend::models::LoopRouteRequest = serde_json::from_value(serde_json::json!({
+        "start": { "lat": lat, "lon": lon },
+        "target_distance_km": 5.0,
+        "distance_tolerance_km": 1.0,
+        "candidate_count": 3
+    }))
+    .unwrap();
+
+    let response = backend::loops::generate_loops(engine(), &req)
+        .await
+        .expect("aucune boucle");
+
+    let lengths: Vec<f64> = response.candidates.iter().map(|c| c.route.distance_km).collect();
+    eprintln!("boucles : {lengths:?}");
+    assert_eq!(lengths.len(), 3, "boucles trouvées : {lengths:?}");
+    assert!(lengths.iter().all(|km| (km - 5.0).abs() <= 1.0), "{lengths:?}");
+}

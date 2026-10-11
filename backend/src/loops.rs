@@ -14,7 +14,48 @@ use crate::{
 const MIN_TARGET_DISTANCE_KM: f64 = 2.0;
 const MIN_DISTANCE_TOLERANCE_KM: f64 = 0.5;
 const MAX_LOOP_CANDIDATES: usize = 12;
-const TARGET_RING_FACTORS: [f64; 3] = [0.75, 1.0, 1.25];
+/// Écarts essayés autour du rayon estimé, le plus probable d'abord.
+const TARGET_RING_FACTORS: [f64; 3] = [1.0, 0.85, 1.15];
+/// Longueur d'une boucle rapportée à l'aller-retour à vol d'oiseau vers son
+/// point de passage, avant toute mesure. Les chemins serpentent et le retour
+/// évite l'aller : en forêt on mesure couramment 1,6 à 2.
+const INITIAL_DETOUR: f64 = 1.6;
+
+/// Détour moyen des boucles déjà construites, pour placer les suivantes.
+///
+/// Le point de passage était posé à la moitié de la distance visée, comme si
+/// l'on marchait en ligne droite : sur le terrain la boucle sortait 1,5 à 2 fois
+/// trop longue et presque tous les essais tombaient hors tolérance. Chaque
+/// boucle calculée, même rejetée, dit de combien le réseau allonge le trajet
+/// ici ; le rayon suivant s'en déduit.
+#[derive(Debug, Default)]
+struct Detour {
+    sum: f64,
+    count: u32,
+}
+
+impl Detour {
+    fn ratio(&self) -> f64 {
+        if self.count == 0 {
+            INITIAL_DETOUR
+        } else {
+            self.sum / self.count as f64
+        }
+    }
+
+    /// Distance du point de passage pour une boucle de `target_km`.
+    fn radius_km(&self, target_km: f64) -> f64 {
+        target_km / (2.0 * self.ratio())
+    }
+
+    fn observe(&mut self, radius_km: f64, loop_km: f64) {
+        if radius_km > 0.0 && loop_km.is_finite() {
+            // Un détour sous 1 est impossible : bruit d'accroche au réseau.
+            self.sum += (loop_km / (2.0 * radius_km)).max(1.0);
+            self.count += 1;
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoopGenerationError {
@@ -36,7 +77,8 @@ pub enum LoopGenerationError {
 ///
 /// ## 1. Waypoint Generation Strategy
 /// - Place intermediate waypoints on concentric circles (rings) around start
-/// - Ring distances: [0.75×, 1.0×, 1.25×] of half_target_distance
+/// - Ring distances: [1.0×, 0.85×, 1.15×] of a radius calibrated on the
+///   detour measured on the loops already built (see `Detour`)
 /// - Points evenly distributed by bearing angle (2π / attempts_per_ring)
 ///
 /// ## 2. Route Construction
@@ -54,7 +96,7 @@ pub enum LoopGenerationError {
 /// - Path has ≥ 3 points (prevents degenerate loops)
 ///
 /// ## 4. Optimization Parameters
-/// - `TARGET_RING_FACTORS = [0.75, 1.0, 1.25]`: Explore 3 distance scales
+/// - `TARGET_RING_FACTORS = [1.0, 0.85, 1.15]`: Explore 3 distance scales
 /// - `MAX_LOOP_CANDIDATES = 12`: Limit results to prevent overload
 /// - Early termination when `candidate_goal` candidates found
 ///
@@ -83,7 +125,7 @@ pub async fn generate_loops(
         .min(req.target_distance_km);
     let candidate_goal = req.candidate_count.clamp(1, MAX_LOOP_CANDIDATES);
     let attempts_per_ring = candidate_goal.max(4);
-    let half_distance = (req.target_distance_km / 2.0).max(0.5);
+    let mut detour = Detour::default();
 
     tracing::info!(
         "Generating loops: target {:.1}km ± {:.1}km, {} candidates goal, {} attempts per ring ({} rings)",
@@ -100,7 +142,8 @@ pub async fn generate_loops(
 
             let phase_offset = ring_idx as f64 * 0.35;
             let bearing = 2.0 * PI * (step as f64 / attempts_per_ring as f64) + phase_offset;
-            let waypoint = destination_point(req.start, half_distance * factor, bearing);
+            let radius_km = (detour.radius_km(req.target_distance_km) * factor).max(0.25);
+            let waypoint = destination_point(req.start, radius_km, bearing);
 
             let Some(loop_path) = build_loop_path(engine, req, waypoint) else {
                 tracing::debug!("Rejected: no path found to/from waypoint at bearing {:.0}°", bearing.to_degrees());
@@ -112,6 +155,7 @@ pub async fn generate_loops(
             }
 
             let distance_km = approximate_distance_km(&loop_path);
+            detour.observe(radius_km, distance_km);
             let distance_error = (distance_km - req.target_distance_km).abs();
             if distance_error > tolerance {
                 tracing::debug!(
@@ -335,6 +379,25 @@ fn normalize_bearing(bearing_deg: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_waypoint_radius_follows_the_measured_detour() {
+        let mut detour = Detour::default();
+        assert!((detour.radius_km(5.0) - 5.0 / (2.0 * INITIAL_DETOUR)).abs() < 1e-9);
+
+        // Une boucle de 8 km pour un point à 2 km : le réseau double le trajet.
+        detour.observe(2.0, 8.0);
+        assert!((detour.ratio() - 2.0).abs() < 1e-9);
+        // Pour 5 km, le point de passage doit donc se rapprocher à 1,25 km.
+        assert!((detour.radius_km(5.0) - 1.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_loop_shorter_than_the_crow_flight_does_not_pull_the_detour_under_one() {
+        let mut detour = Detour::default();
+        detour.observe(2.0, 1.0);
+        assert!((detour.ratio() - 1.0).abs() < 1e-9);
+    }
 
     #[test]
     fn test_normalize_longitude() {
