@@ -290,15 +290,15 @@ update msg model =
 
         SurfacesLoaded result ->
             case result of
-                Ok surfaces ->
+                Ok ( surfaces, ign ) ->
                     ( { model
                         | lastResponse =
                             Maybe.map
-                                (\route -> { route | pointSurfaces = Just surfaces })
+                                (\route -> { route | pointSurfaces = Just surfaces, pointIgn = ign })
                                 model.lastResponse
                       }
                     , Cmd.batch
-                        [ Ports.setRouteSurfaces (Just surfaces)
+                        [ Ports.setRouteSurfaces { surfaces = Just surfaces, ign = ign }
                         , Api.sendLog
                             ("surfaces reçues : "
                                 ++ String.fromInt (List.length (List.filter not surfaces))
@@ -343,7 +343,7 @@ update msg model =
                         ( { updatedModel | waypoints = markerPositions, originalResponse = Just route }
                         , Cmd.batch
                             [ Ports.updateRoute displayRoute.path
-                            , Ports.setRouteSurfaces displayRoute.pointSurfaces
+                            , Ports.setRouteSurfaces (surfaceLayers displayRoute)
                             , Ports.setDirectOverlay
                                 { lines = DirectLegs.lines model.directLegs route
                                 , obstacles =
@@ -359,7 +359,7 @@ update msg model =
                         ( applyRoute model route
                         , Cmd.batch
                             [ Ports.updateRoute route.path
-                            , Ports.setRouteSurfaces route.pointSurfaces
+                            , Ports.setRouteSurfaces (surfaceLayers route)
                             , Ports.updateWaypointMarkers model.waypoints
                             , case route.metadata of
                                 Just meta ->
@@ -416,7 +416,7 @@ update msg model =
                                     |> (\m -> applyRoute m candidate.route)
                                 , Cmd.batch
                                     [ Ports.updateRoute candidate.route.path
-                                    , Ports.setRouteSurfaces candidate.route.pointSurfaces
+                                    , Ports.setRouteSurfaces (surfaceLayers candidate.route)
                                     , case candidate.route.metadata of
                                         Just metadata ->
                                             Ports.updateBbox metadata.bounds
@@ -446,7 +446,7 @@ update msg model =
                         |> (\m -> applyRoute m candidate.route)
                     , Cmd.batch
                         [ Ports.updateRoute candidate.route.path
-                        , Ports.setRouteSurfaces candidate.route.pointSurfaces
+                        , Ports.setRouteSurfaces (surfaceLayers candidate.route)
                         , case candidate.route.metadata of
                             Just meta ->
                                 Ports.updateBbox meta.bounds
@@ -1001,7 +1001,7 @@ update msg model =
                         waypoints
                     , Cmd.batch
                         ([ Ports.updateRoute route.path
-                         , Ports.setRouteSurfaces route.pointSurfaces
+                         , Ports.setRouteSurfaces (surfaceLayers route)
                          , frameRoute route.path
                          , surfacesCmd
                          ]
@@ -1099,7 +1099,7 @@ update msg model =
                     ( applyRoute { model | error = Nothing } route
                     , Cmd.batch
                         [ Ports.updateRoute route.path
-                        , Ports.setRouteSurfaces route.pointSurfaces
+                        , Ports.setRouteSurfaces (surfaceLayers route)
                         , frameRoute route.path
                         ]
                     )
@@ -1960,7 +1960,7 @@ rebuildAndDisplayRoute model =
             ( { model | lastResponse = Just displayRoute }
             , Cmd.batch
                 [ Ports.updateRoute displayRoute.path
-                , Ports.setRouteSurfaces displayRoute.pointSurfaces
+                , Ports.setRouteSurfaces (surfaceLayers displayRoute)
                 ]
             )
 
@@ -2028,6 +2028,11 @@ Hors multi-points le tracé n'a pas de segment intérieur où insérer quoi que 
 soit, et `InsertWaypoint` recalcule de toute façon en multi-points : on renvoie
 donc vers le mode plutôt que de basculer dans le dos de l'utilisateur.
 -}
+surfaceLayers : RouteResponse -> { surfaces : Maybe (List Bool), ign : Maybe (List Bool) }
+surfaceLayers route =
+    { surfaces = route.pointSurfaces, ign = route.pointIgn }
+
+
 insertOnRouteLine : Coordinate -> Model -> Msg
 insertOnRouteLine coord model =
     if model.routeMode == MultiPoint && List.length model.waypoints >= 2 then

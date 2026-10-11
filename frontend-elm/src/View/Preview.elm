@@ -73,7 +73,43 @@ viewStats route =
                     text ""
             ]
         , viewSurfaceBreakdown route.surfaceBreakdown
+        , viewIgnShare route
         ]
+
+
+{-| Longueur du tracé sur des chemins que seule l'IGN connaît.
+
+Un chemin absent d'OSM a pu disparaître sur le terrain : la carte le peint
+d'une teinte à part, et cette ligne dit combien il en reste à vérifier.
+-}
+viewIgnShare : RouteResponse -> Html Msg
+viewIgnShare route =
+    let
+        flags =
+            Maybe.withDefault [] route.pointIgn
+
+        ignKm =
+            List.map3
+                (\a b onIgn ->
+                    if onIgn then
+                        haversineMeters a b / 1000
+
+                    else
+                        0
+                )
+                route.path
+                (List.drop 1 route.path)
+                (List.drop 1 flags)
+                |> List.sum
+    in
+    if ignKm <= 0 then
+        text ""
+
+    else
+        p [ class "surface-legend-item ign-share" ]
+            [ span [ class "surface-dot surface-ign" ] []
+            , text ("Chemins IGN absents d'OSM : " ++ Format.km ignKm)
+            ]
 
 
 formatTime : Int -> String

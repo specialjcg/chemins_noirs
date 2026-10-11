@@ -7,6 +7,7 @@ pub mod error;
 pub mod geo_utils;
 pub mod gpx_export;
 pub mod graph;
+pub mod ign;
 pub mod landcover;
 pub mod lodgings;
 pub mod loops;
@@ -130,6 +131,7 @@ async fn route_handler(
         surface_breakdown: None,
         segments: None,
         point_surfaces: None,
+        point_ign: None,
         obstacles: None,
     };
 

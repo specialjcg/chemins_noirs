@@ -412,6 +412,7 @@ async fn route_handler(
                 None => (None, None),
             };
 
+            let point_ign = point_ign_along(&[Arc::clone(&engine)], &path);
             let response = RouteResponse {
                 path,
                 distance_km,
@@ -424,6 +425,7 @@ async fn route_handler(
                 surface_breakdown: None,
                 segments: None,
                 point_surfaces: Some(point_surfaces),
+                point_ign,
                 obstacles: None,
             };
 
@@ -490,6 +492,8 @@ struct SurfacesRequest {
 #[derive(serde::Serialize)]
 struct SurfacesResponse {
     point_surfaces: Vec<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    point_ign: Option<Vec<bool>>,
 }
 
 /// Revêtement d'une ligne déjà tracée, point par point.
@@ -522,7 +526,8 @@ async fn surfaces_handler(
         unpaved
     );
 
-    Ok(Json(SurfacesResponse { point_surfaces }))
+    let point_ign = point_ign_along(&[engine], &req.path);
+    Ok(Json(SurfacesResponse { point_surfaces, point_ign }))
 }
 
 fn bbox_with_margin(points: &[Coordinate]) -> BoundingBox {
@@ -721,6 +726,9 @@ async fn multi_route_handler(
     // frontend can place markers exactly on the route line.
     let mut all_coords: Vec<Coordinate> = Vec::new();
     let mut all_surfaces: Vec<bool> = Vec::new();
+    // Moteurs des morceaux, pour dire après coup quels points suivent un
+    // chemin IGN (voir `point_ign_along`).
+    let mut chunk_engines: Vec<Arc<RouteEngine>> = Vec::new();
     let mut snapped_waypoints: Vec<Coordinate> = Vec::new();
     let mut total_distance = 0.0;
     // Track segment boundaries: (start_idx, end_idx) in all_coords. Boundaries are
@@ -758,6 +766,9 @@ async fn multi_route_handler(
             chunk_end + 1
         );
         let (engine, engine_bbox) = get_or_build_engine(&config, bbox, Some(generation)).await?;
+        if !chunk_engines.iter().any(|seen| Arc::ptr_eq(seen, &engine)) {
+            chunk_engines.push(Arc::clone(&engine));
+        }
         // Moteur obtenu après une longue attente : si le marcheur a déplacé un
         // point entre-temps, ce tracé ne sera jamais affiché.
         if is_stale(Some(generation)) {
@@ -940,6 +951,7 @@ async fn multi_route_handler(
         }
     }
     let obstacles = obstacles_along(&all_coords, direct_spans);
+    let point_ign = point_ign_along(&chunk_engines, &all_coords);
 
     let (estimated_time, difficulty) = match &elevation_profile {
         Some(profile) => {
@@ -1018,6 +1030,7 @@ async fn multi_route_handler(
         surface_breakdown: None,
         segments,
         point_surfaces: Some(all_surfaces),
+        point_ign,
         obstacles: (!obstacles.is_empty()).then_some(obstacles),
     };
 
@@ -1232,6 +1245,19 @@ async fn pois_handler(
 /// Les bornes réduites à un point désignent une étape que la ligne ne contient
 /// plus : on les retire, sans quoi `from > to` ferait paniquer la découpe à
 /// l'autre bout.
+/// Points du tracé qui suivent un chemin ajouté depuis l'IGN, selon l'un des
+/// moteurs qui l'ont calculé. `None` quand aucun : la réponse reste alors
+/// celle d'avant la fusion IGN.
+fn point_ign_along(engines: &[Arc<RouteEngine>], path: &[Coordinate]) -> Option<Vec<bool>> {
+    let mut flags = vec![false; path.len()];
+    for engine in engines {
+        for (flag, ign) in flags.iter_mut().zip(engine.ign_along(path)) {
+            *flag |= ign;
+        }
+    }
+    flags.contains(&true).then_some(flags)
+}
+
 fn clamp_boundaries(boundaries: &mut Vec<(usize, usize)>, last: usize) {
     for bound in boundaries.iter_mut() {
         bound.0 = bound.0.min(last);
@@ -1267,7 +1293,61 @@ fn attach_landcover(
     }
 }
 
+/// Graphe de l'emprise : celui d'OSM, relu du cache ou construit, complété
+/// des chemins IGN qui lui manquent.
+///
+/// La fusion IGN vient après l'écriture du cache, jamais dedans : le graphe en
+/// cache reste celui d'OSM seul, et une fusion corrigée s'applique dès le
+/// chargement suivant, sans reconstruire depuis le PBF.
 fn prepare_graph_for_bbox(
+    config: &PartialGraphConfig,
+    bbox: BoundingBox,
+    cancel: &Arc<AtomicBool>,
+) -> Result<GraphFile, (StatusCode, String)> {
+    let mut graph = prepare_osm_graph_for_bbox(config, bbox, cancel)?;
+    attach_ign(&mut graph, config, &bbox, cancel);
+    Ok(graph)
+}
+
+/// Ajoute au graphe les chemins IGN absents d'OSM (voir `backend::ign`).
+///
+/// Sans réseau, ou si le service IGN répond mal, on garde le graphe d'OSM :
+/// le calcul reste possible, avec les détours d'avant. `IGN_TRONCONS=0`
+/// désactive la fusion.
+fn attach_ign(graph: &mut GraphFile, config: &PartialGraphConfig, bbox: &BoundingBox, cancel: &AtomicBool) {
+    if std::env::var("IGN_TRONCONS").as_deref() == Ok("0") {
+        return;
+    }
+    let t0 = std::time::Instant::now();
+    let cache_key = bbox.cache_key();
+    let troncons = match backend::ign::load_or_fetch(&config.cache_dir, bbox, &cache_key, cancel) {
+        Ok(troncons) => troncons,
+        Err(err) => {
+            tracing::warn!("chemins IGN indisponibles pour {:?} ({err}) : graphe OSM seul", bbox);
+            return;
+        }
+    };
+
+    let (first_node, first_edge) = (graph.nodes.len(), graph.edges.len());
+    let stats = backend::ign::merge_into(graph, &troncons);
+    // Les arêtes OSM coupées gardent leur première part en place, avec ses
+    // attributs : seuls les ajouts, en fin de liste, attendent l'occupation
+    // du sol. Sa grille est déjà en cache, posée avec le graphe.
+    match backend::graph::load_or_build_landcover(&config.pbf_path, &config.cache_dir, bbox, &cache_key) {
+        Ok(grid) => backend::graph::apply_landcover_from(graph, &grid, first_node, first_edge),
+        Err(err) => tracing::warn!("occupation du sol absente des chemins IGN ({err})"),
+    }
+    tracing::info!(
+        "PERF chemins IGN : {:.0}ms, {} tronçons reçus, {} ajoutés ({:.1} km), {} voies OSM coupées",
+        t0.elapsed().as_secs_f64() * 1000.0,
+        troncons.len(),
+        stats.added_edges,
+        stats.added_km,
+        stats.split_edges
+    );
+}
+
+fn prepare_osm_graph_for_bbox(
     config: &PartialGraphConfig,
     bbox: BoundingBox,
     cancel: &Arc<AtomicBool>,

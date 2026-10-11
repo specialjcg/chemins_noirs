@@ -112,7 +112,7 @@ Un itinéraire relu depuis la base ne porte que ses coordonnées : la carte le
 peint alors d'un seul vert, même quand il est non goudronné presque partout.
 Cet appel récupère l'information sans retoucher le tracé.
 -}
-fetchSurfaces : List Coordinate -> (Result Http.Error (List Bool) -> msg) -> Cmd msg
+fetchSurfaces : List Coordinate -> (Result Http.Error ( List Bool, Maybe (List Bool) ) -> msg) -> Cmd msg
 fetchSurfaces path toMsg =
     Http.post
         { url = "/api/surfaces"
@@ -123,7 +123,10 @@ fetchSurfaces path toMsg =
                 )
         , expect =
             Http.expectJson toMsg
-                (Json.Decode.field "point_surfaces" (Json.Decode.list Json.Decode.bool))
+                (Json.Decode.map2 Tuple.pair
+                    (Json.Decode.field "point_surfaces" (Json.Decode.list Json.Decode.bool))
+                    (Json.Decode.maybe (Json.Decode.field "point_ign" (Json.Decode.list Json.Decode.bool)))
+                )
         }
 
 

@@ -341,6 +341,7 @@ mod tests {
             surface_breakdown: None,
             segments: None,
             point_surfaces: None,
+            point_ign: None,
             obstacles: None,
         };
 
@@ -513,6 +514,7 @@ mod tests {
             surface_breakdown: None,
             segments: None,
             point_surfaces: None,
+            point_ign: None,
             obstacles: None,
         };
 

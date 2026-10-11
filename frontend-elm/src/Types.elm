@@ -224,7 +224,7 @@ type Msg
     | MapClicked Float Float
     | RouteFetched (Result Http.Error RouteResponse)
     | PendingTick
-    | SurfacesLoaded (Result Http.Error (List Bool))
+    | SurfacesLoaded (Result Http.Error ( List Bool, Maybe (List Bool) ))
     | UpdateLoadedRoute
     | TogglePanel
     | SwitchPanelTab PanelTab
@@ -369,6 +369,7 @@ type alias RouteResponse =
     , surfaceBreakdown : Maybe (List ( String, Float ))
     , segments : Maybe (List SegmentStats)
     , pointSurfaces : Maybe (List Bool)
+    , pointIgn : Maybe (List Bool)
     , obstacles : List Obstacle
     }
 

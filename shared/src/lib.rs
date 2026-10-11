@@ -153,6 +153,10 @@ pub struct RouteResponse {
     /// Same length as `path`. Used by frontend to color unpaved segments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub point_surfaces: Option<Vec<bool>>,
+    /// Points qui suivent un chemin ajouté depuis la BD TOPO de l'IGN, absent
+    /// d'OSM. Même longueur que `path` ; absent quand aucun.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point_ign: Option<Vec<bool>>,
     /// Obstacles traversés par les tronçons tirés en ligne droite.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub obstacles: Option<Vec<Obstacle>>,

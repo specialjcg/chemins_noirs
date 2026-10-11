@@ -279,6 +279,8 @@ struct EdgeData {
     forest_ratio: f64,
     /// Intermediate waypoints for this edge (OSM geometry)
     waypoints: Vec<Coordinate>,
+    /// Tronçon ajouté depuis la BD TOPO de l'IGN (voir `crate::ign`).
+    ign: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -353,6 +355,7 @@ impl RouteEngine {
                 habitation_pressure: edge.habitation_pressure,
                 forest_ratio: edge.forest_ratio,
                 waypoints: edge.waypoints,
+                ign: edge.ign,
             };
             graph.update_edge(from, to, data);
         }
@@ -1188,6 +1191,28 @@ impl RouteEngine {
             .collect()
     }
 
+    /// Provenance de chaque point d'une ligne : `true` quand il suit un
+    /// tronçon ajouté depuis l'IGN, absent d'OSM.
+    ///
+    /// Calculée sur le tracé final plutôt que transportée avec lui : le
+    /// revêtement suit déjà ce chemin à travers le repli des antennes, les
+    /// tronçons directs et le tracé libre, et un second vecteur parallèle
+    /// aurait dû être tenu aligné à chacune de ces étapes.
+    ///
+    /// Le rayon est court : la fusion n'ajoute un tronçon IGN qu'à plus de
+    /// `ign::COVERED_M` d'une voie OSM, donc un point posé sur une voie OSM
+    /// trouve celle-ci avant tout tronçon IGN.
+    pub fn ign_along(&self, path: &[Coordinate]) -> Vec<bool> {
+        const MAX_SNAP_KM: f64 = 0.015;
+
+        path.iter()
+            .map(|&point| match self.nearest_edge_or_incident(point) {
+                Some((edge_idx, dist_deg)) if dist_deg * 111.0 <= MAX_SNAP_KM => self.graph[edge_idx].ign,
+                _ => false,
+            })
+            .collect()
+    }
+
     /// Arête la plus proche d'un point, sommets intermédiaires *et* arêtes
     /// incidentes aux nœuds voisins confondus, avec sa distance en degrés.
     fn nearest_edge_or_incident(
@@ -1599,14 +1624,14 @@ mod tests {
                         Coordinate { lat: 45.020, lon: 5.002 },  // wp1 ← target area
                         Coordinate { lat: 45.025, lon: 5.001 },  // wp2
                     ],
-                    forest_ratio: 0.0, habitation_pressure: 0.0,
+                    forest_ratio: 0.0, habitation_pressure: 0.0, ign: false,
                 },
                 // Paved roads at intersection
-                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 400.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0 },
-                EdgeRecord { from: 1, to: 4, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0 },
-                EdgeRecord { from: 1, to: 5, surface: SurfaceType::Paved, length_m: 550.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0 },
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 400.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 1, to: 4, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 1, to: 5, surface: SurfaceType::Paved, length_m: 550.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
                 // Connect N2→N5 for routing alternatives
-                EdgeRecord { from: 2, to: 5, surface: SurfaceType::Paved, length_m: 700.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0 },
+                EdgeRecord { from: 2, to: 5, surface: SurfaceType::Paved, length_m: 700.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
             ],
         }
     }
@@ -1959,8 +1984,8 @@ mod tests {
                 NodeRecord { id: 3, lat: 45.000, lon: 5.020, elevation: None, population_density: 0.0 },
             ],
             edges: vec![
-                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0 },
-                EdgeRecord { from: 2, to: 3, surface: SurfaceType::Dirt, length_m: 800.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0 },
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 2, to: 3, surface: SurfaceType::Dirt, length_m: 800.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0, ign: false },
             ],
         };
         let engine = RouteEngine::from_graph_file(graph).expect("graphe de test");
@@ -1998,9 +2023,9 @@ mod tests {
                 NodeRecord { id: 3, lat: 45.005, lon: 5.005, elevation: None, population_density: 0.0 },
             ],
             edges: vec![
-                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Trail, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0 },
-                EdgeRecord { from: 1, to: 3, surface: SurfaceType::Trail, length_m: 500.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0 },
-                EdgeRecord { from: 3, to: 2, surface: SurfaceType::Trail, length_m: 500.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0 },
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Trail, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 1, to: 3, surface: SurfaceType::Trail, length_m: 500.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 3, to: 2, surface: SurfaceType::Trail, length_m: 500.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0, ign: false },
             ],
         }
     }
@@ -2113,7 +2138,7 @@ mod tests {
                 // Géométrie intermédiaire : sans elle le clic se raccroche
                 // directement à un nœud et le préfixe de snap n'existe pas.
                 EdgeRecord {
-                    from: 1, to: 2, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0,
+                    from: 1, to: 2, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0, ign: false,
                     waypoints: vec![
                         Coordinate { lat: 45.0, lon: 5.002 },
                         Coordinate { lat: 45.0, lon: 5.004 },
@@ -2122,7 +2147,7 @@ mod tests {
                     ],
                 },
                 EdgeRecord {
-                    from: 2, to: 3, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0,
+                    from: 2, to: 3, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0, ign: false,
                     waypoints: vec![
                         Coordinate { lat: 45.0, lon: 5.012 },
                         Coordinate { lat: 45.0, lon: 5.014 },
@@ -2130,7 +2155,7 @@ mod tests {
                     ],
                 },
                 EdgeRecord {
-                    from: 3, to: 4, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0,
+                    from: 3, to: 4, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0, ign: false,
                     waypoints: vec![
                         Coordinate { lat: 45.0, lon: 5.024 },
                         Coordinate { lat: 45.0, lon: 5.027 },
@@ -2204,8 +2229,8 @@ mod tests {
                 NodeRecord { id: 3, lat: 45.0, lon: 5.020, elevation: None, population_density: 0.0 },
             ],
             edges: vec![
-                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Trail, length_m: 790.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0 },
-                EdgeRecord { from: 2, to: 3, surface: SurfaceType::Trail, length_m: 790.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0 },
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Trail, length_m: 790.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 2, to: 3, surface: SurfaceType::Trail, length_m: 790.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
             ],
         }
     }

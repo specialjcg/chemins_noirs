@@ -231,6 +231,9 @@
   --map-route-halo: rgb(var(--bg-deep-rgb) / 0.85);
   --map-osm-unpaved: var(--accent-forest-light);
   --map-route-direct: var(--text-primary);
+  /* Chemin connu de l'IGN seule : bleu, hors de la gamme laiton / terre cuite
+     du revêtement, pour qu'on le repère avant d'y engager la marche. */
+  --map-route-ign: var(--info-blue);
   --map-obstacle-building: var(--accent-terracotta);
   --map-obstacle-open: var(--accent-brass);
   --map-obstacle-road: var(--text-primary);
@@ -1739,6 +1742,7 @@ small {
 }
 .surface-dot.surface-paved { background: var(--surface-paved); }
 .surface-dot.surface-trail { background: var(--surface-trail); }
+.surface-dot.surface-ign { background: var(--map-route-ign); }
 .surface-dot.surface-dirt  { background: var(--surface-dirt); }
 
 /* ─── Segment Stats ─── */

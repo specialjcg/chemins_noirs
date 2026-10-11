@@ -357,6 +357,7 @@ async fn main() -> Result<(), String> {
         surface_breakdown: None,
         segments: Some(segments),
         point_surfaces: None,
+        point_ign: None,
         obstacles: None,
     };
 

@@ -53,7 +53,7 @@ decodeRouteResponse : Decoder RouteResponse
 decodeRouteResponse =
     Decode.map8
         (\path dist gpx meta elev snapped time diff ->
-            \surface segments pointSurfaces obstacles ->
+            \surface segments pointSurfaces pointIgn obstacles ->
                 { path = path
                 , distanceKm = dist
                 , gpxBase64 = gpx
@@ -65,6 +65,7 @@ decodeRouteResponse =
                 , surfaceBreakdown = surface
                 , segments = segments
                 , pointSurfaces = pointSurfaces
+                , pointIgn = pointIgn
                 , obstacles = obstacles
                 }
         )
@@ -78,10 +79,12 @@ decodeRouteResponse =
         (Decode.maybe (Decode.field "difficulty" Decode.string))
         |> Decode.andThen
             (\fn ->
-                Decode.map4 fn
+                Decode.map5 fn
                     (Decode.maybe (Decode.field "surface_breakdown" decodeSurfaceBreakdown))
                     (Decode.maybe (Decode.field "segments" (Decode.list decodeSegmentStats)))
                     (Decode.maybe (Decode.field "point_surfaces" (Decode.list Decode.bool)))
+                    -- Absent quand le tracé n'emprunte aucun chemin IGN.
+                    (Decode.maybe (Decode.field "point_ign" (Decode.list Decode.bool)))
                     -- Absent des itinéraires sans tronçon direct, et de ceux
                     -- enregistrés avant que le backend ne les signale.
                     (Decode.maybe (Decode.field "obstacles" (Decode.list decodeObstacle))

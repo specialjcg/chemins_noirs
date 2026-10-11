@@ -17,7 +17,8 @@ port initMap : () -> Cmd msg
 port updateRoute : List Coordinate -> Cmd msg
 
 
-port setRouteSurfaces : Maybe (List Bool) -> Cmd msg
+{-| Revêtement et provenance IGN de chaque point du tracé affiché. -}
+port setRouteSurfaces : { surfaces : Maybe (List Bool), ign : Maybe (List Bool) } -> Cmd msg
 
 
 -- Tronçons tirés tout droit (en pointillé) et ce qu'ils traversent.

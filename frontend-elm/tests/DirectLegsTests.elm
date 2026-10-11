@@ -92,5 +92,6 @@ route bounds =
             )
             bounds
     , pointSurfaces = Nothing
+    , pointIgn = Nothing
     , obstacles = []
     }

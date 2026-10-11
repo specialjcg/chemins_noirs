@@ -524,6 +524,20 @@ function ensureMap() {
       paint: { 'line-color': mapColor('--map-route-unpaved'), 'line-width': 4 }
     });
 
+    // Passages par un chemin que seule l'IGN connaît : OSM ne l'a pas, il a
+    // pu disparaître sur le terrain. Une teinte à part pour le vérifier.
+    mapInstance.addSource('route-ign', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+    mapInstance.addLayer({
+      id: 'route-line-ign',
+      type: 'line',
+      source: 'route-ign',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': mapColor('--map-route-ign'), 'line-width': 4 }
+    });
+
     // Tronçons tirés tout droit, en pointillé par-dessus le tracé, et ce
     // qu'ils traversent.
     mapInstance.addSource('route-direct', {
@@ -1322,6 +1336,8 @@ export function centerOnMarkers(start, end) {
 
 // Latest surface flags, set by setRouteSurfaces port (null = no data)
 let currentRouteSurfaces = null;
+// Points suivant un chemin IGN absent d'OSM (null = aucun)
+let currentRouteIgn = null;
 
 let currentDirectOverlay = null;
 
@@ -1358,8 +1374,12 @@ function _applyDirectOverlay() {
   });
 }
 
-export function setRouteSurfaces(surfaces) {
+export function setRouteSurfaces({ surfaces, ign }) {
   currentRouteSurfaces = surfaces; // null or Array<bool>
+  currentRouteIgn = ign;
+  if (ign) {
+    console.log('[maplibre] setRouteSurfaces', ign.filter(Boolean).length, 'pts sur chemin IGN');
+  }
   if (surfaces) {
     const unpavedCount = surfaces.filter(s => s === false).length;
     console.log('[maplibre] setRouteSurfaces', surfaces.length, 'pts,', unpavedCount, 'unpaved');
@@ -1367,6 +1387,35 @@ export function setRouteSurfaces(surfaces) {
     console.log('[maplibre] setRouteSurfaces null');
   }
   _applyUnpavedOverlay();
+  _applyIgnOverlay();
+}
+
+/** Lignes formées des points consécutifs pour lesquels `flags[i]` est vrai. */
+function _runsWhere(flags) {
+  const features = [];
+  let seg = null;
+  for (let i = 0; i < currentRoute.length; i++) {
+    const point = [currentRoute[i].lon, currentRoute[i].lat];
+    if (flags[i]) {
+      // Le point d'avant ouvre la ligne, pour qu'elle rejoigne le reste du tracé.
+      if (!seg) seg = i > 0 ? [[currentRoute[i - 1].lon, currentRoute[i - 1].lat], point] : [point];
+      else seg.push(point);
+    } else if (seg) {
+      seg.push(point);
+      if (seg.length >= 2) features.push(seg);
+      seg = null;
+    }
+  }
+  if (seg && seg.length >= 2) features.push(seg);
+  return features.map(coordinates => ({ type: 'Feature', geometry: { type: 'LineString', coordinates }, properties: {} }));
+}
+
+function _applyIgnOverlay() {
+  if (!mapInstance) return;
+  const src = mapInstance.getSource('route-ign');
+  if (!src) return;
+  const features = currentRouteIgn && currentRoute ? _runsWhere(currentRouteIgn) : [];
+  src.setData({ type: 'FeatureCollection', features });
 }
 
 function _applyUnpavedOverlay() {
@@ -1415,7 +1464,9 @@ export function updateRoute(coords) {
     }
     currentRoute = null;
     currentRouteSurfaces = null;
+    currentRouteIgn = null;
     _applyUnpavedOverlay();
+    _applyIgnOverlay();
     currentDirectOverlay = null;
     _applyDirectOverlay();
     // Clear km markers when route is cleared
@@ -1443,6 +1494,7 @@ export function updateRoute(coords) {
     routeSource.setData({ type: 'FeatureCollection', features: [lineString] });
   }
   _applyUnpavedOverlay();
+  _applyIgnOverlay();
 
   updateRouteMetrics(coords);
   animationStartTimestamp = null;

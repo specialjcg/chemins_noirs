@@ -129,6 +129,13 @@ pub struct EdgeRecord {
     /// `HabitationField::pressure`). Renseignée par `apply_landcover`.
     #[serde(default)]
     pub habitation_pressure: f64,
+    /// Tronçon venu de la BD TOPO de l'IGN, absent d'OSM (voir `crate::ign`).
+    /// Jamais écrit dans le cache du graphe : la fusion IGN est refaite à
+    /// chaque chargement, le graphe en cache reste celui d'OSM seul. Le
+    /// format postcard n'a pas de noms de champs ; un champ persisté de plus
+    /// rendrait illisibles tous les graphes déjà construits.
+    #[serde(skip)]
+    pub ign: bool,
 }
 
 impl GraphFile {
@@ -613,6 +620,7 @@ impl GraphBuilder {
                         // d'occupation du sol : rien à propager.
                         forest_ratio: 0.0,
                         habitation_pressure: 0.0,
+                        ign: false,
                     });
                 }
                 _ => {
@@ -684,6 +692,7 @@ impl GraphBuilder {
                     waypoints: e.waypoints,
                     forest_ratio: e.forest_ratio,
                     habitation_pressure: e.habitation_pressure,
+                    ign: e.ign,
                 })
             })
             .collect();
@@ -1200,6 +1209,7 @@ impl GraphBuilder {
                     waypoints: e.waypoints,
                     forest_ratio: e.forest_ratio,
                     habitation_pressure: e.habitation_pressure,
+                    ign: e.ign,
                 })
             })
             .collect();
@@ -1496,11 +1506,23 @@ pub fn load_or_build_landcover(
 /// que leurs extrémités ferait passer pour boisé un chemin qui traverse une
 /// coupe, et pour isolé un chemin qui longe un hameau en son milieu.
 pub fn apply_landcover(graph: &mut GraphFile, grid: &crate::landcover::LandCoverGrid) {
+    apply_landcover_from(graph, grid, 0, 0);
+}
+
+/// `apply_landcover` limitée aux nœuds à partir de `first_node` et aux arêtes à
+/// partir de `first_edge` : pour ce que la fusion IGN ajoute à un graphe dont
+/// le reste est déjà renseigné.
+pub fn apply_landcover_from(
+    graph: &mut GraphFile,
+    grid: &crate::landcover::LandCoverGrid,
+    first_node: usize,
+    first_edge: usize,
+) {
     const FOREST_SAMPLE_M: f64 = 50.0;
 
     let habitation = grid.habitation_field();
 
-    for node in graph.nodes.iter_mut() {
+    for node in graph.nodes.iter_mut().skip(first_node) {
         node.population_density = habitation.pressure(node.lat, node.lon);
     }
 
@@ -1510,7 +1532,7 @@ pub fn apply_landcover(graph: &mut GraphFile, grid: &crate::landcover::LandCover
         .map(|node| (node.id, Coordinate { lat: node.lat, lon: node.lon }))
         .collect();
 
-    for edge in graph.edges.iter_mut() {
+    for edge in graph.edges.iter_mut().skip(first_edge) {
         let (Some(from), Some(to)) = (coords.get(&edge.from), coords.get(&edge.to)) else {
             continue;
         };
@@ -1571,6 +1593,7 @@ fn create_edge_record(
         waypoints: Vec::new(), // No intermediate waypoints for now
         forest_ratio: 0.0,     // Renseigné plus tard par `apply_landcover`
         habitation_pressure: 0.0,
+        ign: false,
     })
 }
 
@@ -1812,6 +1835,7 @@ fn build_edge_with_waypoints(
         waypoints,
         forest_ratio: 0.0, // Renseigné plus tard par `apply_landcover`
         habitation_pressure: 0.0,
+        ign: false,
     })
 }
 
@@ -1992,6 +2016,7 @@ mod tests {
             waypoints: vec![],
             forest_ratio: 0.0,
             habitation_pressure: 0.0,
+            ign: false,
         };
 
         let merged = merge_close_nodes(vec![edge(1, 11), edge(11, 21), edge(11, 100)], &state);
@@ -2024,6 +2049,7 @@ mod tests {
             waypoints,
             forest_ratio: 0.0,
             habitation_pressure: 0.0,
+            ign: false,
         };
         let mut graph = GraphFile {
             nodes: vec![node(1, 2.0), node(2, 2.04), node(3, 2.0), node(4, 2.002)],
