@@ -1774,6 +1774,28 @@ handleMapClick lat lon model =
     else if wpCount < maxWp then
         update (AddWaypoint coord) model
 
+    else if model.routeMode == Loop then
+        -- Une boucle n'a qu'un départ : cliquer ailleurs le déplace, comme on
+        -- glisserait le marqueur. Refuser le clic laissait croire la carte
+        -- bloquée. Les boucles proposées partaient de l'ancien départ : on les
+        -- retire plutôt que d'afficher un tracé qui n'y passe plus.
+        let
+            ( moved, moveCmd ) =
+                update (MoveWaypoint 0 lat lon) model
+        in
+        ( { moved
+            | loopCandidates = []
+            , loopMeta = Nothing
+            , selectedLoopIdx = Nothing
+            , lastResponse = Nothing
+          }
+        , Cmd.batch
+            [ Ports.updateWaypointMarkers moved.waypoints
+            , Ports.updateRoute []
+            , moveCmd
+            ]
+        )
+
     else
         -- Le clic était avalé sans un mot : passé le plafond du mode, la carte
         -- devenait muette et rien ne disait que c'était voulu. On ne refuse pas
@@ -1986,7 +2008,8 @@ clicIgnoreMessage mode =
             "Un aller simple n'a que deux points. Glissez un marqueur pour le déplacer, cliquez sur le tracé pour insérer une étape, ou cochez Multi-points pour en ajouter d'autres."
 
         Loop ->
-            "Une boucle part d'un seul point. Glissez le marqueur pour changer de départ, ou cochez Multi-points."
+            -- Un clic en boucle déplace le départ : on n'arrive plus ici.
+            "Une boucle part d'un seul point."
 
         MultiPoint ->
             -- Le plafond du mode est à 999 : on n'arrive ici qu'en l'atteignant.
