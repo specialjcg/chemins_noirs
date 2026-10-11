@@ -76,6 +76,7 @@ view model =
                     ]
                 ]
             ]
+        , viewCloseLoopToggle model
         , div [ class "chemin-noir-toggle" ]
             [ label [ class "toggle-label" ]
                 [ div [ class "toggle-switch" ]
@@ -590,6 +591,46 @@ difficultyLabel niveau =
 
         autre ->
             autre
+
+
+{-| Referme le tracé multi-points : un dernier tronçon ramène au départ.
+
+Le backend savait déjà boucler (`close_loop`), mais rien dans l'interface ne
+l'activait. Hors multi-points le réglage n'a pas de sens : l'aller simple a
+deux points fixes, et l'onglet Boucle génère ses propres boucles.
+-}
+viewCloseLoopToggle : Model -> Html Msg
+viewCloseLoopToggle model =
+    if model.routeMode == MultiPoint then
+        div [ class "chemin-noir-toggle" ]
+            [ label [ class "toggle-label" ]
+                [ div [ class "toggle-switch" ]
+                    [ input
+                        [ type_ "checkbox"
+                        , checked model.closeLoop
+                        , onCheck (\_ -> ToggleCloseLoop)
+                        , class "toggle-input"
+                        ]
+                        []
+                    , span [ class "toggle-slider" ] []
+                    ]
+                , div [ class "toggle-text" ]
+                    [ span [ class "toggle-title" ] [ text "Boucler" ]
+                    , span [ class "toggle-desc" ]
+                        [ text
+                            (if model.closeLoop then
+                                "Retour au point de départ"
+
+                             else
+                                "Le tracé s'arrête au dernier point"
+                            )
+                        ]
+                    ]
+                ]
+            ]
+
+    else
+        text ""
 
 
 viewFreehandPanel : Model -> Html Msg
