@@ -219,6 +219,7 @@ decodeSavedRoute =
                 , tags = tags
                 , originalWaypoints = originalWp
                 , routeData = routeData
+                , folder = Nothing
                 }
         )
         (Decode.field "id" Decode.int)
@@ -236,6 +237,11 @@ decodeSavedRoute =
                     (Decode.field "tags" (Decode.list Decode.string))
                     (Decode.maybe (Decode.field "original_waypoints" (Decode.list decodeCoordinate)))
                     (Decode.field "route_data" decodeRouteResponse)
+            )
+        |> Decode.andThen
+            (\route ->
+                Decode.maybe (Decode.field "folder" (Decode.nullable Decode.string))
+                    |> Decode.map (\folder -> { route | folder = Maybe.andThen identity folder })
             )
 
 

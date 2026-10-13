@@ -42,6 +42,8 @@ pub struct SavedRoute {
     /// Original waypoints for multi-point routes (optional for backward compatibility)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub original_waypoints: Option<sqlx::types::JsonValue>,
+    /// Folder grouping the route in the saved list
+    pub folder: Option<String>,
 }
 
 /// Request to save a new route
@@ -54,6 +56,16 @@ pub struct SaveRouteRequest {
     /// Original waypoints for multi-point routes (allows re-tracing with same waypoints)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub original_waypoints: Option<Vec<shared::Coordinate>>,
+    /// Folder; on update, `None` keeps the current one
+    #[serde(default)]
+    pub folder: Option<String>,
+}
+
+/// Trim a folder name, a blank one meaning no folder.
+fn normalize_folder(folder: Option<String>) -> Option<String> {
+    folder
+        .map(|f| f.trim().to_string())
+        .filter(|f| !f.is_empty())
 }
 
 /// Database connection pool
@@ -128,9 +140,9 @@ impl Database {
             r#"
             INSERT INTO saved_routes (
                 name, description, distance_km, total_ascent_m, total_descent_m,
-                route_data, gpx_data, tags, original_waypoints
+                route_data, gpx_data, tags, original_waypoints, folder
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING *
             "#,
         )
@@ -143,6 +155,7 @@ impl Database {
         .bind(&req.route.gpx_base64)
         .bind(req.tags.unwrap_or_default())
         .bind(original_waypoints_json)
+        .bind(normalize_folder(req.folder))
         .fetch_one(&self.pool)
         .await?;
 
@@ -179,7 +192,8 @@ impl Database {
                 route_data = $7,
                 gpx_data = $8,
                 tags = $9,
-                original_waypoints = COALESCE($10, original_waypoints)
+                original_waypoints = COALESCE($10, original_waypoints),
+                folder = COALESCE($11, folder)
             WHERE id = $1
             RETURNING *
             "#,
@@ -194,6 +208,7 @@ impl Database {
         .bind(&req.route.gpx_base64)
         .bind(req.tags.unwrap_or_default())
         .bind(original_waypoints_json)
+        .bind(normalize_folder(req.folder))
         .fetch_optional(&self.pool)
         .await?
         .ok_or(DatabaseError::NotFound(id))?;
@@ -258,6 +273,28 @@ impl Database {
         .ok_or(DatabaseError::NotFound(id))?;
 
         tracing::info!("Route {} favorite status: {}", id, route.is_favorite);
+        Ok(route)
+    }
+
+    /// Move a route to a folder, `None` or blank removing it from any folder.
+    ///
+    /// Separate from `update_route` so that filing a route does not resend
+    /// and rewrite its whole geometry.
+    pub async fn set_folder(
+        &self,
+        id: i32,
+        folder: Option<String>,
+    ) -> Result<SavedRoute, DatabaseError> {
+        let route = sqlx::query_as::<_, SavedRoute>(
+            "UPDATE saved_routes SET folder = $2 WHERE id = $1 RETURNING *",
+        )
+        .bind(id)
+        .bind(normalize_folder(folder))
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(DatabaseError::NotFound(id))?;
+
+        tracing::info!("Route {} folder: {:?}", id, route.folder);
         Ok(route)
     }
 
@@ -351,6 +388,7 @@ mod tests {
             route,
             tags: Some(vec!["test".to_string(), "scenic".to_string()]),
             original_waypoints: Some(path),
+            folder: None,
         }
     }
 
@@ -524,6 +562,7 @@ mod tests {
             route,
             tags: None, // No tags
             original_waypoints: None, // No waypoints
+            folder: None,
         };
 
         let saved = db.save_route(request).await.expect("Failed to save route");

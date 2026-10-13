@@ -22,6 +22,14 @@ pub struct SaveRouteApiRequest {
     pub tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub original_waypoints: Option<Vec<shared::Coordinate>>,
+    #[serde(default)]
+    pub folder: Option<String>,
+}
+
+/// Body of `PATCH /api/routes/:id/folder`; `null` or blank removes the folder
+#[derive(Debug, Deserialize)]
+pub struct SetFolderRequest {
+    pub folder: Option<String>,
 }
 
 /// POST /api/routes - Save a new route
@@ -37,6 +45,7 @@ pub async fn save_route(
         route,
         tags: req.tags,
         original_waypoints: req.original_waypoints,
+        folder: req.folder,
     };
 
     db.save_route(save_req)
@@ -64,6 +73,7 @@ pub async fn update_route(
         route,
         tags: req.tags,
         original_waypoints: req.original_waypoints,
+        folder: req.folder,
     };
 
     db.update_route(id, save_req)
@@ -110,6 +120,18 @@ pub async fn toggle_favorite(
     Path(id): Path<i32>,
 ) -> Result<Json<SavedRoute>, (StatusCode, Json<ApiError>)> {
     db.toggle_favorite(id)
+        .await
+        .map(Json)
+        .map_err(db_error_to_api_error)
+}
+
+/// PATCH /api/routes/:id/folder - Move a route to a folder
+pub async fn set_folder(
+    State(db): State<Arc<Database>>,
+    Path(id): Path<i32>,
+    Json(req): Json<SetFolderRequest>,
+) -> Result<Json<SavedRoute>, (StatusCode, Json<ApiError>)> {
+    db.set_folder(id, req.folder)
         .await
         .map(Json)
         .map_err(db_error_to_api_error)

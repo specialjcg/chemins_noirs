@@ -206,6 +206,14 @@ encodeSaveRouteRequest req route =
                     Nothing ->
                         Encode.null
               )
+            , ( "folder"
+              , case req.folder of
+                    Just folder ->
+                        Encode.string folder
+
+                    Nothing ->
+                        Encode.null
+              )
             ]
         , encodeRouteResponse route
         ]

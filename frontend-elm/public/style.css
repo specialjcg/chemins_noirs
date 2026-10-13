@@ -1073,11 +1073,85 @@ button[disabled] {
 
 .route-row .action-layer,
 .route-row .action-fav,
+.route-row .action-move,
 .route-row .action-delete {
   padding: var(--space-1);
   font-size: var(--text-xs);
   line-height: 1;
   min-width: 24px;
+}
+
+/* ─── Dossiers d'itinéraires ───
+   Trois cents lignes d'un bloc ne se parcouraient plus. Chaque dossier est un
+   filet d'en-tête repliable ; seules les lignes du dossier ouvert s'affichent. */
+.route-folder {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.route-folder-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-3) var(--space-2);
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  text-align: left;
+  cursor: pointer;
+}
+
+.route-folder-header:hover,
+.route-folder-header:focus-visible {
+  background: var(--bg-card-hover);
+}
+
+.route-folder.is-open > .route-folder-header {
+  color: var(--text-brass);
+}
+
+.route-folder-caret {
+  flex: none;
+  width: 1em;
+  color: var(--text-muted);
+}
+
+.route-folder-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-folder-count {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-regular);
+}
+
+.route-folder.is-open > [role="list"] {
+  padding-left: var(--space-3);
+}
+
+.route-move {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-3) var(--space-3);
+}
+
+.route-move input {
+  flex: 1;
+  min-width: 0;
+}
+
+.route-move button {
+  flex: none;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-2xs);
 }
 
 .saved-route-item {

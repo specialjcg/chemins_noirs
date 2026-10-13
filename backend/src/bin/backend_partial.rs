@@ -1173,6 +1173,7 @@ async fn main() {
         .route("/api/routes/:id", axum::routing::put(saved_routes_handlers::update_route))
         .route("/api/routes/:id", axum::routing::delete(saved_routes_handlers::delete_route))
         .route("/api/routes/:id/favorite", axum::routing::post(saved_routes_handlers::toggle_favorite))
+        .route("/api/routes/:id/folder", axum::routing::patch(saved_routes_handlers::set_folder))
         .layer(cors)
         .with_state(db);
 

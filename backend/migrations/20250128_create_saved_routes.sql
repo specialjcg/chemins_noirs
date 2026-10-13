@@ -57,9 +57,14 @@ CREATE TRIGGER update_saved_routes_updated_at
 ALTER TABLE saved_routes
 ADD COLUMN IF NOT EXISTS original_waypoints JSONB;
 
+-- Folder (one per route) to group the saved-routes list
+ALTER TABLE saved_routes
+ADD COLUMN IF NOT EXISTS folder TEXT;
+
 -- Comments for documentation
 COMMENT ON TABLE saved_routes IS 'Stores user-saved routes with full metadata and statistics';
 COMMENT ON COLUMN saved_routes.route_data IS 'Full RouteResponse JSON (path, metadata, elevation profile)';
 COMMENT ON COLUMN saved_routes.gpx_data IS 'Base64-encoded GPX file for GPS devices';
 COMMENT ON COLUMN saved_routes.tags IS 'User-defined tags for categorization (e.g., ["hiking", "alpine"])';
 COMMENT ON COLUMN saved_routes.original_waypoints IS 'Original waypoints for multi-point routes (NULL for point-to-point routes)';
+COMMENT ON COLUMN saved_routes.folder IS 'Folder grouping the route in the saved list (NULL = no folder)';

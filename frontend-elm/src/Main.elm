@@ -811,6 +811,89 @@ update msg model =
             , Cmd.none
             )
 
+        SaveRouteFolderChanged folder ->
+            ( { model | saveRouteFolder = folder }, Cmd.none )
+
+        ToggleFolder key ->
+            ( { model
+                | openFolders =
+                    if Set.member key model.openFolders then
+                        Set.remove key model.openFolders
+
+                    else
+                        Set.insert key model.openFolders
+              }
+            , Cmd.none
+            )
+
+        StartMoveRoute id ->
+            let
+                current =
+                    model.savedRoutes
+                        |> List.filter (\r -> r.id == id)
+                        |> List.head
+                        |> Maybe.andThen .folder
+                        |> Maybe.withDefault ""
+            in
+            ( { model | movingRoute = Just ( id, current ) }
+            , focusOn (moveFolderDomId id)
+            )
+
+        MoveRouteFolderChanged folder ->
+            ( { model | movingRoute = Maybe.map (\( id, _ ) -> ( id, folder )) model.movingRoute }
+            , Cmd.none
+            )
+
+        ConfirmMoveRoute ->
+            case model.movingRoute of
+                Just ( id, folder ) ->
+                    ( { model | pending = True, pendingSeconds = 0, movingRoute = Nothing }
+                    , Api.setRouteFolder id (folderInput folder) RouteFolderSet
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        CancelMoveRoute ->
+            ( { model | movingRoute = Nothing }, Cmd.none )
+
+        RouteFolderSet result ->
+            case result of
+                Ok updatedRoute ->
+                    ( { model
+                        | pending = False
+                        , error = Nothing
+                        , savedRoutes =
+                            List.map
+                                (\r ->
+                                    if r.id == updatedRoute.id then
+                                        updatedRoute
+
+                                    else
+                                        r
+                                )
+                                model.savedRoutes
+
+                        -- Suivre l'itinéraire là où on vient de le ranger.
+                        , openFolders = Set.insert (folderKey updatedRoute) model.openFolders
+                        , saveRouteFolder =
+                            if model.loadedRouteId == Just updatedRoute.id then
+                                folderKey updatedRoute
+
+                            else
+                                model.saveRouteFolder
+                      }
+                    , Cmd.none
+                    )
+
+                Err error ->
+                    ( { model
+                        | pending = False
+                        , error = Just (httpErrorToString error)
+                      }
+                    , Cmd.none
+                    )
+
         SaveRouteToDb ->
             case model.lastResponse of
                 Just route ->
@@ -907,6 +990,7 @@ update msg model =
                         -- pour que la retouche suivante le reprenne au lieu d'en
                         -- créer un troisième.
                         , loadedRouteId = Just savedRoute.id
+                        , openFolders = Set.insert (folderKey savedRoute) model.openFolders
                       }
                     , Cmd.none
                     )
@@ -996,6 +1080,8 @@ update msg model =
                             -- vides écrirait un nom vide sur la ligne.
                             , saveRouteName = savedRoute.name
                             , saveRouteDescription = Maybe.withDefault "" savedRoute.description
+                            , saveRouteFolder = folderKey savedRoute
+                            , openFolders = Set.insert (folderKey savedRoute) model.openFolders
                         }
                         route
                         waypoints
@@ -2246,6 +2332,7 @@ saveRequestFrom model =
         else
             Just model.saveRouteDescription
     , tags = Nothing
+    , folder = folderInput model.saveRouteFolder
     , originalWaypoints =
         if List.isEmpty model.waypoints then
             Nothing

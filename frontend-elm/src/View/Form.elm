@@ -7,7 +7,7 @@ Approche fonctionnelle pure : génération déclarative du HTML.
 import Format
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Html.Events exposing (onCheck, onClick, onInput, onMouseDown, preventDefaultOn)
+import Html.Events exposing (on, onCheck, onClick, onInput, onMouseDown, preventDefaultOn)
 import Json.Decode as Decode
 import Dict
 import DirectLegs
@@ -260,6 +260,19 @@ view model =
                         ]
                         []
                     ]
+                , div [ class "input-field" ]
+                    [ Html.label [] [ text "Dossier (optionnel)" ]
+                    , input
+                        [ Html.Attributes.value model.saveRouteFolder
+                        , onInput SaveRouteFolderChanged
+                        , placeholder "Tours forêts — Sud"
+                        , list "save-folder-options"
+                        , autocomplete False
+                        , spellcheck False
+                        ]
+                        []
+                    , folderDatalist "save-folder-options" model.savedRoutes
+                    ]
                 , case model.loadedRouteId of
                     Just id ->
                         button
@@ -370,15 +383,187 @@ viewSavedRoutesSection model =
 
     else
         let
+            groups =
+                folderGroups model.savedRoutes
+
+            -- Les flèches ne parcourent que les lignes affichées : un dossier
+            -- replié ne doit pas avaler le focus.
+            visible =
+                groups
+                    |> List.filter (\( key, _ ) -> Set.member key model.openFolders)
+                    |> List.concatMap Tuple.second
+
             ids =
-                List.map .id model.savedRoutes
+                List.map .id visible
+
+            rang route =
+                ids
+                    |> List.indexedMap Tuple.pair
+                    |> List.filter (\( _, id ) -> id == route.id)
+                    |> List.head
+                    |> Maybe.map Tuple.first
+                    |> Maybe.withDefault 0
         in
         div
             [ class "saved-routes-panel"
-            , attribute "role" "list"
             , attribute "aria-label" "Itinéraires enregistrés"
             ]
-            (List.indexedMap (viewSavedRoute model.referenceRoutes ids) model.savedRoutes)
+            (folderDatalist "move-folder-options" model.savedRoutes
+                :: List.map
+                    (\( key, routes ) ->
+                        viewFolder model
+                            key
+                            routes
+                            (\route -> viewSavedRoute model.referenceRoutes ids (rang route) route)
+                    )
+                    groups
+            )
+
+
+{-| Itinéraires par dossier, dossiers triés et « Sans dossier » en dernier.
+-}
+folderGroups : List SavedRoute -> List ( String, List SavedRoute )
+folderGroups routes =
+    let
+        inFolder key =
+            List.filter (\r -> folderKey r == key) routes
+
+        loose =
+            inFolder ""
+    in
+    List.map (\key -> ( key, inFolder key )) (savedFolders routes)
+        ++ (if List.isEmpty loose then
+                []
+
+            else
+                [ ( "", loose ) ]
+           )
+
+
+{-| Un dossier : son en-tête, et ses lignes s'il est ouvert.
+
+L'en-tête porte le nombre d'itinéraires et leur longueur cumulée : pour un tour
+découpé en tronçons, c'est la longueur du tour.
+-}
+viewFolder : Model -> String -> List SavedRoute -> (SavedRoute -> Html Msg) -> Html Msg
+viewFolder model key routes viewRoute =
+    let
+        open =
+            Set.member key model.openFolders
+
+        label =
+            if key == "" then
+                "Sans dossier"
+
+            else
+                key
+
+        resume =
+            String.fromInt (List.length routes)
+                ++ " · "
+                ++ Format.km (List.sum (List.map .distanceKm routes))
+    in
+    div [ classList [ ( "route-folder", True ), ( "is-open", open ) ] ]
+        [ button
+            [ type_ "button"
+            , class "route-folder-header"
+            , onClick (ToggleFolder key)
+            , attribute "aria-expanded"
+                (if open then
+                    "true"
+
+                 else
+                    "false"
+                )
+            ]
+            [ span [ class "route-folder-caret", attribute "aria-hidden" "true" ]
+                [ text
+                    (if open then
+                        "\u{25BE}"
+
+                     else
+                        "\u{25B8}"
+                    )
+                ]
+            , span [ class "route-folder-name" ] [ text label ]
+            , span [ class "route-folder-count t-metric" ] [ text resume ]
+            ]
+        , if open then
+            div [ attribute "role" "list", attribute "aria-label" label ]
+                (List.concatMap
+                    (\route ->
+                        [ viewRoute route
+                        , viewMoveEditor model route
+                        ]
+                    )
+                    routes
+                )
+
+          else
+            text ""
+        ]
+
+
+{-| Champ de rangement, sous la ligne qu'on déplace.
+
+Hors de la ligne : celle-ci capte Début, Fin et les flèches pour la navigation
+et les rendrait inutilisables dans le champ.
+-}
+viewMoveEditor : Model -> SavedRoute -> Html Msg
+viewMoveEditor model route =
+    case model.movingRoute of
+        Just ( id, folder ) ->
+            if id == route.id then
+                div [ class "route-move" ]
+                    [ input
+                        [ Html.Attributes.id (moveFolderDomId id)
+                        , Html.Attributes.value folder
+                        , onInput MoveRouteFolderChanged
+                        , list "move-folder-options"
+                        , placeholder "Dossier (vide : aucun)"
+                        , attribute "aria-label" ("Dossier de " ++ route.name)
+                        , autocomplete False
+                        , spellcheck False
+                        , on "keydown"
+                            (Decode.field "key" Decode.string
+                                |> Decode.andThen
+                                    (\key ->
+                                        case key of
+                                            "Enter" ->
+                                                Decode.succeed ConfirmMoveRoute
+
+                                            "Escape" ->
+                                                Decode.succeed CancelMoveRoute
+
+                                            _ ->
+                                                Decode.fail "touche ordinaire"
+                                    )
+                            )
+                        ]
+                        []
+                    , button [ type_ "button", class "action-load", onClick ConfirmMoveRoute ] [ text "Ranger" ]
+                    , button
+                        [ type_ "button"
+                        , class "action-delete"
+                        , onClick CancelMoveRoute
+                        , title "Annuler"
+                        ]
+                        [ text "\u{2715}" ]
+                    ]
+
+            else
+                text ""
+
+        Nothing ->
+            text ""
+
+
+{-| Dossiers existants proposés à la saisie.
+-}
+folderDatalist : String -> List SavedRoute -> Html msg
+folderDatalist domId routes =
+    datalist [ Html.Attributes.id domId ]
+        (List.map (\f -> option [ Html.Attributes.value f ] []) (savedFolders routes))
 
 
 {-| Une entrée de la liste des itinéraires, sur une seule ligne.
@@ -479,6 +664,13 @@ viewSavedRoute referenceRoutes ids index route =
                         "Ajouter aux favoris"
                 ]
                 [ text "\u{2B50}" ]
+            , button
+                [ type_ "button"
+                , class "action-move"
+                , onClick (StartMoveRoute route.id)
+                , title "Ranger dans un dossier"
+                ]
+                [ text "\u{1F4C1}" ]
             , button
                 [ type_ "button"
                 , class "action-delete"

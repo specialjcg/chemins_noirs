@@ -173,6 +173,32 @@ updateSavedRoute id request route toMsg =
         }
 
 
+{-| Ranger un itinéraire dans un dossier, `Nothing` le sortant de tout dossier.
+
+Ne renvoie que le dossier : passer par `updateSavedRoute` réécrirait tout le
+tracé pour changer une étiquette.
+-}
+setRouteFolder : Int -> Maybe String -> (Result Http.Error SavedRoute -> msg) -> Cmd msg
+setRouteFolder id folder toMsg =
+    Http.request
+        { method = "PATCH"
+        , headers = []
+        , url = savedRoutesApiRoot ++ "/" ++ String.fromInt id ++ "/folder"
+        , body =
+            Http.jsonBody
+                (Json.Encode.object
+                    [ ( "folder"
+                      , Maybe.map Json.Encode.string folder
+                            |> Maybe.withDefault Json.Encode.null
+                      )
+                    ]
+                )
+        , expect = Http.expectJson toMsg decodeSavedRoute
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
 listSavedRoutes : (Result Http.Error (List SavedRoute) -> msg) -> Cmd msg
 listSavedRoutes toMsg =
     Http.get

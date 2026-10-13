@@ -61,6 +61,13 @@ type alias Model =
     , savedRoutes : List SavedRoute
     , saveRouteName : String
     , saveRouteDescription : String
+    , saveRouteFolder : String
+    -- Dossiers dépliés dans la liste des itinéraires, clé `folderKey`.
+    -- Trois cents itinéraires d'un bloc ne se parcourent plus : tout est
+    -- replié par défaut et seul le dossier ouvert montre ses lignes.
+    , openFolders : Set String
+    -- Itinéraire en cours de rangement, avec le dossier saisi.
+    , movingRoute : Maybe ( Int, String )
     , showSavedRoutes : Bool
     -- Itinéraires enregistrés affichés en surimpression, pour comparer le
     -- tracé courant à d'autres (balisage officiel, variantes). Clé : id.
@@ -166,6 +173,9 @@ initialModel =
     , savedRoutes = []
     , saveRouteName = ""
     , saveRouteDescription = ""
+    , saveRouteFolder = ""
+    , openFolders = Set.empty
+    , movingRoute = Nothing
     , showSavedRoutes = False
     , referenceRoutes = Dict.empty
     , showElevationChart = False
@@ -207,6 +217,13 @@ type Msg
     | PauseAnimation
     | SaveRouteNameChanged String
     | SaveRouteDescriptionChanged String
+    | SaveRouteFolderChanged String
+    | ToggleFolder String
+    | StartMoveRoute Int
+    | MoveRouteFolderChanged String
+    | ConfirmMoveRoute
+    | CancelMoveRoute
+    | RouteFolderSet (Result Http.Error SavedRoute)
     | SaveRouteToDb
     | RouteSaved (Result Http.Error SavedRoute)
     | LoadSavedRoutes
@@ -455,6 +472,7 @@ type alias SavedRoute =
     , tags : List String
     , originalWaypoints : Maybe (List Coordinate)
     , routeData : RouteResponse
+    , folder : Maybe String
     }
 
 
@@ -463,11 +481,48 @@ type alias SaveRouteRequest =
     , description : Maybe String
     , tags : Maybe (List String)
     , originalWaypoints : Maybe (List Coordinate)
+    , folder : Maybe String
     }
 
 
 
 -- HELPERS
+
+
+{-| Clé de dossier d'un itinéraire ; la chaîne vide regroupe ceux sans dossier.
+-}
+folderKey : SavedRoute -> String
+folderKey route =
+    Maybe.withDefault "" route.folder
+
+
+{-| Dossiers existants, triés, sans le groupe « Sans dossier ».
+-}
+savedFolders : List SavedRoute -> List String
+savedFolders routes =
+    routes
+        |> List.filterMap .folder
+        |> Set.fromList
+        |> Set.toList
+
+
+{-| Champ de rangement d'un itinéraire, focalisé à son ouverture.
+-}
+moveFolderDomId : Int -> String
+moveFolderDomId routeId =
+    "route-folder-" ++ String.fromInt routeId
+
+
+{-| Dossier saisi, `Nothing` s'il est blanc.
+-}
+folderInput : String -> Maybe String
+folderInput raw =
+    case String.trim raw of
+        "" ->
+            Nothing
+
+        trimmed ->
+            Just trimmed
 
 
 parseCoordinate : String -> String -> Maybe Coordinate

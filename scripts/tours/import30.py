@@ -18,7 +18,7 @@ for f in files:
              "elevation_profile": {"elevations": ele, "min_elevation": min(ele), "max_elevation": max(ele),
                                    "total_ascent": round(up, 1), "total_descent": round(dn, 1)}}
     name = f.rsplit("/", 1)[1][:-4]
-    body = [{"name": name, "description": f"{title} · {dep} → {arr}", "tags": ["tour-forets-nord-est"]}, route]
+    body = [{"name": name, "description": f"{title} · {dep} → {arr}", "tags": ["tour-forets-nord-est"], "folder": "Tours forêts — Nord-Est"}, route]
     req = urllib.request.Request("http://localhost:8090/api/routes", json.dumps(body).encode(), {"Content-Type": "application/json"})
     try: r = json.load(urllib.request.urlopen(req, timeout=60))
     except urllib.error.HTTPError as e: print(e.read()[:400]); sys.exit(1)

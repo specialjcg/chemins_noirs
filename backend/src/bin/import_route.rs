@@ -372,6 +372,7 @@ async fn main() -> Result<(), String> {
         route,
         tags: Some(tags),
         original_waypoints: None,
+        folder: None,
     };
 
     let db = Database::new().await.map_err(|e| format!("base : {e}"))?;
