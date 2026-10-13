@@ -256,6 +256,7 @@
   --map-ring-waypoint: var(--accent-brass);
 
   --map-toggle-slopes: var(--accent-terracotta);
+  --map-toggle-forests: var(--accent-forest);
   --map-toggle-water: var(--info-blue);
   --map-toggle-unpaved: var(--accent-brass);
   --map-control-active: var(--accent-brass);

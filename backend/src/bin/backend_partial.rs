@@ -1162,6 +1162,7 @@ async fn main() {
         .route("/api/log", axum::routing::post(frontend_log_handler))
         .route("/api/click_mode", axum::routing::get(click_mode_handler))
         .route("/api/pois", axum::routing::get(pois_handler))
+        .route("/api/forests", axum::routing::get(backend::forests::search_handler))
         .route("/api/lodgings-along-route", axum::routing::post(lodgings_along_route_handler))
         .route("/api/plan-stages", axum::routing::post(plan_stages_handler))
         .layer(cors.clone())
@@ -1185,6 +1186,7 @@ async fn main() {
     tracing::info!("  POST /api/loops - Generate loop candidates");
     tracing::info!("  POST /api/graph/partial - Generate partial graph");
     tracing::info!("  GET /api/click_mode - Get click mode");
+    tracing::info!("  GET /api/forests?q= - Search public forests by name (IGN)");
     tracing::info!("Saved routes (PostgreSQL):");
     tracing::info!("  POST /api/routes - Save route to database");
     tracing::info!("  GET /api/routes - List all saved routes");

@@ -811,6 +811,38 @@ update msg model =
             , Cmd.none
             )
 
+        ForestQueryChanged query ->
+            ( { model | forestQuery = query }, Cmd.none )
+
+        SearchForests ->
+            if String.length (String.trim model.forestQuery) < 3 then
+                ( { model | error = Just "Tapez au moins trois lettres du nom de la forêt." }, Cmd.none )
+
+            else
+                ( { model | pending = True, pendingSeconds = 0, error = Nothing }
+                , Api.searchForests (String.trim model.forestQuery) ForestsFound
+                )
+
+        ForestsFound result ->
+            case result of
+                Ok [] ->
+                    ( { model
+                        | pending = False
+                        , forestResults = []
+                        , error = Just ("Aucune forêt publique ne s'appelle « " ++ model.forestQuery ++ " ».")
+                      }
+                    , Cmd.none
+                    )
+
+                Ok forests ->
+                    ( { model | pending = False, forestResults = forests, error = Nothing }, Cmd.none )
+
+                Err error ->
+                    ( { model | pending = False, error = Just (httpErrorToString error) }, Cmd.none )
+
+        ViaForest forest ->
+            viaForest forest model
+
         SaveRouteFolderChanged folder ->
             ( { model | saveRouteFolder = folder }, Cmd.none )
 
@@ -2069,6 +2101,40 @@ freehandDistance coords =
             List.map2 Tuple.pair coords (List.drop 1 coords)
     in
     List.foldl (\( a, b ) acc -> acc + haversineKm a b) 0 pairs
+
+
+{-| Faire passer le tracé par une forêt.
+
+Le point intérieur de la forêt devient une étape, insérée sur le segment le
+plus proche : entre départ et arrivée pour un aller simple, qui passe alors en
+multi-points puisqu'il en a trois. Sans départ ni arrivée, il n'y a rien à
+détourner : on centre la carte sur la forêt et on garde la liste pour après.
+-}
+viaForest : Forest -> Model -> ( Model, Cmd Msg )
+viaForest forest model =
+    let
+        coord =
+            { lat = forest.lat, lon = forest.lon }
+
+        done ( m, cmd ) =
+            ( { m | forestResults = [], forestQuery = "" }, cmd )
+    in
+    case ( model.routeMode, model.waypoints ) of
+        ( Loop, _ ) ->
+            ( { model | error = Just "Une boucle se calcule depuis son départ : passez en aller simple ou en multi-points pour viser une forêt." }
+            , Cmd.none
+            )
+
+        ( MultiPoint, _ :: _ :: _ ) ->
+            done (update (InsertWaypoint (findInsertionIndex coord model.waypoints) coord) model)
+
+        ( PointToPoint, [ _, _ ] ) ->
+            done (update (InsertWaypoint 0 coord) { model | routeMode = MultiPoint })
+
+        _ ->
+            ( { model | error = Just "Placez d'abord le départ et l'arrivée, puis choisissez la forêt." }
+            , Ports.centerMapOn coord
+            )
 
 
 pushWaypointHistory : Model -> Model

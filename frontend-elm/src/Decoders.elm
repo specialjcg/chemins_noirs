@@ -245,6 +245,16 @@ decodeSavedRoute =
             )
 
 
+decodeForest : Decoder Forest
+decodeForest =
+    Decode.map5 Forest
+        (Decode.field "name" Decode.string)
+        (Decode.maybe (Decode.field "nature" Decode.string))
+        (Decode.field "lat" Decode.float)
+        (Decode.field "lon" Decode.float)
+        (Decode.field "area_ha" Decode.float)
+
+
 decodeSavedRoutesList : Decoder (List SavedRoute)
 decodeSavedRoutesList =
     Decode.list decodeSavedRoute

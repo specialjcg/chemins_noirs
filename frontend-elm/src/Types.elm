@@ -62,6 +62,9 @@ type alias Model =
     , saveRouteName : String
     , saveRouteDescription : String
     , saveRouteFolder : String
+    -- Recherche « via forêt » : nom tapé et forêts publiques trouvées.
+    , forestQuery : String
+    , forestResults : List Forest
     -- Dossiers dépliés dans la liste des itinéraires, clé `folderKey`.
     -- Trois cents itinéraires d'un bloc ne se parcourent plus : tout est
     -- replié par défaut et seul le dossier ouvert montre ses lignes.
@@ -174,6 +177,8 @@ initialModel =
     , saveRouteName = ""
     , saveRouteDescription = ""
     , saveRouteFolder = ""
+    , forestQuery = ""
+    , forestResults = []
     , openFolders = Set.empty
     , movingRoute = Nothing
     , showSavedRoutes = False
@@ -218,6 +223,10 @@ type Msg
     | SaveRouteNameChanged String
     | SaveRouteDescriptionChanged String
     | SaveRouteFolderChanged String
+    | ForestQueryChanged String
+    | SearchForests
+    | ForestsFound (Result Http.Error (List Forest))
+    | ViaForest Forest
     | ToggleFolder String
     | StartMoveRoute Int
     | MoveRouteFolderChanged String
@@ -473,6 +482,17 @@ type alias SavedRoute =
     , originalWaypoints : Maybe (List Coordinate)
     , routeData : RouteResponse
     , folder : Maybe String
+    }
+
+
+{-| Forêt publique trouvée par son nom, réduite à un point intérieur.
+-}
+type alias Forest =
+    { name : String
+    , nature : Maybe String
+    , lat : Float
+    , lon : Float
+    , areaHa : Float
     }
 
 

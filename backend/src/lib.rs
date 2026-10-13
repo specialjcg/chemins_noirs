@@ -4,6 +4,7 @@ pub mod direct;
 pub mod elevation;
 pub mod engine;
 pub mod error;
+pub mod forests;
 pub mod geo_utils;
 pub mod gpx_export;
 pub mod graph;

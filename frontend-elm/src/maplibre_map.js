@@ -58,7 +58,6 @@ let poiMarkers = []; // POI markers on map
 let poisVisible = false; // POI toggle state
 let lastPoiBbox = null; // Last fetched POI bbox to avoid re-fetching
 let waterMarkers = []; // Water point markers along current route
-let slopesEnabled = false; // IGN slope shading, opt-in
 let waterEnabled = false; // Opt-in: 103 markers on a 450km route drown the map
 let currentRouteCoords = null; // Kept so toggling on can fetch without a new route
 
@@ -301,6 +300,16 @@ function ensureMap() {
           tiles: [ignWmtsUrl('GEOGRAPHICALGRIDSYSTEMS.SLOPES.MOUNTAIN', 'image/png')],
           tileSize: 256,
           maxzoom: 17,
+          attribution: IGN_ATTRIBUTION
+        },
+        // Public forests (domaniales, communales…). Only served with the ONF
+        // style on the PM_3_16 grid: zooms 3 to 16, overzoomed beyond.
+        'ign-forests': {
+          type: 'raster',
+          tiles: [ignWmtsUrl('FORETS.PUBLIQUES', 'image/png', 'FORETS PUBLIQUES ONF', 'PM_3_16')],
+          tileSize: 256,
+          minzoom: 3,
+          maxzoom: 16,
           attribution: IGN_ATTRIBUTION
         }
       },
@@ -610,6 +619,9 @@ function ensureMap() {
   // Add IGN slope map toggle control (off by default)
   mapInstance.addControl(createSlopesControl(), 'top-right');
 
+  // Add public forests toggle control (off by default)
+  mapInstance.addControl(createForestsControl(), 'top-right');
+
   // Add water points toggle control (off by default)
   mapInstance.addControl(createWaterControl(), 'top-right');
 
@@ -630,52 +642,64 @@ const IGN_VECTOR_STYLE_URL =
 const IGN_ATTRIBUTION =
   '&copy; <a href="https://geoservices.ign.fr/">IGN-F/G\u00e9oplateforme</a>';
 
-/** WMTS tile URL template for a Géoplateforme layer. */
-function ignWmtsUrl(layer, format) {
+/**
+ * WMTS tile URL template for a Géoplateforme layer.
+ *
+ * Most layers use the `normal` style on the full `PM` grid; a few only answer
+ * with their own style and a reduced grid (see the WMTS GetCapabilities).
+ */
+function ignWmtsUrl(layer, format, style = 'normal', matrixSet = 'PM') {
   return (
     'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
     '&LAYER=' + layer +
-    '&STYLE=normal&TILEMATRIXSET=PM' +
+    '&STYLE=' + encodeURIComponent(style) +
+    '&TILEMATRIXSET=' + matrixSet +
     '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}' +
     '&FORMAT=' + encodeURIComponent(format)
   );
 }
 
-function createSlopesControl() {
-  class SlopesControl {
+/**
+ * Button toggling an IGN raster overlay, off by default.
+ *
+ * The layer is only added on first use, so a closed overlay costs no tiles.
+ */
+function createRasterOverlayControl({ source, layerId, icon, title, className, colorToken, opacity }) {
+  class RasterOverlayControl {
     onAdd(map) {
       this._map = map;
+      this._enabled = false;
       this._container = document.createElement('div');
       this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
       this._btn = document.createElement('button');
-      this._btn.className = 'maplibregl-ctrl-slopes';
-      this._btn.textContent = '📐';
-      this._btn.title = 'Afficher/masquer la carte des pentes IGN (>30°)';
+      this._btn.className = className;
+      this._btn.textContent = icon;
+      this._btn.title = title;
       this._btn.onclick = () => this.toggle();
       this._container.appendChild(this._btn);
       return this._container;
     }
 
     toggle() {
-      slopesEnabled = !slopesEnabled;
+      this._enabled = !this._enabled;
 
       // Sits above the background but below the route, which ensureRouteLayers
       // keeps on top anyway.
-      if (slopesEnabled && !this._map.getLayer('ign-slopes-tiles')) {
+      if (this._enabled && !this._map.getLayer(layerId)) {
         this._map.addLayer({
-          id: 'ign-slopes-tiles',
+          id: layerId,
           type: 'raster',
-          source: 'ign-slopes',
+          source,
           minzoom: 0,
           maxzoom: 22,
-          paint: { 'raster-opacity': 0.55 }
+          paint: { 'raster-opacity': opacity }
         });
         ensureRouteLayers();
       }
 
-      setLayerVisible('ign-slopes-tiles', slopesEnabled);
-      this._btn.style.backgroundColor = slopesEnabled ? mapColor('--map-toggle-slopes') : '';
-      this._btn.style.color = slopesEnabled ? 'white' : '';
+      setLayerVisible(layerId, this._enabled);
+      this._btn.style.backgroundColor = this._enabled ? mapColor(colorToken) : '';
+      this._btn.style.color = this._enabled ? 'white' : '';
     }
 
     onRemove() {
@@ -683,7 +707,32 @@ function createSlopesControl() {
       this._map = undefined;
     }
   }
-  return new SlopesControl();
+  return new RasterOverlayControl();
+}
+
+function createSlopesControl() {
+  return createRasterOverlayControl({
+    source: 'ign-slopes',
+    layerId: 'ign-slopes-tiles',
+    icon: '📐',
+    title: 'Afficher/masquer la carte des pentes IGN (>30°)',
+    className: 'maplibregl-ctrl-slopes',
+    colorToken: '--map-toggle-slopes',
+    opacity: 0.55
+  });
+}
+
+/** Public forests: where a route can cross freely, unlike private woods. */
+function createForestsControl() {
+  return createRasterOverlayControl({
+    source: 'ign-forests',
+    layerId: 'ign-forests-tiles',
+    icon: '🌲',
+    title: 'Afficher/masquer les forêts publiques (IGN/ONF)',
+    className: 'maplibregl-ctrl-forests',
+    colorToken: '--map-toggle-forests',
+    opacity: 0.45
+  });
 }
 
 function createStyleSwitcherControl() {

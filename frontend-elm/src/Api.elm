@@ -199,6 +199,16 @@ setRouteFolder id folder toMsg =
         }
 
 
+{-| Forêts publiques dont le nom contient `query`, les plus grandes d'abord.
+-}
+searchForests : String -> (Result Http.Error (List Forest) -> msg) -> Cmd msg
+searchForests query toMsg =
+    Http.get
+        { url = "/api/forests?q=" ++ Url.percentEncode query
+        , expect = Http.expectJson toMsg (Json.Decode.list decodeForest)
+        }
+
+
 listSavedRoutes : (Result Http.Error (List SavedRoute) -> msg) -> Cmd msg
 listSavedRoutes toMsg =
     Http.get

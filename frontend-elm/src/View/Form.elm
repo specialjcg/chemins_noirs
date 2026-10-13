@@ -161,6 +161,11 @@ view model =
                     text ""
                 ]
             ]
+        , if model.routeMode /= Loop then
+            viewViaForest model
+
+          else
+            text ""
         , if not model.cheminNoir then
             fieldset []
                 [ legend [] [ text "Poids" ]
@@ -348,6 +353,68 @@ inputField label value msg isDisabled =
             , disabled isDisabled
             ]
             []
+        ]
+
+
+{-| « De A à B en passant par la forêt de … » : nom tapé, forêt choisie.
+
+Le poids forêt garde ensuite le tracé sous les arbres ; ce champ ne fait que
+l'y amener.
+-}
+viewViaForest : Model -> Html Msg
+viewViaForest model =
+    fieldset []
+        [ legend [] [ text "Via forêt" ]
+        , div [ class "address-search" ]
+            [ div [ class "address-input-row" ]
+                [ input
+                    [ Html.Attributes.value model.forestQuery
+                    , onInput ForestQueryChanged
+                    , placeholder "Bellême, Senonches…"
+                    , attribute "aria-label" "Nom de la forêt publique"
+                    , autocomplete False
+                    , spellcheck False
+                    , onEnter SearchForests
+                    ]
+                    []
+                , button
+                    [ type_ "button"
+                    , class "btn-address-search"
+                    , onClick SearchForests
+                    ]
+                    [ text "Chercher" ]
+                ]
+            , if List.isEmpty model.forestResults then
+                text ""
+
+              else
+                div [ class "address-chips-wrapper" ]
+                    [ small [ class "address-chips-hint" ] [ text "Passer par :" ]
+                    , div [ class "address-chips" ]
+                        (List.map
+                            (\forest ->
+                                button
+                                    [ type_ "button"
+                                    , class "address-chip"
+                                    , onClick (ViaForest forest)
+                                    ]
+                                    [ span [ class "address-chip-line1" ] [ text forest.name ]
+                                    , span [ class "address-chip-line2" ]
+                                        [ text
+                                            (String.join " · "
+                                                (List.filterMap identity
+                                                    [ forest.nature
+                                                    , Just (String.fromInt (round forest.areaHa) ++ " ha")
+                                                    ]
+                                                )
+                                            )
+                                        ]
+                                    ]
+                            )
+                            model.forestResults
+                        )
+                    ]
+            ]
         ]
 
 
