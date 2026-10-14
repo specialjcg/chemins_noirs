@@ -1101,44 +1101,71 @@ function lodgingLine(l) {
   return line;
 }
 
+function alternativesBlock(alternatives) {
+  const alt = document.createElement('details');
+  const sum = document.createElement('summary');
+  sum.textContent = `${alternatives.length} autre(s)`;
+  alt.appendChild(sum);
+  alternatives.forEach(a => alt.appendChild(lodgingLine(a)));
+  return alt;
+}
+
+/** Une ligne du panneau, et son marqueur numéroté quand on y dort. */
+function addStageRow(panel, { title, lodging, alternatives = [], marker, ok = true }) {
+  const row = document.createElement('div');
+  row.className = 'stages-row' + (ok ? '' : ' stages-out');
+  const head = document.createElement('div');
+  head.textContent = (ok ? '' : '⚠️ ') + title;
+  row.appendChild(head);
+  if (lodging) {
+    const line = lodgingLine(lodging);
+    line.prepend(copyButton(lodging.name), ' ');
+    row.appendChild(line);
+  } else {
+    const none = document.createElement('div');
+    none.className = 'stages-lodging';
+    none.textContent = 'Aucun hébergement à moins de 2 km';
+    row.appendChild(none);
+  }
+  if (alternatives.length > 0) row.appendChild(alternativesBlock(alternatives));
+  panel.appendChild(row);
+
+  if (lodging) {
+    const el = document.createElement('div');
+    el.className = 'stage-marker' + (ok ? '' : ' stages-out');
+    el.textContent = marker;
+    el.title = `${title} : ${lodging.name}`;
+    el.onclick = () => row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    stageMarkers.push(new maplibregl.Marker({ element: el })
+      .setLngLat([lodging.lon, lodging.lat])
+      .addTo(mapInstance));
+  }
+}
+
 function showStages(plan) {
   const km = plan.stages.reduce((sum, s) => sum + s.distance_km, 0);
-  const panel = stagesPanelShell(`${plan.num_stages} jours · ${km.toFixed(0)} km · ${plan.avg_km_per_day.toFixed(1)} km/j`);
-  for (const s of plan.stages) {
-    const row = document.createElement('div');
-    row.className = 'stages-row' + (s.within_range ? '' : ' stages-out');
-    const title = document.createElement('div');
-    title.textContent = `${s.within_range ? '' : '⚠️ '}J${s.day} · ${s.distance_km.toFixed(1)} km`
-      + ` (km ${s.start_km.toFixed(0)} → ${s.end_km.toFixed(0)})`;
-    row.appendChild(title);
-    if (s.lodging) {
-      row.appendChild(lodgingLine(s.lodging));
-      row.querySelector('.stages-lodging').prepend(copyButton(s.lodging.name), ' ');
-    } else {
-      const end = document.createElement('div');
-      end.className = 'stages-lodging';
-      end.textContent = 'Arrivée';
-      row.appendChild(end);
-    }
-    if (s.alternatives.length > 0) {
-      const alt = document.createElement('details');
-      const sum = document.createElement('summary');
-      sum.textContent = `${s.alternatives.length} autre(s)`;
-      alt.appendChild(sum);
-      s.alternatives.forEach(a => alt.appendChild(lodgingLine(a)));
-      row.appendChild(alt);
-    }
-    panel.appendChild(row);
+  const panel = stagesPanelShell(`${plan.num_stages} jour(s) · ${km.toFixed(0)} km · ${plan.avg_km_per_day.toFixed(1)} km/j`);
+  const endpointTitle = (label, e) => e ? `${label} (${(e.distance_m / 1000).toFixed(1)} km du point)` : label;
 
+  addStageRow(panel, {
+    title: endpointTitle('Veille du départ', plan.departure),
+    lodging: plan.departure?.lodging,
+    alternatives: plan.departure?.alternatives,
+    marker: 'D'
+  });
+  for (const s of plan.stages) {
+    const title = `J${s.day} · ${s.distance_km.toFixed(1)} km (km ${s.start_km.toFixed(0)} → ${s.end_km.toFixed(0)})`;
     if (s.lodging) {
-      const el = document.createElement('div');
-      el.className = 'stage-marker' + (s.within_range ? '' : ' stages-out');
-      el.textContent = s.day;
-      el.title = `Nuit ${s.day} : ${s.lodging.name}`;
-      el.onclick = () => row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      stageMarkers.push(new maplibregl.Marker({ element: el })
-        .setLngLat([s.lodging.lon, s.lodging.lat])
-        .addTo(mapInstance));
+      addStageRow(panel, { title, lodging: s.lodging, alternatives: s.alternatives, marker: String(s.day), ok: s.within_range });
+    } else {
+      // Dernier jour : on dort à l'arrivée.
+      addStageRow(panel, {
+        title: `${title} — ${endpointTitle('arrivée', plan.arrival)}`,
+        lodging: plan.arrival?.lodging,
+        alternatives: plan.arrival?.alternatives,
+        marker: 'A',
+        ok: s.within_range
+      });
     }
   }
 }
@@ -1165,7 +1192,9 @@ async function planStages() {
       total_route_km: found.total_route_km,
       target_km_per_day: STAGE_TARGET_KM,
       min_km_per_day: STAGE_TARGET_KM - STAGE_TOLERANCE_KM,
-      max_km_per_day: STAGE_TARGET_KM + STAGE_TOLERANCE_KM
+      max_km_per_day: STAGE_TARGET_KM + STAGE_TOLERANCE_KM,
+      start: currentRouteCoords[0],
+      end: currentRouteCoords[currentRouteCoords.length - 1]
     });
     showStages(plan);
   } catch (e) {

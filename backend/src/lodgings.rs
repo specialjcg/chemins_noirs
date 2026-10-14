@@ -223,7 +223,9 @@ async fn fetch_overpass(
         "https://overpass.kumi.systems/api/interpreter",
     ];
 
+    // Both Overpass servers reject anonymous clients (HTTP 406 / 429).
     let client = reqwest::Client::builder()
+        .user_agent(concat!("chemins-noirs/", env!("CARGO_PKG_VERSION"), " (hiking route planner)"))
         .timeout(std::time::Duration::from_secs(75))
         .build()
         .map_err(|e| format!("client build: {e}"))?;
@@ -411,6 +413,12 @@ pub struct PlanStagesRequest {
     pub target_km_per_day: f64,
     pub min_km_per_day: f64,
     pub max_km_per_day: f64,
+    /// First and last points of the route: lodgings for the night before
+    /// leaving and the night after arriving are looked for around them.
+    #[serde(default)]
+    pub start: Option<Coordinate>,
+    #[serde(default)]
+    pub end: Option<Coordinate>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -431,6 +439,42 @@ pub struct PlanStagesResponse {
     pub stages: Vec<Stage>,
     pub num_stages: usize,
     pub avg_km_per_day: f64,
+    /// Night before the first day, near the start.
+    pub departure: Option<EndpointLodging>,
+    /// Night after the last day, near the arrival.
+    pub arrival: Option<EndpointLodging>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EndpointLodging {
+    pub lodging: Lodging,
+    /// Straight-line distance from the route's end point, in meters.
+    pub distance_m: f64,
+    pub alternatives: Vec<Lodging>,
+}
+
+/// Furthest an endpoint lodging may be from the start or the arrival.
+const ENDPOINT_RADIUS_M: f64 = 2000.0;
+
+/// Closest lodgings to a route end; the score only breaks near-ties (~200 m).
+fn endpoint_lodging(lodgings: &[Lodging], at: Option<Coordinate>) -> Option<EndpointLodging> {
+    let at = at?;
+    let mut near: Vec<(f64, &Lodging)> = lodgings
+        .iter()
+        .map(|l| (haversine_m(at.lat, at.lon, l.lat, l.lon), l))
+        .filter(|(d, _)| *d <= ENDPOINT_RADIUS_M)
+        .collect();
+    near.sort_by(|a, b| {
+        let rank = |(d, l): &(f64, &Lodging)| d - 2.0 * score_lodging(l);
+        rank(a).total_cmp(&rank(b))
+    });
+    let mut near = near.into_iter();
+    let (distance_m, lodging) = near.next()?;
+    Some(EndpointLodging {
+        lodging: lodging.clone(),
+        distance_m,
+        alternatives: near.take(3).map(|(_, l)| l.clone()).collect(),
+    })
 }
 
 fn score_lodging(l: &Lodging) -> f64 {
@@ -556,6 +600,8 @@ pub fn plan_stages(req: &PlanStagesRequest) -> PlanStagesResponse {
         stages,
         num_stages,
         avg_km_per_day,
+        departure: endpoint_lodging(&req.lodgings, req.start),
+        arrival: endpoint_lodging(&req.lodgings, req.end),
     }
 }
 
@@ -733,6 +779,8 @@ mod tests {
             target_km_per_day: 25.0,
             min_km_per_day: 20.0,
             max_km_per_day: 30.0,
+            start: None,
+            end: None,
         })
     }
 
@@ -761,6 +809,19 @@ mod tests {
         let p = plan(vec![lodging_at(1, 25.0, 0.0)], 90.0);
         assert!(p.stages.iter().any(|s| !s.within_range));
         assert_eq!(p.stages.last().unwrap().end_km, 90.0);
+    }
+
+    #[test]
+    fn endpoint_lodging_picks_closest_within_radius() {
+        let mut near = lodging_at(1, 0.5, 0.0);
+        near.lat = 45.005; // ~560 m north
+        let mut far = lodging_at(2, 0.1, 0.0);
+        far.lat = 45.05; // ~5.6 km north
+        let lodgings = vec![far, near];
+        let found = endpoint_lodging(&lodgings, Some(coord(45.0, 5.0))).expect("near one");
+        assert_eq!(found.lodging.osm_id, 1);
+        assert!(found.alternatives.is_empty());
+        assert!(endpoint_lodging(&lodgings, None).is_none());
     }
 
     #[test]
