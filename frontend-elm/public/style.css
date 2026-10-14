@@ -259,6 +259,10 @@
   --map-toggle-forests: var(--accent-forest);
   --map-toggle-water: var(--info-blue);
   --map-toggle-unpaved: var(--accent-brass);
+  --map-toggle-lodging: var(--accent-terracotta);
+  --map-lodging-paid: var(--accent-terracotta);
+  --map-lodging-free: var(--accent-forest);
+  --map-lodging-camp: var(--accent-brass);
   --map-control-active: var(--accent-brass);
 
   --map-camera-cinema: var(--accent-brass);

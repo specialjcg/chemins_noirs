@@ -513,6 +513,27 @@ function ensureMap() {
       paint: { 'line-color': mapColor('--map-osm-unpaved'), 'line-width': 2, 'line-opacity': 0.7, 'line-dasharray': [3, 2] }
     });
 
+    // Lodging overlay (OSM + refuges.info), filled on demand by the 🛏️ control
+    mapInstance.addSource('lodging', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+    mapInstance.addLayer({
+      id: 'lodging-points',
+      type: 'circle',
+      source: 'lodging',
+      layout: { visibility: 'none' },
+      paint: {
+        'circle-radius': 6,
+        'circle-color': ['match', ['get', 'kind'],
+          'free', mapColor('--map-lodging-free'),
+          'camp', mapColor('--map-lodging-camp'),
+          mapColor('--map-lodging-paid')],
+        'circle-stroke-color': mapColor('--map-marker-face'),
+        'circle-stroke-width': 1.5
+      }
+    });
+
     // Unpaved route overlay (purple), drawn above paved layer
     mapInstance.addSource('route-unpaved', {
       type: 'geojson',
@@ -621,6 +642,9 @@ function ensureMap() {
 
   // Add public forests toggle control (off by default)
   mapInstance.addControl(createForestsControl(), 'top-right');
+
+  // Add lodging toggle control (off by default)
+  mapInstance.addControl(createLodgingControl(), 'top-right');
 
   // Add water points toggle control (off by default)
   mapInstance.addControl(createWaterControl(), 'top-right');
@@ -817,6 +841,189 @@ function createPitchControl() {
     }
   }
   return new PitchControl();
+}
+
+// ── Lodging overlay (OSM + refuges.info) ──────────────────────────────────
+let lodgingEnabled = false;
+let lodgingFetchTimer = null;
+let lodgingFetching = false;
+let lodgingPopup = null;
+
+/** OSM tourism=* → [libellé, catégorie]. paid / free / camp pilotent la couleur. */
+const OSM_LODGING = {
+  hotel: ['hôtel', 'paid'],
+  motel: ['motel', 'paid'],
+  guest_house: ["chambre d'hôtes", 'paid'],
+  hostel: ['auberge de jeunesse', 'paid'],
+  chalet: ['gîte', 'paid'],
+  apartment: ['location', 'paid'],
+  alpine_hut: ['refuge gardé', 'free'],
+  wilderness_hut: ['cabane', 'free'],
+  camp_site: ['camping', 'camp']
+};
+
+async function fetchOsmLodging(b) {
+  const bbox = `${b.getSouth().toFixed(4)},${b.getWest().toFixed(4)},${b.getNorth().toFixed(4)},${b.getEast().toFixed(4)}`;
+  const types = Object.keys(OSM_LODGING).join('|');
+  const query = `[out:json][timeout:20];nwr["tourism"~"^(${types})$"](${bbox});out center tags qt;`;
+  const res = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST',
+    body: 'data=' + encodeURIComponent(query),
+    signal: AbortSignal.timeout(22000)
+  });
+  if (!res.ok) throw new Error('Overpass ' + res.status);
+  const data = await res.json();
+  return (data.elements || []).flatMap(el => {
+    const lat = el.lat ?? el.center?.lat;
+    const lon = el.lon ?? el.center?.lon;
+    const [label, kind] = OSM_LODGING[el.tags?.tourism] || [];
+    if (lat == null || !label) return [];
+    return [{
+      lon, lat, kind, label,
+      name: el.tags.name || label,
+      source: 'OSM',
+      url: `https://www.openstreetmap.org/${el.type}/${el.id}`
+    }];
+  });
+}
+
+async function fetchRefugesInfo(b) {
+  const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(v => v.toFixed(4)).join(',');
+  const url = 'https://www.refuges.info/api/bbox?' + new URLSearchParams({
+    bbox, type_points: 'cabane,refuge,gite', format: 'geojson', detail: 'simple'
+  });
+  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error('refuges.info ' + res.status);
+  const data = await res.json();
+  return (data.features || []).map(f => {
+    const label = f.properties.type?.valeur || 'refuge';
+    return {
+      lon: f.geometry.coordinates[0],
+      lat: f.geometry.coordinates[1],
+      kind: label.startsWith('gîte') ? 'paid' : 'free',
+      label,
+      name: f.properties.nom || label,
+      source: 'refuges.info',
+      url: `https://www.refuges.info/point/${f.id}`
+    };
+  });
+}
+
+/** Les deux bases recensent souvent le même refuge : on garde la fiche refuges.info. */
+function dedupeLodging(refuges, osm) {
+  const near = (a, b) => haversineMeters(a, b) < 100 && a.kind === b.kind;
+  return [...refuges, ...osm.filter(o => !refuges.some(r => near(r, o)))];
+}
+
+function setLodgingData(items) {
+  const src = mapInstance?.getSource('lodging');
+  if (!src) return;
+  src.setData({
+    type: 'FeatureCollection',
+    features: items.map(({ lon, lat, ...props }) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lon, lat] },
+      properties: props
+    }))
+  });
+}
+
+async function fetchLodging() {
+  if (!mapInstance || !lodgingEnabled) return;
+  if (mapInstance.getZoom() < 11) {
+    setLodgingData([]);
+    return;
+  }
+  if (lodgingFetching) return;
+  lodgingFetching = true;
+
+  const b = mapInstance.getBounds();
+  try {
+    const [osm, refuges] = await Promise.all([
+      fetchOsmLodging(b).catch(e => { console.warn('[lodging] OSM:', e.message); return []; }),
+      fetchRefugesInfo(b).catch(e => { console.warn('[lodging] refuges.info:', e.message); return []; })
+    ]);
+    const items = dedupeLodging(refuges, osm);
+    if (lodgingEnabled) setLodgingData(items);
+    console.log('[lodging] loaded', items.length, 'hébergements');
+  } finally {
+    lodgingFetching = false;
+  }
+}
+
+function scheduleLodgingFetch() {
+  if (!lodgingEnabled) return;
+  clearTimeout(lodgingFetchTimer);
+  lodgingFetchTimer = setTimeout(fetchLodging, 800);
+}
+
+function showLodgingPopup(event) {
+  const f = event.features?.[0];
+  if (!f) return;
+  const p = f.properties;
+  const box = document.createElement('div');
+  box.className = 'place-popup';
+  box.appendChild(placeRow(p.name, `${p.label} · ${p.source}`, p.name));
+  const link = document.createElement('a');
+  link.href = p.url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'Voir la fiche';
+  box.appendChild(link);
+  lodgingPopup?.remove();
+  lodgingPopup = new maplibregl.Popup({ offset: 8, maxWidth: '280px' })
+    .setLngLat(f.geometry.coordinates)
+    .setDOMContent(box)
+    .addTo(mapInstance);
+}
+
+const setPointer = () => { mapInstance.getCanvas().style.cursor = 'pointer'; };
+const unsetPointer = () => { mapInstance.getCanvas().style.cursor = ''; };
+
+function createLodgingControl() {
+  class LodgingControl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      this._btn = document.createElement('button');
+      this._btn.className = 'maplibregl-ctrl-lodging';
+      this._btn.textContent = '🛏️';
+      this._btn.title = 'Afficher/masquer les hébergements (OSM, refuges.info) — zoom 11+';
+      this._btn.onclick = () => this.toggle();
+      this._container.appendChild(this._btn);
+      return this._container;
+    }
+
+    toggle() {
+      lodgingEnabled = !lodgingEnabled;
+      setLayerVisible('lodging-points', lodgingEnabled);
+      this._btn.style.backgroundColor = lodgingEnabled ? mapColor('--map-toggle-lodging') : '';
+      this._btn.style.color = lodgingEnabled ? 'white' : '';
+
+      if (lodgingEnabled) {
+        fetchLodging();
+        this._map.on('moveend', scheduleLodgingFetch);
+        this._map.on('click', 'lodging-points', showLodgingPopup);
+        this._map.on('mouseenter', 'lodging-points', setPointer);
+        this._map.on('mouseleave', 'lodging-points', unsetPointer);
+      } else {
+        this._map.off('moveend', scheduleLodgingFetch);
+        this._map.off('click', 'lodging-points', showLodgingPopup);
+        this._map.off('mouseenter', 'lodging-points', setPointer);
+        this._map.off('mouseleave', 'lodging-points', unsetPointer);
+        clearTimeout(lodgingFetchTimer);
+        lodgingPopup?.remove();
+        setLodgingData([]);
+      }
+    }
+
+    onRemove() {
+      this._container.parentNode.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+  return new LodgingControl();
 }
 
 // ── Unpaved paths overlay (Overpass API) ──────────────────────────────────
