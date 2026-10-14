@@ -3222,3 +3222,63 @@ body:has(.app-container.is-collapsed) .reference-badges {
   color: #2a5db0;
   font-weight: 600;
 }
+.stages-panel {
+  position: absolute;
+  right: 56px;
+  top: 10px;
+  z-index: var(--z-map-control);
+  width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fff;
+  color: #1b2439;
+  font-size: 0.82rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.stages-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.stages-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.stages-row {
+  padding: 4px 0;
+  border-top: 1px solid #dde1ea;
+}
+.stages-lodging {
+  color: #5c6475;
+}
+.stages-lodging a {
+  color: #2a5db0;
+}
+.stages-row details {
+  margin-left: 12px;
+}
+.stages-out {
+  background: #fdecea;
+}
+.stage-marker {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--map-lodging-paid);
+  border: 2px solid #fff;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.stage-marker.stages-out {
+  background: #c0392b;
+}

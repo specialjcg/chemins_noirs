@@ -321,7 +321,8 @@ async fn lodgings_along_route_handler(
         req.coords.len(),
         req.buffer_m
     );
-    match backend::lodgings::find_lodgings_along_route(&req.coords, req.buffer_m).await {
+    let kinds = backend::lodgings::select_kinds(req.kinds.as_deref());
+    match backend::lodgings::find_lodgings_along_route(&req.coords, req.buffer_m, &kinds).await {
         Ok(resp) => {
             tracing::info!(
                 "Lodgings: {} found along {:.1}km route",

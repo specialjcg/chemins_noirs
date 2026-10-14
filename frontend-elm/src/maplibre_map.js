@@ -646,6 +646,9 @@ function ensureMap() {
   // Add lodging toggle control (off by default)
   mapInstance.addControl(createLodgingControl(), 'top-right');
 
+  // Add stage planner control: nights in lodgings along the route
+  mapInstance.addControl(createStagesControl(), 'top-right');
+
   // Add water points toggle control (off by default)
   mapInstance.addControl(createWaterControl(), 'top-right');
 
@@ -1024,6 +1027,174 @@ function createLodgingControl() {
     }
   }
   return new LodgingControl();
+}
+
+// ── Stage planner: one night per lodging, ~25 km a day ────────────────────
+const STAGE_TARGET_KM = 25;
+const STAGE_TOLERANCE_KM = 5;
+const STAGE_DETOUR_M = 2000;
+/** Refuges exclus : on veut un lit ou un emplacement de camping. */
+const STAGE_KINDS = ['hotel', 'motel', 'guest_house', 'hostel', 'chalet', 'apartment', 'camp_site'];
+const STAGE_KIND_LABELS = {
+  hotel: 'hôtel', motel: 'motel', guest_house: "chambre d'hôtes", hostel: 'auberge',
+  chalet: 'gîte', apartment: 'location', camp_site: 'camping',
+  alpine_hut: 'refuge', wilderness_hut: 'cabane'
+};
+
+let stageMarkers = [];
+let stagesPanel = null;
+
+function clearStages() {
+  stageMarkers.forEach(m => m.remove());
+  stageMarkers = [];
+  stagesPanel?.remove();
+  stagesPanel = null;
+}
+
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`${url} ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+function stagesPanelShell(title) {
+  stagesPanel?.remove();
+  const panel = document.createElement('div');
+  panel.className = 'stages-panel';
+  const head = document.createElement('div');
+  head.className = 'stages-head';
+  const h = document.createElement('strong');
+  h.textContent = title;
+  const close = document.createElement('button');
+  close.className = 'stages-close';
+  close.textContent = '✕';
+  close.title = 'Fermer les étapes';
+  close.onclick = clearStages;
+  head.append(h, close);
+  panel.appendChild(head);
+  mapInstance.getContainer().appendChild(panel);
+  stagesPanel = panel;
+  return panel;
+}
+
+function lodgingLine(l) {
+  const parts = [STAGE_KIND_LABELS[l.kind] || l.kind];
+  if (l.perpendicular_dist_m >= 50) parts.push(`détour ${(l.perpendicular_dist_m / 1000).toFixed(1)} km`);
+  const line = document.createElement('div');
+  line.className = 'stages-lodging';
+  const link = document.createElement('a');
+  link.href = `https://www.openstreetmap.org/${l.osm_type}/${l.osm_id}`;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = l.name;
+  line.append(link, ` · ${parts.join(' · ')}`);
+  if (l.phone) {
+    const tel = document.createElement('a');
+    tel.href = `tel:${l.phone.replace(/\s/g, '')}`;
+    tel.textContent = ` ☎ ${l.phone}`;
+    line.append(tel);
+  }
+  return line;
+}
+
+function showStages(plan) {
+  const km = plan.stages.reduce((sum, s) => sum + s.distance_km, 0);
+  const panel = stagesPanelShell(`${plan.num_stages} jours · ${km.toFixed(0)} km · ${plan.avg_km_per_day.toFixed(1)} km/j`);
+  for (const s of plan.stages) {
+    const row = document.createElement('div');
+    row.className = 'stages-row' + (s.within_range ? '' : ' stages-out');
+    const title = document.createElement('div');
+    title.textContent = `${s.within_range ? '' : '⚠️ '}J${s.day} · ${s.distance_km.toFixed(1)} km`
+      + ` (km ${s.start_km.toFixed(0)} → ${s.end_km.toFixed(0)})`;
+    row.appendChild(title);
+    if (s.lodging) {
+      row.appendChild(lodgingLine(s.lodging));
+      row.querySelector('.stages-lodging').prepend(copyButton(s.lodging.name), ' ');
+    } else {
+      const end = document.createElement('div');
+      end.className = 'stages-lodging';
+      end.textContent = 'Arrivée';
+      row.appendChild(end);
+    }
+    if (s.alternatives.length > 0) {
+      const alt = document.createElement('details');
+      const sum = document.createElement('summary');
+      sum.textContent = `${s.alternatives.length} autre(s)`;
+      alt.appendChild(sum);
+      s.alternatives.forEach(a => alt.appendChild(lodgingLine(a)));
+      row.appendChild(alt);
+    }
+    panel.appendChild(row);
+
+    if (s.lodging) {
+      const el = document.createElement('div');
+      el.className = 'stage-marker' + (s.within_range ? '' : ' stages-out');
+      el.textContent = s.day;
+      el.title = `Nuit ${s.day} : ${s.lodging.name}`;
+      el.onclick = () => row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      stageMarkers.push(new maplibregl.Marker({ element: el })
+        .setLngLat([s.lodging.lon, s.lodging.lat])
+        .addTo(mapInstance));
+    }
+  }
+}
+
+async function planStages() {
+  clearStages();
+  if (!currentRouteCoords || currentRouteCoords.length < 2) {
+    stagesPanelShell("Trace d'abord un itinéraire.");
+    return;
+  }
+  stagesPanelShell('Recherche des hébergements…');
+  try {
+    const found = await postJson('/api/lodgings-along-route', {
+      coords: currentRouteCoords.map(({ lat, lon }) => ({ lat, lon })),
+      buffer_m: STAGE_DETOUR_M,
+      kinds: STAGE_KINDS
+    });
+    if (found.count === 0) {
+      stagesPanelShell(`Aucun hébergement à moins de ${STAGE_DETOUR_M / 1000} km de la trace.`);
+      return;
+    }
+    const plan = await postJson('/api/plan-stages', {
+      lodgings: found.lodgings,
+      total_route_km: found.total_route_km,
+      target_km_per_day: STAGE_TARGET_KM,
+      min_km_per_day: STAGE_TARGET_KM - STAGE_TOLERANCE_KM,
+      max_km_per_day: STAGE_TARGET_KM + STAGE_TOLERANCE_KM
+    });
+    showStages(plan);
+  } catch (e) {
+    console.warn('[stages]', e.message);
+    stagesPanelShell('Échec du calcul des étapes (voir la console).');
+  }
+}
+
+function createStagesControl() {
+  class StagesControl {
+    onAdd(map) {
+      this._map = map;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      this._btn = document.createElement('button');
+      this._btn.className = 'maplibregl-ctrl-stages';
+      this._btn.textContent = '🗓️';
+      this._btn.title = `Étapes d'hébergement en hébergement (${STAGE_TARGET_KM} ± ${STAGE_TOLERANCE_KM} km/j, détour ≤ ${STAGE_DETOUR_M / 1000} km)`;
+      this._btn.onclick = () => (stagesPanel ? clearStages() : planStages());
+      this._container.appendChild(this._btn);
+      return this._container;
+    }
+
+    onRemove() {
+      this._container.parentNode.removeChild(this._container);
+      this._map = undefined;
+    }
+  }
+  return new StagesControl();
 }
 
 // ── Unpaved paths overlay (Overpass API) ──────────────────────────────────
@@ -1929,6 +2100,7 @@ export function updateRoute(coords) {
     kmMarkers = [];
     currentRouteCoords = null;
     clearWaterMarkers();
+    clearStages();
     return;
   }
 

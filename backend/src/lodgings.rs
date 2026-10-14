@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::geo_utils::haversine_m;
 use crate::models::Coordinate;
 
-/// Tourism tags we consider as valid lodgings for hikers.
+/// Tourism tags we consider as valid lodgings for hikers. A request picks a
+/// subset; anything else is dropped, which also keeps free text out of the
+/// Overpass query.
 const TOURISM_KINDS: &[&str] = &[
     "guest_house",
     "hostel",
@@ -22,8 +24,24 @@ const TOURISM_KINDS: &[&str] = &[
     "wilderness_hut",
     "chalet",
     "hotel",
+    "motel",
     "apartment",
+    "camp_site",
 ];
+
+/// Known kinds among those requested; none requested (or none known) means all.
+pub fn select_kinds(requested: Option<&[String]>) -> Vec<&'static str> {
+    let selected: Vec<&'static str> = TOURISM_KINDS
+        .iter()
+        .copied()
+        .filter(|k| requested.is_some_and(|r| r.iter().any(|x| x == k)))
+        .collect();
+    if selected.is_empty() {
+        TOURISM_KINDS.to_vec()
+    } else {
+        selected
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lodging {
@@ -54,6 +72,9 @@ pub struct LodgingsRequest {
     /// Maximum perpendicular distance to the route polyline, in meters.
     /// Lodgings further than this are excluded from the result.
     pub buffer_m: f64,
+    /// OSM `tourism=*` values to keep; all known kinds when absent.
+    #[serde(default)]
+    pub kinds: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -167,8 +188,14 @@ fn project_on_polyline(coords: &[Coordinate], lat: f64, lon: f64) -> (f64, f64) 
 }
 
 /// Build the Overpass QL query for the bbox + tourism kinds.
-fn build_overpass_query(min_lat: f64, max_lat: f64, min_lon: f64, max_lon: f64) -> String {
-    let kinds = TOURISM_KINDS.join("|");
+fn build_overpass_query(
+    kinds: &[&str],
+    min_lat: f64,
+    max_lat: f64,
+    min_lon: f64,
+    max_lon: f64,
+) -> String {
+    let kinds = kinds.join("|");
     // bbox order in Overpass is south, west, north, east
     format!(
         r#"[out:json][timeout:60];
@@ -182,12 +209,13 @@ out center tags;"#
 /// Query Overpass for lodgings in the given bbox. Tries the main endpoint
 /// first then a mirror, with retries on transient failures.
 async fn fetch_overpass(
+    kinds: &[&str],
     min_lat: f64,
     max_lat: f64,
     min_lon: f64,
     max_lon: f64,
 ) -> Result<serde_json::Value, String> {
-    let query = build_overpass_query(min_lat, max_lat, min_lon, max_lon);
+    let query = build_overpass_query(kinds, min_lat, max_lat, min_lon, max_lon);
 
     // Try main endpoint then Kumi mirror — Overpass main is often saturated.
     let endpoints = [
@@ -321,6 +349,7 @@ fn parse_element(el: &serde_json::Value) -> Option<Lodging> {
 pub async fn find_lodgings_along_route(
     coords: &[Coordinate],
     buffer_m: f64,
+    kinds: &[&str],
 ) -> Result<LodgingsResponse, String> {
     if coords.len() < 2 {
         return Err("coords must contain at least 2 points".to_string());
@@ -330,7 +359,7 @@ pub async fn find_lodgings_along_route(
     let (min_lat, max_lat, min_lon, max_lon) = expanded_bbox(coords, buffer_m);
 
     // 2. Query Overpass
-    let raw = fetch_overpass(min_lat, max_lat, min_lon, max_lon).await?;
+    let raw = fetch_overpass(kinds, min_lat, max_lat, min_lon, max_lon).await?;
     let elements = raw
         .get("elements")
         .and_then(|v| v.as_array())
@@ -393,6 +422,8 @@ pub struct Stage {
     pub lodging: Option<Lodging>,
     pub lodging_score: f64,
     pub alternatives: Vec<Lodging>,
+    /// False when no lodging allowed a stage within [min, max] km here.
+    pub within_range: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -415,102 +446,111 @@ fn score_lodging(l: &Lodging) -> f64 {
     kind_score + phone_score + website_score + capacity_score + proximity_score
 }
 
+/// Penalty per km outside [min, max]: large enough that any plan within range
+/// beats one that is not, small enough to still rank impossible stretches.
+const OUT_OF_RANGE_PENALTY: f64 = 1000.0;
+
+/// A place where a day can end: the start, a lodging, or the arrival.
+struct Cut<'a> {
+    along_km: f64,
+    detour_km: f64,
+    lodging: Option<&'a Lodging>,
+}
+
+/// Walking distance between two cuts: the stretch of route, plus the detour to
+/// leave the morning lodging and to reach the evening one.
+fn stage_km(from: &Cut, to: &Cut) -> f64 {
+    to.along_km - from.along_km + from.detour_km + to.detour_km
+}
+
+fn stage_cost(km: f64, req: &PlanStagesRequest) -> f64 {
+    let outside = (req.min_km_per_day - km).max(0.0) + (km - req.max_km_per_day).max(0.0);
+    (km - req.target_km_per_day).powi(2) + OUT_OF_RANGE_PENALTY * outside
+}
+
+fn within_range(km: f64, req: &PlanStagesRequest) -> bool {
+    km >= req.min_km_per_day && km <= req.max_km_per_day
+}
+
+/// Chooses the whole sequence of nights at once (shortest path over the cuts
+/// sorted along the route), so one awkward stretch cannot push later days out
+/// of range the way a day-by-day greedy choice did.
 pub fn plan_stages(req: &PlanStagesRequest) -> PlanStagesResponse {
-    let n = (req.total_route_km / req.target_km_per_day).round().max(1.0) as usize;
-    let ideal_length = req.total_route_km / n as f64;
+    let mut cuts = vec![Cut { along_km: 0.0, detour_km: 0.0, lodging: None }];
+    let mut on_route: Vec<&Lodging> = req
+        .lodgings
+        .iter()
+        .filter(|l| l.along_route_km > 0.0 && l.along_route_km < req.total_route_km)
+        .collect();
+    on_route.sort_by(|a, b| a.along_route_km.total_cmp(&b.along_route_km));
+    cuts.extend(on_route.into_iter().map(|l| Cut {
+        along_km: l.along_route_km,
+        detour_km: l.perpendicular_dist_m / 1000.0,
+        lodging: Some(l),
+    }));
+    cuts.push(Cut { along_km: req.total_route_km, detour_km: 0.0, lodging: None });
 
-    let mut stages = Vec::with_capacity(n);
-    let mut start_km = 0.0_f64;
-
-    for i in 0..n {
-        if i == n - 1 {
-            // Last stage: no lodging needed (arrival)
-            let distance = req.total_route_km - start_km;
-            stages.push(Stage {
-                day: i + 1,
-                start_km,
-                end_km: req.total_route_km,
-                distance_km: distance,
-                lodging: None,
-                lodging_score: 0.0,
-                alternatives: vec![],
-            });
-            break;
-        }
-
-        let target_km = start_km + ideal_length;
-        let min_cut = start_km + req.min_km_per_day;
-        let max_cut = start_km + req.max_km_per_day;
-
-        // Find lodgings within [min_cut, max_cut]
-        let mut candidates: Vec<&Lodging> = req
-            .lodgings
-            .iter()
-            .filter(|l| l.along_route_km >= min_cut && l.along_route_km <= max_cut)
-            .collect();
-
-        // If none in range, pick closest to target overall
-        if candidates.is_empty() {
-            candidates = req.lodgings.iter().filter(|l| l.along_route_km > start_km).collect();
-        }
-
-        if candidates.is_empty() {
-            // No lodgings left, make this the last stage
-            let distance = req.total_route_km - start_km;
-            stages.push(Stage {
-                day: i + 1,
-                start_km,
-                end_km: req.total_route_km,
-                distance_km: distance,
-                lodging: None,
-                lodging_score: 0.0,
-                alternatives: vec![],
-            });
-            break;
-        }
-
-        // Sort by distance to target, then for ties (within 2km) prefer higher score
-        candidates.sort_by(|a, b| {
-            let da = (a.along_route_km - target_km).abs();
-            let db = (b.along_route_km - target_km).abs();
-            if (da - db).abs() <= 2.0 {
-                let sa = score_lodging(a);
-                let sb = score_lodging(b);
-                sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
-            } else {
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+    let n = cuts.len();
+    let mut best = vec![f64::INFINITY; n];
+    let mut prev = vec![0usize; n];
+    best[0] = 0.0;
+    for j in 1..n {
+        // Score only breaks ties between lodgings at similar distances.
+        let bonus = cuts[j].lodging.map_or(0.0, |l| score_lodging(l) / 100.0);
+        for i in 0..j {
+            if cuts[j].along_km <= cuts[i].along_km {
+                continue;
             }
-        });
-
-        let chosen = candidates[0].clone();
-        let chosen_score = score_lodging(&chosen);
-        let alternatives: Vec<Lodging> = candidates[1..candidates.len().min(4)]
-            .iter()
-            .map(|l| (*l).clone())
-            .collect();
-
-        let end_km = chosen.along_route_km;
-        let distance = end_km - start_km;
-
-        stages.push(Stage {
-            day: i + 1,
-            start_km,
-            end_km,
-            distance_km: distance,
-            lodging: Some(chosen),
-            lodging_score: chosen_score,
-            alternatives,
-        });
-
-        start_km = end_km;
+            let cost = best[i] + stage_cost(stage_km(&cuts[i], &cuts[j]), req) - bonus;
+            if cost < best[j] {
+                best[j] = cost;
+                prev[j] = i;
+            }
+        }
     }
 
+    let mut path = vec![n - 1];
+    while let Some(&j) = path.last() {
+        if j == 0 {
+            break;
+        }
+        path.push(prev[j]);
+    }
+    path.reverse();
+
+    let stages: Vec<Stage> = path
+        .windows(2)
+        .enumerate()
+        .map(|(day, w)| {
+            let (from, to) = (&cuts[w[0]], &cuts[w[1]]);
+            let km = stage_km(from, to);
+            let mut alternatives: Vec<(f64, &Lodging)> = cuts[1..n - 1]
+                .iter()
+                .filter(|c| c.along_km > from.along_km)
+                .filter_map(|c| {
+                    let l = c.lodging?;
+                    let alt_km = stage_km(from, c);
+                    let same = to.lodging.is_some_and(|t| t.osm_id == l.osm_id);
+                    (!same && within_range(alt_km, req))
+                        .then(|| ((alt_km - req.target_km_per_day).abs(), l))
+                })
+                .collect();
+            alternatives.sort_by(|a, b| a.0.total_cmp(&b.0));
+            Stage {
+                day: day + 1,
+                start_km: from.along_km,
+                end_km: to.along_km,
+                distance_km: km,
+                lodging: to.lodging.cloned(),
+                lodging_score: to.lodging.map_or(0.0, score_lodging),
+                alternatives: alternatives.into_iter().take(3).map(|(_, l)| l.clone()).collect(),
+                within_range: within_range(km, req),
+            }
+        })
+        .collect();
+
     let num_stages = stages.len();
-    let avg_km_per_day = if num_stages > 0 {
-        req.total_route_km / num_stages as f64
-    } else {
-        0.0
-    };
+    let avg_km_per_day = stages.iter().map(|s| s.distance_km).sum::<f64>() / num_stages as f64;
 
     PlanStagesResponse {
         stages,
@@ -590,7 +630,7 @@ mod tests {
 
     #[test]
     fn build_overpass_query_contains_all_kinds() {
-        let q = build_overpass_query(44.0, 44.5, 5.0, 5.5);
+        let q = build_overpass_query(TOURISM_KINDS, 44.0, 44.5, 5.0, 5.5);
         assert!(q.contains("guest_house"));
         assert!(q.contains("hostel"));
         assert!(q.contains("alpine_hut"));
@@ -665,5 +705,68 @@ mod tests {
         });
         let l = parse_element(&el).expect("should parse");
         assert_eq!(l.address.as_deref(), Some("12 rue de la Place 26110 Nyons"));
+    }
+
+    fn lodging_at(osm_id: i64, along_route_km: f64, perpendicular_dist_m: f64) -> Lodging {
+        Lodging {
+            osm_id,
+            osm_type: "node".into(),
+            name: format!("L{osm_id}"),
+            kind: "guest_house".into(),
+            lat: 45.0,
+            lon: 5.0,
+            phone: None,
+            website: None,
+            email: None,
+            capacity: None,
+            stars: None,
+            address: None,
+            perpendicular_dist_m,
+            along_route_km,
+        }
+    }
+
+    fn plan(lodgings: Vec<Lodging>, total: f64) -> PlanStagesResponse {
+        plan_stages(&PlanStagesRequest {
+            lodgings,
+            total_route_km: total,
+            target_km_per_day: 25.0,
+            min_km_per_day: 20.0,
+            max_km_per_day: 30.0,
+        })
+    }
+
+    #[test]
+    fn plan_stages_avoids_greedy_dead_end() {
+        // Greedy takes the 25 km lodging, then finds nothing in [45, 55]:
+        // starting with 22 km keeps every day within range.
+        let lodgings = vec![lodging_at(1, 22.0, 0.0), lodging_at(2, 25.0, 0.0), lodging_at(3, 44.0, 0.0)];
+        let p = plan(lodgings, 68.0);
+        let ends: Vec<f64> = p.stages.iter().map(|s| s.end_km).collect();
+        assert_eq!(ends, vec![22.0, 44.0, 68.0]);
+        assert!(p.stages.iter().all(|s| s.within_range));
+    }
+
+    #[test]
+    fn plan_stages_counts_detour_in_distance() {
+        // 1 km off the route: the evening and the next morning both pay it.
+        let p = plan(vec![lodging_at(1, 25.0, 1000.0)], 50.0);
+        assert_eq!(p.num_stages, 2);
+        assert!((p.stages[0].distance_km - 26.0).abs() < 1e-9);
+        assert!((p.stages[1].distance_km - 26.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn plan_stages_flags_stretch_without_lodging() {
+        let p = plan(vec![lodging_at(1, 25.0, 0.0)], 90.0);
+        assert!(p.stages.iter().any(|s| !s.within_range));
+        assert_eq!(p.stages.last().unwrap().end_km, 90.0);
+    }
+
+    #[test]
+    fn select_kinds_keeps_known_kinds_only() {
+        let asked = vec!["hotel".to_string(), "camp_site".to_string(), "x\"];out;".to_string()];
+        assert_eq!(select_kinds(Some(&asked)), vec!["hotel", "camp_site"]);
+        assert_eq!(select_kinds(None), TOURISM_KINDS.to_vec());
     }
 }
