@@ -991,8 +991,25 @@ function showLodgingPopup(event) {
     .addTo(mapInstance);
 }
 
-const setPointer = () => { mapInstance.getCanvas().style.cursor = 'pointer'; };
-const unsetPointer = () => { mapInstance.getCanvas().style.cursor = ''; };
+// Survol d'un hébergement : nom et type dans une infobulle légère.
+let lodgingHover = null;
+
+const setPointer = (event) => {
+  mapInstance.getCanvas().style.cursor = 'pointer';
+  const f = event.features?.[0];
+  if (!f) return;
+  const p = f.properties;
+  lodgingHover?.remove();
+  lodgingHover = new maplibregl.Popup({ offset: 8, closeButton: false, closeOnClick: false })
+    .setLngLat(f.geometry.coordinates)
+    .setText(`${p.name} · ${p.label}`)
+    .addTo(mapInstance);
+};
+const unsetPointer = () => {
+  mapInstance.getCanvas().style.cursor = '';
+  lodgingHover?.remove();
+  lodgingHover = null;
+};
 
 function createLodgingControl() {
   class LodgingControl {
@@ -1029,6 +1046,7 @@ function createLodgingControl() {
         this._map.off('mouseleave', 'lodging-points', unsetPointer);
         clearTimeout(lodgingFetchTimer);
         lodgingPopup?.remove();
+        unsetPointer();
         setLodgingData([]);
       }
     }
@@ -1951,6 +1969,13 @@ export function initMap() {
       // Bulle des noms ouverte : le clic la ferme sans poser de point.
       if (placePopup) {
         placePopup.remove();
+        return;
+      }
+      // Clic sur un hébergement : sa bulle s'ouvre (handler de la couche), pas de point.
+      if (
+        mapInstance.getLayer('lodging-points') &&
+        mapInstance.queryRenderedFeatures(event.point, { layers: ['lodging-points'] }).length > 0
+      ) {
         return;
       }
       const { lng, lat } = event.lngLat;
