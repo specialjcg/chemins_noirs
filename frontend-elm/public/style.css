@@ -3222,6 +3222,62 @@ body:has(.app-container.is-collapsed) .reference-badges {
   color: #2a5db0;
   font-weight: 600;
 }
+/* Survol d'un hébergement : étiquette sombre, nom puis type */
+.lodging-hover {
+  pointer-events: none;
+}
+.lodging-hover .maplibregl-popup-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid var(--accent-brass-edge);
+  border-radius: var(--radius-md);
+  background: rgb(var(--bg-deep-rgb) / 0.88);
+  backdrop-filter: blur(6px);
+  box-shadow: var(--shadow-elevated);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.lodging-hover strong {
+  font-weight: 600;
+}
+.lodging-hover-kind {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+.lodging-hover-kind::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--map-lodging-paid);
+}
+.lodging-kind-free::before {
+  background: var(--map-lodging-free);
+}
+.lodging-kind-camp::before {
+  background: var(--map-lodging-camp);
+}
+.lodging-hover.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
+  border-top-color: rgb(var(--bg-deep-rgb) / 0.88);
+}
+.lodging-hover.maplibregl-popup-anchor-top .maplibregl-popup-tip {
+  border-bottom-color: rgb(var(--bg-deep-rgb) / 0.88);
+}
+.lodging-hover.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: rgb(var(--bg-deep-rgb) / 0.88);
+}
+.lodging-hover.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: rgb(var(--bg-deep-rgb) / 0.88);
+}
+
 .stages-panel {
   position: absolute;
   right: 56px;

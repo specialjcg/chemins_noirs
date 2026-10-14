@@ -1000,9 +1000,21 @@ const setPointer = (event) => {
   if (!f) return;
   const p = f.properties;
   lodgingHover?.remove();
-  lodgingHover = new maplibregl.Popup({ offset: 8, closeButton: false, closeOnClick: false })
+  const box = document.createElement('div');
+  const name = document.createElement('strong');
+  name.textContent = p.name;
+  const kind = document.createElement('span');
+  kind.className = `lodging-hover-kind lodging-kind-${p.kind}`;
+  kind.textContent = p.label;
+  box.append(name, kind);
+  lodgingHover = new maplibregl.Popup({
+    offset: 10,
+    closeButton: false,
+    closeOnClick: false,
+    className: 'lodging-hover'
+  })
     .setLngLat(f.geometry.coordinates)
-    .setText(`${p.name} · ${p.label}`)
+    .setDOMContent(box)
     .addTo(mapInstance);
 };
 const unsetPointer = () => {
