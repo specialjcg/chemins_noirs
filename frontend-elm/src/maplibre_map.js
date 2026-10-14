@@ -1438,6 +1438,9 @@ async function showPlaceNames(lngLat) {
     .setDOMContent(box)
     .addTo(mapInstance);
   placePopup = popup;
+  popup.on('close', () => {
+    if (placePopup === popup) placePopup = null;
+  });
 
   const [toponyms, commune] = await Promise.all([
     fetchToponyms(lat, lng).catch(() => []),
@@ -1466,6 +1469,9 @@ function setupPlaceNames() {
   mapInstance.getCanvas().addEventListener('mousedown', (e) => {
     if (e.button === 2) downAt = { x: e.clientX, y: e.clientY };
   });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') placePopup?.remove();
+  });
   mapInstance.on('contextmenu', (event) => {
     const e = event.originalEvent;
     if (downAt && e &&
@@ -1493,6 +1499,11 @@ export function initMap() {
     const TOLERANCE_PX = 8;
 
     mapInstance.on('click', (event) => {
+      // Bulle des noms ouverte : le clic la ferme sans poser de point.
+      if (placePopup) {
+        placePopup.remove();
+        return;
+      }
       const { lng, lat } = event.lngLat;
       const couches = LIGNES_DU_TRACE.filter((id) => mapInstance.getLayer(id));
       const p = event.point;
