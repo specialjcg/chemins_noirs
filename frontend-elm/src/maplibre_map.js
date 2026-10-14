@@ -850,7 +850,10 @@ function createPitchControl() {
 let lodgingEnabled = false;
 let lodgingFetchTimer = null;
 let lodgingFetching = false;
+let lodgingRefetch = false; // the map moved while a fetch was running
 let lodgingPopup = null;
+/** Every lodging seen, by url: a failed or slow request no longer wipes the map. */
+const lodgingCache = new Map();
 
 /** OSM tourism=* → [libellé, catégorie]. paid / free / camp pilotent la couleur. */
 const OSM_LODGING = {
@@ -933,11 +936,12 @@ function setLodgingData(items) {
 
 async function fetchLodging() {
   if (!mapInstance || !lodgingEnabled) return;
-  if (mapInstance.getZoom() < 11) {
-    setLodgingData([]);
+  // Zoomed out: keep what is already known but ask for nothing new.
+  if (mapInstance.getZoom() < 11) return;
+  if (lodgingFetching) {
+    lodgingRefetch = true;
     return;
   }
-  if (lodgingFetching) return;
   lodgingFetching = true;
 
   const b = mapInstance.getBounds();
@@ -946,11 +950,18 @@ async function fetchLodging() {
       fetchOsmLodging(b).catch(e => { console.warn('[lodging] OSM:', e.message); return []; }),
       fetchRefugesInfo(b).catch(e => { console.warn('[lodging] refuges.info:', e.message); return []; })
     ]);
-    const items = dedupeLodging(refuges, osm);
-    if (lodgingEnabled) setLodgingData(items);
-    console.log('[lodging] loaded', items.length, 'hébergements');
+    const cached = [...lodgingCache.values()];
+    const fresh = dedupeLodging(refuges, osm)
+      .filter(l => !cached.some(c => c.url !== l.url && haversineMeters(c, l) < 100 && c.kind === l.kind));
+    fresh.forEach(l => lodgingCache.set(l.url, l));
+    if (lodgingEnabled) setLodgingData([...lodgingCache.values()]);
+    console.log('[lodging] loaded', fresh.length, 'hébergements,', lodgingCache.size, 'en tout');
   } finally {
     lodgingFetching = false;
+  }
+  if (lodgingRefetch) {
+    lodgingRefetch = false;
+    fetchLodging();
   }
 }
 
@@ -1005,6 +1016,7 @@ function createLodgingControl() {
       this._btn.style.color = lodgingEnabled ? 'white' : '';
 
       if (lodgingEnabled) {
+        setLodgingData([...lodgingCache.values()]);
         fetchLodging();
         this._map.on('moveend', scheduleLodgingFetch);
         this._map.on('click', 'lodging-points', showLodgingPopup);
@@ -1032,7 +1044,7 @@ function createLodgingControl() {
 // ── Stage planner: one night per lodging, ~25 km a day ────────────────────
 const STAGE_TARGET_KM = 25;
 const STAGE_TOLERANCE_KM = 5;
-const STAGE_DETOUR_M = 2000;
+const STAGE_DETOUR_M = 5000;
 /** Refuges exclus : on veut un lit ou un emplacement de camping. */
 const STAGE_KINDS = ['hotel', 'motel', 'guest_house', 'hostel', 'chalet', 'apartment', 'camp_site'];
 const STAGE_KIND_LABELS = {
@@ -1124,7 +1136,7 @@ function addStageRow(panel, { title, lodging, alternatives = [], marker, ok = tr
   } else {
     const none = document.createElement('div');
     none.className = 'stages-lodging';
-    none.textContent = 'Aucun hébergement à moins de 2 km';
+    none.textContent = `Aucun hébergement à moins de ${STAGE_DETOUR_M / 1000} km`;
     row.appendChild(none);
   }
   if (alternatives.length > 0) row.appendChild(alternativesBlock(alternatives));

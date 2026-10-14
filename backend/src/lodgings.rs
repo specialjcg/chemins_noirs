@@ -459,7 +459,7 @@ pub struct EndpointLodging {
 }
 
 /// Furthest an endpoint lodging may be from the start or the arrival.
-const ENDPOINT_RADIUS_M: f64 = 2000.0;
+const ENDPOINT_RADIUS_M: f64 = 5000.0;
 
 /// Closest lodgings to a route end; the score only breaks near-ties (~200 m).
 fn endpoint_lodging(lodgings: &[Lodging], at: Option<Coordinate>) -> Option<EndpointLodging> {
@@ -491,7 +491,7 @@ fn score_lodging(l: &Lodging) -> f64 {
     let phone_score = if l.phone.is_some() { 20.0 } else { 0.0 };
     let website_score = if l.website.is_some() { 15.0 } else { 0.0 };
     let capacity_score = if l.capacity.is_some() { 10.0 } else { 0.0 };
-    let proximity_score = 25.0 * (1.0 - l.perpendicular_dist_m / 2000.0).max(0.0);
+    let proximity_score = 25.0 * (1.0 - l.perpendicular_dist_m / 5000.0).max(0.0);
     kind_score + phone_score + website_score + capacity_score + proximity_score
 }
 
