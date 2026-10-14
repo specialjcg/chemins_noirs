@@ -230,7 +230,8 @@ async fn fetch_overpass(
         .build()
         .map_err(|e| format!("client build: {e}"))?;
 
-    let mut last_err = String::new();
+    // Every failure is kept: the last one alone hid why the main server failed.
+    let mut errors: Vec<String> = Vec::new();
     for endpoint in endpoints {
         for attempt in 1..=2 {
             match client
@@ -247,22 +248,23 @@ async fn fetch_overpass(
                                 if json.get("elements").is_some() {
                                     return Ok(json);
                                 }
-                                last_err = format!("response missing 'elements' field");
+                                errors.push(format!("{endpoint}: response missing 'elements' field"));
                             }
                             Err(e) => {
-                                last_err = format!("{endpoint}: parse error: {e}");
+                                errors.push(format!("{endpoint}: parse error: {e}"));
                             }
                         }
                     } else {
                         let body = resp.text().await.unwrap_or_default();
-                        last_err = format!(
+                        errors.push(format!(
                             "{endpoint} HTTP {status}: {}",
                             body.chars().take(200).collect::<String>()
-                        );
+                        ));
                     }
                 }
                 Err(e) => {
-                    last_err = format!("{endpoint}: network error (attempt {attempt}): {e}");
+                    // Debug shows the cause (timeout, TLS, DNS) that Display drops.
+                    errors.push(format!("{endpoint}: network error (attempt {attempt}): {e:?}"));
                 }
             }
             if attempt == 1 {
@@ -270,7 +272,10 @@ async fn fetch_overpass(
             }
         }
     }
-    Err(format!("Overpass failed on all endpoints: {last_err}"))
+    for e in &errors {
+        tracing::warn!("Overpass: {e}");
+    }
+    Err(format!("Overpass failed on all endpoints: {}", errors.join(" | ")))
 }
 
 /// Parse one OSM element from the Overpass response into a Lodging struct,
