@@ -3207,3 +3207,14 @@ body:has(.app-container.is-collapsed) .reference-badges {
 .place-copy:hover {
   transform: scale(1.15);
 }
+.place-lodging {
+  justify-content: flex-start;
+  gap: 4px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid #dde1ea;
+}
+.place-lodging a {
+  color: #2a5db0;
+  font-weight: 600;
+}

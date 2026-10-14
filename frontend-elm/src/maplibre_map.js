@@ -1410,6 +1410,35 @@ function copyButton(text) {
   return btn;
 }
 
+// Pas d'API publique Airbnb/Booking : on ouvre leur recherche centrée sur le point.
+const LODGING_RADIUS_KM = 10;
+
+function lodgingLinks(lat, lon) {
+  const dLat = LODGING_RADIUS_KM / 111;
+  const dLon = LODGING_RADIUS_KM / (111 * Math.cos((lat * Math.PI) / 180));
+  const airbnb = 'https://www.airbnb.fr/s/homes?' + new URLSearchParams({
+    ne_lat: (lat + dLat).toFixed(5), ne_lng: (lon + dLon).toFixed(5),
+    sw_lat: (lat - dLat).toFixed(5), sw_lng: (lon - dLon).toFixed(5),
+    search_by_map: 'true'
+  });
+  const booking = 'https://www.booking.com/searchresults.fr.html?' + new URLSearchParams({
+    latitude: lat.toFixed(5), longitude: lon.toFixed(5),
+    radius: String(LODGING_RADIUS_KM), order: 'distance_from_search'
+  });
+  const row = document.createElement('div');
+  row.className = 'place-row place-lodging';
+  row.append(`Dormir (${LODGING_RADIUS_KM} km) :`);
+  for (const [label, href] of [['Airbnb', airbnb], ['Booking', booking]]) {
+    const a = document.createElement('a');
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = label;
+    row.append(' ', a);
+  }
+  return row;
+}
+
 function placeRow(label, detail, text) {
   const row = document.createElement('div');
   row.className = 'place-row';
@@ -1460,6 +1489,7 @@ async function showPlaceNames(lngLat) {
   }
   const coords = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
   box.appendChild(placeRow(coords, null, coords));
+  box.appendChild(lodgingLinks(lat, lng));
 }
 
 function setupPlaceNames() {
