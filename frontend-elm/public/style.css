@@ -3179,3 +3179,31 @@ body:has(.app-container.is-collapsed) .reference-badges {
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
 }
+
+/* Noms de lieux (clic droit sur la carte) */
+.place-popup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: #1b2439;
+}
+.place-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.place-name small {
+  color: #5c6475;
+}
+.place-copy {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 0.95rem;
+}
+.place-copy:hover {
+  transform: scale(1.15);
+}

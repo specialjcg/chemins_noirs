@@ -1321,6 +1321,163 @@ function createFullscreenControl() {
 }
 
 
+// --- Noms de lieux (clic droit) -------------------------------------------
+// Les noms affichés par les fonds IGN sont dans l'image des tuiles et ne se
+// sélectionnent pas. Le géocodage inverse IGN ne renvoie que des communes ;
+// les lieux-dits, hameaux, crêtes et cols viennent de la BD TOPO en WFS.
+const IGN_WFS_URL = 'https://data.geopf.fr/wfs/ows';
+const TOPONYM_LAYERS = [
+  'BDTOPO_V3:lieu_dit_non_habite',
+  'BDTOPO_V3:zone_d_habitation',
+  'BDTOPO_V3:detail_orographique'
+];
+const TOPONYM_RADIUS_M = 1500;
+const TOPONYM_MAX = 4;
+const RIGHT_DRAG_TOLERANCE_PX = 4;
+
+function distanceM(lat1, lon1, lat2, lon2) {
+  const rad = Math.PI / 180;
+  const x = (lon2 - lon1) * rad * Math.cos(((lat1 + lat2) / 2) * rad);
+  const y = (lat2 - lat1) * rad;
+  return Math.sqrt(x * x + y * y) * 6371000;
+}
+
+// Premier sommet suffit : les zones d'habitation sont petites devant le rayon.
+function firstCoord(geometry) {
+  let c = geometry?.coordinates;
+  while (Array.isArray(c) && Array.isArray(c[0])) c = c[0];
+  return Array.isArray(c) ? c : null;
+}
+
+async function fetchToponyms(lat, lon) {
+  const dLat = TOPONYM_RADIUS_M / 111320;
+  const dLon = dLat / Math.cos((lat * Math.PI) / 180);
+  const bbox = [lat - dLat, lon - dLon, lat + dLat, lon + dLon].join(',');
+  const requests = TOPONYM_LAYERS.map(async (layer) => {
+    const params = new URLSearchParams({
+      service: 'WFS',
+      version: '2.0.0',
+      request: 'GetFeature',
+      typeNames: layer,
+      outputFormat: 'application/json',
+      srsName: 'EPSG:4326',
+      count: '50',
+      bbox: bbox + ',urn:ogc:def:crs:EPSG::4326'
+    });
+    const res = await fetch(IGN_WFS_URL + '?' + params);
+    if (!res.ok) throw new Error('WFS ' + res.status);
+    return (await res.json()).features || [];
+  });
+  const byName = new Map();
+  for (const result of await Promise.allSettled(requests)) {
+    if (result.status !== 'fulfilled') continue;
+    for (const f of result.value) {
+      const name = f.properties?.toponyme;
+      const c = firstCoord(f.geometry);
+      if (!name || !c) continue;
+      const d = distanceM(lat, lon, c[1], c[0]);
+      const prev = byName.get(name);
+      if (!prev || d < prev.d) byName.set(name, { name, nature: f.properties.nature, d });
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.d - b.d).slice(0, TOPONYM_MAX);
+}
+
+async function fetchCommune(lat, lon) {
+  const url = `https://data.geopf.fr/geocodage/reverse?lat=${lat}&lon=${lon}&index=poi&limit=1`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const f = (await res.json()).features?.[0];
+  return f?.properties?.toponym || null;
+}
+
+function copyButton(text) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'place-copy';
+  btn.textContent = '📋';
+  btn.title = 'Copier « ' + text + ' »';
+  btn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = '✓';
+    } catch (err) {
+      console.warn('[maplibre] copie impossible', err);
+      btn.textContent = '✗';
+    }
+    setTimeout(() => { btn.textContent = '📋'; }, 1200);
+  });
+  return btn;
+}
+
+function placeRow(label, detail, text) {
+  const row = document.createElement('div');
+  row.className = 'place-row';
+  const span = document.createElement('span');
+  span.className = 'place-name';
+  span.textContent = label;
+  if (detail) {
+    const small = document.createElement('small');
+    small.textContent = ' ' + detail;
+    span.appendChild(small);
+  }
+  row.append(span, copyButton(text));
+  return row;
+}
+
+let placePopup = null;
+
+async function showPlaceNames(lngLat) {
+  const { lat, lng } = lngLat;
+  const box = document.createElement('div');
+  box.className = 'place-popup';
+  box.textContent = 'Recherche des noms…';
+  placePopup?.remove();
+  const popup = new maplibregl.Popup({ offset: 8, maxWidth: '280px' })
+    .setLngLat(lngLat)
+    .setDOMContent(box)
+    .addTo(mapInstance);
+  placePopup = popup;
+
+  const [toponyms, commune] = await Promise.all([
+    fetchToponyms(lat, lng).catch(() => []),
+    fetchCommune(lat, lng).catch(() => null)
+  ]);
+  if (placePopup !== popup) return;
+
+  box.textContent = '';
+  for (const t of toponyms) {
+    box.appendChild(placeRow(t.name, `${t.nature} · ${Math.round(t.d)} m`, t.name));
+  }
+  if (commune) box.appendChild(placeRow(commune, 'commune', commune));
+  if (toponyms.length === 0 && !commune) {
+    const empty = document.createElement('div');
+    empty.textContent = 'Aucun nom trouvé à proximité.';
+    box.appendChild(empty);
+  }
+  const coords = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  box.appendChild(placeRow(coords, null, coords));
+}
+
+function setupPlaceNames() {
+  // Clic droit glissé = rotation de la carte : on n'ouvre la bulle que si la
+  // souris n'a pas bougé entre l'appui et le relâchement.
+  let downAt = null;
+  mapInstance.getCanvas().addEventListener('mousedown', (e) => {
+    if (e.button === 2) downAt = { x: e.clientX, y: e.clientY };
+  });
+  mapInstance.on('contextmenu', (event) => {
+    const e = event.originalEvent;
+    if (downAt && e &&
+        Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > RIGHT_DRAG_TOLERANCE_PX) {
+      return;
+    }
+    e?.preventDefault();
+    showPlaceNames(event.lngLat);
+  });
+}
+
+
 export function initMap() {
   ensureMap();
   if (!clickHandlerSet) {
@@ -1353,6 +1510,7 @@ export function initMap() {
       console.debug('[maplibre] ' + nom, { lat, lon: lng });
       window.dispatchEvent(new CustomEvent(nom, { detail: { lat, lon: lng } }));
     });
+    setupPlaceNames();
     clickHandlerSet = true;
   }
 }
