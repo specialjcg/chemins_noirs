@@ -65,6 +65,9 @@ let currentRouteCoords = null; // Kept so toggling on can fetch without a new ro
 const TERRAIN_EXAGGERATION = 2.5; // Amplify terrain for better visibility
 const EARTH_RADIUS_M = 6371000;
 const DRONE_PITCH = 60; // Default pitch for 3D drone view
+const CAMERA_MIN_CLEARANCE = 30; // m au-dessus du sol avant de reculer la caméra
+const STOP_VIEW_PITCH = 45; // vue 3D à l'arrêt du survol
+const STOP_VIEW_ZOOM = 15;
 
 // Camera mode presets - SIGNIFICANTLY DIFFERENT for visibility
 const CAMERA_MODES = {
@@ -2749,6 +2752,8 @@ export function stopAnimation() {
     cancelAnimationFrame(animationFrameId);
     animationFrameId = null;
     console.debug('[maplibre] Animation stopped');
+    // Retour à la vue 3D posée, centrée là où le survol s'est arrêté.
+    mapInstance?.easeTo({ pitch: STOP_VIEW_PITCH, roll: 0, zoom: STOP_VIEW_ZOOM, duration: 1200 });
   }
   animationStartTimestamp = null;
   animationClockMs = 0;
@@ -2976,16 +2981,17 @@ function animateCamera(timestamp) {
     lastAnimationMode = 'jumpTo';
   }
 
-  // Adjust zoom when terrain is enabled to prevent camera going underground.
-  // Higher terrain → lower zoom (camera further away) to stay above surface.
+  // MapLibre pose déjà le centre sur le relief : dézoomer selon l'altitude du
+  // sol envoyait la caméra à 180× sa distance au-dessus du Haut-Verdon. On ne
+  // recule que si la caméra frôle le sol (crête entre elle et le centre), et
+  // on revient doucement à la hauteur du mode une fois l'obstacle passé.
   let adjustedZoom = mode.zoom;
   if (terrainEnabled) {
-    const groundElevation = queryElevation(actualCameraPoint);
-    // Compute needed zoom reduction: each meter of exaggerated elevation
-    // needs proportional zoom-out. Factor tuned for pitch 55-75° views.
-    const targetAdjust = Math.max(0, groundElevation * TERRAIN_EXAGGERATION * 0.002);
-    // Smooth the adjustment to avoid jerky zoom on terrain transitions
-    lastTerrainZoomAdjust = lastTerrainZoomAdjust * 0.92 + targetAdjust * 0.08;
+    const clearance = cameraGroundClearance();
+    lastTerrainZoomAdjust =
+      clearance !== null && clearance < CAMERA_MIN_CLEARANCE
+        ? Math.min(lastTerrainZoomAdjust + 0.1, 4)
+        : lastTerrainZoomAdjust * 0.97;
     adjustedZoom -= lastTerrainZoomAdjust;
   }
 
@@ -3222,18 +3228,11 @@ function ensureRouteLayers() {
   }
 }
 
-function queryElevation(point) {
-  if (
-    !point ||
-    typeof mapInstance?.queryTerrainElevation !== 'function'
-  ) {
-    return 0;
-  }
-  const elevation = mapInstance.queryTerrainElevation(
-    [point.lon, point.lat],
-    { exaggerated: false }
-  );
-  return Number.isFinite(elevation) ? elevation : 0;
+/** Hauteur de la caméra au-dessus du sol sous elle (relief exagéré des deux côtés), ou null. */
+function cameraGroundClearance() {
+  const pos = mapInstance.getFreeCameraOptions().position;
+  const ground = pos && mapInstance.queryTerrainElevation(pos.toLngLat());
+  return Number.isFinite(ground) ? pos.toAltitude() - ground : null;
 }
 
 // Force MapLibre to recompute its viewport — used after a CSS-driven size change
