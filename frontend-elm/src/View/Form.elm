@@ -4,13 +4,13 @@ module View.Form exposing (view, viewSavedRoutesSection)
 Approche fonctionnelle pure : génération déclarative du HTML.
 -}
 
+import Dict
+import DirectLegs
 import Format
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (on, onCheck, onClick, onInput, onMouseDown, preventDefaultOn)
 import Json.Decode as Decode
-import Dict
-import DirectLegs
 import Set
 import Types exposing (..)
 
@@ -21,6 +21,7 @@ Un graphe déjà en cache répond en une poignée de secondes ; s'il faut le
 construire depuis le PBF, il faut compter deux à quatre minutes. Le message
 annonçait 15 s dans tous les cas, et l'attente paraissait donc bloquée passé
 ce délai — au point qu'on recharge la page avant la réponse.
+
 -}
 waitMessage : Int -> String
 waitMessage seconds =
@@ -189,7 +190,6 @@ view model =
 
           else
             text ""
-
         , viewDirectLegs model
         , div [ class "action-buttons" ]
             [ button
@@ -360,6 +360,7 @@ inputField label value msg isDisabled =
 
 Le poids forêt garde ensuite le tracé sous les arbres ; ce champ ne fait que
 l'y amener.
+
 -}
 viewViaForest : Model -> Html Msg
 viewViaForest model =
@@ -442,6 +443,7 @@ de cette condition, pas la liste.
 Il portait aussi son propre bouton « Mes tracés sauvegardés » et n'affichait
 la liste que replié. Devenu un onglet, il n'a plus à s'ouvrir : l'onglet est
 déjà la commande, et un second niveau de repli laisserait un panneau vide.
+
 -}
 viewSavedRoutesSection : Model -> Html Msg
 viewSavedRoutesSection model =
@@ -511,6 +513,7 @@ folderGroups routes =
 
 L'en-tête porte le nombre d'itinéraires et leur longueur cumulée : pour un tour
 découpé en tronçons, c'est la longueur du tour.
+
 -}
 viewFolder : Model -> String -> List SavedRoute -> (SavedRoute -> Html Msg) -> Html Msg
 viewFolder model key routes viewRoute =
@@ -529,31 +532,49 @@ viewFolder model key routes viewRoute =
             String.fromInt (List.length routes)
                 ++ " · "
                 ++ Format.km (List.sum (List.map .distanceKm routes))
+
+        allLayered =
+            List.all (\route -> Dict.member route.id model.referenceRoutes) routes
     in
     div [ classList [ ( "route-folder", True ), ( "is-open", open ) ] ]
-        [ button
-            [ type_ "button"
-            , class "route-folder-header"
-            , onClick (ToggleFolder key)
-            , attribute "aria-expanded"
-                (if open then
-                    "true"
-
-                 else
-                    "false"
-                )
-            ]
-            [ span [ class "route-folder-caret", attribute "aria-hidden" "true" ]
-                [ text
+        [ div [ class "route-folder-bar" ]
+            [ button
+                [ type_ "button"
+                , class "route-folder-header"
+                , onClick (ToggleFolder key)
+                , attribute "aria-expanded"
                     (if open then
-                        "\u{25BE}"
+                        "true"
 
                      else
-                        "\u{25B8}"
+                        "false"
                     )
                 ]
-            , span [ class "route-folder-name" ] [ text label ]
-            , span [ class "route-folder-count t-metric" ] [ text resume ]
+                [ span [ class "route-folder-caret", attribute "aria-hidden" "true" ]
+                    [ text
+                        (if open then
+                            "▾"
+
+                         else
+                            "▸"
+                        )
+                    ]
+                , span [ class "route-folder-name" ] [ text label ]
+                , span [ class "route-folder-count t-metric" ] [ text resume ]
+                ]
+            , button
+                [ type_ "button"
+                , classList [ ( "action-layer", True ), ( "active", allLayered ) ]
+                , onClick (ToggleFolderReferences key)
+                , title
+                    (if allLayered then
+                        "Retirer les calques du dossier"
+
+                     else
+                        "Afficher tout le dossier en calque, d'une seule couleur"
+                    )
+                ]
+                [ text "⧉" ]
             ]
         , if open then
             div [ attribute "role" "list", attribute "aria-label" label ]
@@ -575,6 +596,7 @@ viewFolder model key routes viewRoute =
 
 Hors de la ligne : celle-ci capte Début, Fin et les flèches pour la navigation
 et les rendrait inutilisables dans le champ.
+
 -}
 viewMoveEditor : Model -> SavedRoute -> Html Msg
 viewMoveEditor model route =
@@ -615,7 +637,7 @@ viewMoveEditor model route =
                         , onClick CancelMoveRoute
                         , title "Annuler"
                         ]
-                        [ text "\u{2715}" ]
+                        [ text "✕" ]
                     ]
 
             else
@@ -639,6 +661,7 @@ Chaque entrée occupait ~170 px : titre, description sur trois lignes, ligne de
 chiffres et quatre boutons toujours visibles. Quinze itinéraires faisaient donc
 2 550 px dans un panneau haut de 950, soit cinq visibles à la fois. La
 description part dans l'infobulle et les actions n'apparaissent qu'au survol.
+
 -}
 viewSavedRoute : Dict.Dict Int ReferenceLayer -> List Int -> Int -> SavedRoute -> Html Msg
 viewSavedRoute referenceRoutes ids index route =
@@ -694,7 +717,7 @@ viewSavedRoute referenceRoutes ids index route =
             [ span [ class "route-row-name" ]
                 [ text route.name
                 , if route.isFavorite then
-                    span [ class "favorite-star" ] [ text "\u{2B50}" ]
+                    span [ class "favorite-star" ] [ text "⭐" ]
 
                   else
                     text ""
@@ -718,7 +741,7 @@ viewSavedRoute referenceRoutes ids index route =
                 , onClick (ToggleReferenceRoute route.id)
                 , title "Afficher en calque sur la carte, sans remplacer le tracé courant"
                 ]
-                [ text "\u{29C9}" ]
+                [ text "⧉" ]
             , button
                 [ type_ "button"
                 , classList [ ( "action-fav", True ), ( "active", route.isFavorite ) ]
@@ -730,21 +753,21 @@ viewSavedRoute referenceRoutes ids index route =
                     else
                         "Ajouter aux favoris"
                 ]
-                [ text "\u{2B50}" ]
+                [ text "⭐" ]
             , button
                 [ type_ "button"
                 , class "action-move"
                 , onClick (StartMoveRoute route.id)
                 , title "Ranger dans un dossier"
                 ]
-                [ text "\u{1F4C1}" ]
+                [ text "📁" ]
             , button
                 [ type_ "button"
                 , class "action-delete"
                 , onClick (DeleteSavedRoute route.id)
                 , title "Supprimer"
                 ]
-                [ text "\u{2715}" ]
+                [ text "✕" ]
             ]
         ]
 
@@ -755,6 +778,7 @@ Les flèches doivent déplacer le focus de ligne en ligne, mais une ligne est un
 `div` : la focaliser demanderait un `tabindex` et la ferait entrer dans la
 tabulation en plus de ses quatre boutons. Le premier bouton de la ligne fait
 donc office de position courante, et c'est lui que les flèches visent.
+
 -}
 loadButtonDomId : Int -> String
 loadButtonDomId routeId =
@@ -764,8 +788,9 @@ loadButtonDomId routeId =
 {-| Touches de déplacement dans la liste.
 
 `preventDefault` est indispensable : une liste de quinze entrées dépasse la
-hauteur du panneau, et sans lui chaque flèche déplacerait le focus *et* ferait
+hauteur du panneau, et sans lui chaque flèche déplacerait le focus _et_ ferait
 défiler le panneau, qui finirait par ne plus montrer la ligne focalisée.
+
 -}
 onListKey : (String -> Maybe Msg) -> Attribute Msg
 onListKey versMsg =
@@ -787,6 +812,7 @@ onListKey versMsg =
 
 Les valeurs étaient affichées brutes : « 26.424826 km », « D+ 263.85m ». Un
 relevé se lit au dixième de kilomètre et au mètre près, pas au micron.
+
 -}
 routeMetrics : SavedRoute -> String
 routeMetrics route =
@@ -815,6 +841,7 @@ routeMetrics route =
 Les noms viennent de l'API en anglais ; la correspondance est écrite ici une
 fois pour la couleur et une fois pour le libellé plutôt que de laisser une
 chaîne anglaise atterrir dans une classe CSS française.
+
 -}
 difficultyClass : String -> String
 difficultyClass niveau =
@@ -832,7 +859,8 @@ difficultyClass niveau =
             "d-expert"
 
 
-{-| Le moteur classe en anglais, l'interface parle français. -}
+{-| Le moteur classe en anglais, l'interface parle français.
+-}
 difficultyLabel : String -> String
 difficultyLabel niveau =
     case niveau of
@@ -857,6 +885,7 @@ difficultyLabel niveau =
 Le backend savait déjà boucler (`close_loop`), mais rien dans l'interface ne
 l'activait. Hors multi-points le réglage n'a pas de sens : l'aller simple a
 deux points fixes, et l'onglet Boucle génère ses propres boucles.
+
 -}
 viewCloseLoopToggle : Model -> Html Msg
 viewCloseLoopToggle model =
@@ -954,7 +983,7 @@ viewFreehandPanel model =
                                                 , onClick (ClearFreehandSegment idx)
                                                 , title "Supprimer ce segment libre"
                                                 ]
-                                                [ text "\u{2715}" ]
+                                                [ text "✕" ]
                                             ]
                                     )
                             )
@@ -988,8 +1017,6 @@ freehandStatusText model =
                     ++ " ("
                     ++ String.fromInt (List.length state.points)
                     ++ " pts) — cliquez près du waypoint suivant"
-
-
 
 
 {-| Un interrupteur par tronçon : suivre les chemins, ou tirer tout droit.

@@ -1093,7 +1093,24 @@ button[disabled] {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* En-tête + bouton calque du dossier : un bouton ne peut en contenir un autre. */
+.route-folder-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-right: var(--space-2);
+}
+
+.route-folder-bar > .action-layer {
+  flex: none;
+  padding: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
 .route-folder-header {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
@@ -1113,7 +1130,7 @@ button[disabled] {
   background: var(--bg-card-hover);
 }
 
-.route-folder.is-open > .route-folder-header {
+.route-folder.is-open > .route-folder-bar > .route-folder-header {
   color: var(--text-brass);
 }
 

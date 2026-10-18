@@ -9,8 +9,9 @@ import Array
 import Browser
 import Browser.Dom
 import Browser.Events
-import Time
 import Decoders
+import Dict exposing (Dict)
+import DirectLegs
 import Encoders
 import Html exposing (..)
 import Html.Attributes exposing (class, style)
@@ -19,13 +20,12 @@ import Http
 import Json.Decode
 import Json.Encode
 import Ports
-import Dict exposing (Dict)
-import DirectLegs
 import Set
 import Task
+import Time
 import Types exposing (..)
-import View.Form as Form
 import View.ElevationBand as ElevationBand
+import View.Form as Form
 import View.Preview as Preview
 
 
@@ -107,6 +107,46 @@ update msg model =
                   }
                 , Api.getSavedRoute id (ReferenceRouteLoaded id)
                 )
+
+        ToggleFolderReferences key ->
+            -- Tout le dossier d'une seule couleur : en 53 tronçons, une
+            -- couleur par ligne ferait un patchwork illisible.
+            let
+                ids =
+                    model.savedRoutes
+                        |> List.filter (\route -> folderKey route == key)
+                        |> List.map .id
+
+                missing =
+                    List.filter (\id -> not (Dict.member id model.referenceRoutes)) ids
+
+                color =
+                    ids
+                        |> List.filterMap (\id -> Dict.get id model.referenceRoutes)
+                        |> List.head
+                        |> Maybe.map .color
+                        |> Maybe.withDefault (nextReferenceColor model.referenceRoutes)
+            in
+            if List.isEmpty missing then
+                update (RemoveReferenceRoutes ids) model
+
+            else
+                ( { model
+                    | referenceRoutes =
+                        List.foldl
+                            (\id -> Dict.insert id { color = color, path = Nothing })
+                            model.referenceRoutes
+                            missing
+                  }
+                , Cmd.batch (List.map (\id -> Api.getSavedRoute id (ReferenceRouteLoaded id)) missing)
+                )
+
+        RemoveReferenceRoutes ids ->
+            let
+                next =
+                    { model | referenceRoutes = List.foldl Dict.remove model.referenceRoutes ids }
+            in
+            ( next, referenceRoutesCmd next )
 
         ReferenceRouteLoaded id result ->
             -- Une réponse qui arrive après qu'on a décoché le calque ne doit
@@ -261,7 +301,8 @@ update msg model =
                             case loopFormToRequest model.cheminNoir model.form model.loopForm model.waypoints of
                                 Ok request ->
                                     ( { model
-                                        | pending = True, pendingSeconds = 0
+                                        | pending = True
+                                        , pendingSeconds = 0
                                         , error = Nothing
                                         , loopCandidates = []
                                         , loopMeta = Nothing
@@ -473,6 +514,7 @@ update msg model =
                 newModel =
                     { modelWithHistory
                         | waypoints = newWaypoints
+
                         -- En boucle, le retour au départ passe derrière le
                         -- nouveau point et garde son mode.
                         , directLegs = DirectLegs.afterInsert (List.length model.waypoints) model.directLegs
@@ -1069,7 +1111,8 @@ update msg model =
             case result of
                 Ok savedRoute ->
                     let
-                        route = savedRoute.routeData
+                        route =
+                            savedRoute.routeData
 
                         -- Imported routes carry no waypoints: sample the path instead of using every point
                         waypoints =
@@ -1441,6 +1484,7 @@ elevationMarkerCmd model maybeIdx =
 Le formulaire et la liste partageaient un seul rouleau : titre, type de tracé,
 mode, recherche, import, statistiques, vue de la carte, puis quinze
 itinéraires. Séparés, chacun reçoit toute la hauteur du panneau.
+
 -}
 viewPanelTabs : Model -> Html Msg
 viewPanelTabs model =
@@ -1503,6 +1547,7 @@ bouton d'onglet que `SwitchPanelTab` va focaliser, l'`aria-controls` qui le
 relie au corps du panneau, et le `aria-labelledby` qui fait le lien inverse.
 Une faute de frappe dans l'un des trois ne casse rien de visible — elle rend
 seulement l'annonce muette.
+
 -}
 tabDomId : PanelTab -> String
 tabDomId onglet =
@@ -1521,6 +1566,7 @@ transition de vue entre les deux : `PanelTab` ne survit pas au voyage. Les deux
 fonctions sont volontairement l'une sous l'autre, et `tabFromKey` retombe sur
 `TabPlan` plutôt que de faillir — un nom inconnu ne peut venir que d'une faute
 de frappe de notre côté, et l'onglet de planification est l'état de départ.
+
 -}
 tabKey : PanelTab -> String
 tabKey onglet =
@@ -1566,6 +1612,7 @@ boolAttr valeur =
 normal ici : la commande part dans le même tour que le changement de modèle,
 donc avant que le nouveau HTML ne soit posé pour certains éléments. Rien à
 signaler à l'utilisateur dans ce cas, le focus reste simplement sur place.
+
 -}
 focusOn : String -> Cmd Msg
 focusOn domId =
@@ -1576,6 +1623,7 @@ focusOn domId =
 
 `preventDefault` est nécessaire : sans lui, la flèche fait aussi défiler le
 panneau pendant que l'onglet change.
+
 -}
 onArrowSwitch : Msg -> Html.Attribute Msg
 onArrowSwitch msg =
@@ -1592,7 +1640,6 @@ onArrowSwitch msg =
         )
 
 
-
 {-| Rappel de l'itinéraire affiché en calque.
 
 Le seul indice était un bouton doré dans le panneau des itinéraires, invisible
@@ -1607,38 +1654,79 @@ viewReferenceBadges model =
 
     else
         div [ class "reference-badges" ]
-            (Dict.toList model.referenceRoutes
+            (referenceBadgeGroups model
                 |> List.map (viewReferenceBadge model.savedRoutes)
             )
 
 
-viewReferenceBadge : List SavedRoute -> ( Int, ReferenceLayer ) -> Html Msg
-viewReferenceBadge savedRoutes ( id, layer ) =
+{-| Un dossier entier en calque ferait 53 badges : ceux d'un même dossier et
+d'une même couleur n'en font qu'un. Les itinéraires sans dossier restent seuls.
+-}
+referenceBadgeGroups : Model -> List ( String, List Int )
+referenceBadgeGroups model =
     let
-        name =
-            savedRoutes
+        folderOf id =
+            model.savedRoutes
                 |> List.filter (\route -> route.id == id)
                 |> List.head
-                |> Maybe.map .name
-                |> Maybe.withDefault "Itinéraire de référence"
+                |> Maybe.map folderKey
+                |> Maybe.withDefault ""
+
+        add ( id, layer ) groups =
+            let
+                folder =
+                    folderOf id
+
+                key =
+                    if folder == "" then
+                        ( "", layer.color, id )
+
+                    else
+                        ( folder, layer.color, 0 )
+            in
+            Dict.update key (\ids -> Just (id :: Maybe.withDefault [] ids)) groups
+    in
+    Dict.toList model.referenceRoutes
+        |> List.foldl add Dict.empty
+        |> Dict.toList
+        |> List.map (\( ( _, color, _ ), ids ) -> ( color, List.reverse ids ))
+
+
+viewReferenceBadge : List SavedRoute -> ( String, List Int ) -> Html Msg
+viewReferenceBadge savedRoutes ( color, ids ) =
+    let
+        routes =
+            List.filter (\route -> List.member route.id ids) savedRoutes
+
+        name =
+            case routes of
+                [ route ] ->
+                    route.name
+
+                first :: _ :: _ ->
+                    folderKey first ++ " · " ++ String.fromInt (List.length ids) ++ " itinéraires"
+
+                [] ->
+                    "Itinéraire de référence"
     in
     div [ class "reference-badge" ]
         [ span
             [ class "reference-badge-swatch"
-            , style "border-top-color" layer.color
+            , style "border-top-color" color
             ]
             []
         , span [ class "reference-badge-name" ] [ text name ]
         , button
             [ class "reference-badge-close"
-            , Html.Events.onClick (ToggleReferenceRoute id)
+            , Html.Events.onClick (RemoveReferenceRoutes ids)
             , Html.Attributes.title "Retirer le calque"
             ]
-            [ text "\u{2715}" ]
+            [ text "✕" ]
         ]
 
 
-{-| Les calques dont le tracé est arrivé, à redessiner d'un bloc. -}
+{-| Les calques dont le tracé est arrivé, à redessiner d'un bloc.
+-}
 referenceRoutesCmd : Model -> Cmd Msg
 referenceRoutesCmd model =
     model.referenceRoutes
@@ -2109,6 +2197,7 @@ Le point intérieur de la forêt devient une étape, insérée sur le segment le
 plus proche : entre départ et arrivée pour un aller simple, qui passe alors en
 multi-points puisqu'il en a trois. Sans départ ni arrivée, il n'y a rien à
 détourner : on centre la carte sur la forêt et on garde la liste pour après.
+
 -}
 viaForest : Forest -> Model -> ( Model, Cmd Msg )
 viaForest forest model =
@@ -2152,6 +2241,7 @@ pushWaypointHistory model =
 Chaque mode a son plafond — deux points en aller simple, un seul en boucle —
 et le message nomme la sortie plutôt que la règle : ce que l'utilisateur veut
 savoir, c'est quoi faire ensuite.
+
 -}
 clicIgnoreMessage : RouteMode -> String
 clicIgnoreMessage mode =
@@ -2170,7 +2260,7 @@ clicIgnoreMessage mode =
 
 {-| Insère un point sur le tracé, au bon rang.
 
-Le clic sur la ligne vise un endroit *entre* deux points existants, et c'est
+Le clic sur la ligne vise un endroit _entre_ deux points existants, et c'est
 tout l'intérêt : jusqu'ici on ne pouvait qu'ajouter un point à la fin ou
 déplacer un marqueur, donc détourner un tracé chargé demandait de défaire
 l'ordre des étapes. `findInsertionIndex` cherche le segment le plus proche du
@@ -2179,6 +2269,7 @@ clic et rend le rang de son départ.
 Hors multi-points le tracé n'a pas de segment intérieur où insérer quoi que ce
 soit, et `InsertWaypoint` recalcule de toute façon en multi-points : on renvoie
 donc vers le mode plutôt que de basculer dans le dos de l'utilisateur.
+
 -}
 surfaceLayers : RouteResponse -> { surfaces : Maybe (List Bool), ign : Maybe (List Bool) }
 surfaceLayers route =
@@ -2378,6 +2469,7 @@ applyRoute model route =
         , elevationCursorIndex = Nothing
         , error = Nothing
         , form = newForm
+
         -- Keep original waypoints unchanged - don't extract from calculated path
     }
 
@@ -2387,6 +2479,7 @@ applyRoute model route =
 Partagé par la création et la mise à jour : les deux écrivent le même corps,
 seule l'URL change. Les waypoints ne sont joints que s'il y en a, sinon le
 chargement suivant les réinventerait tous les 2 km.
+
 -}
 saveRequestFrom : Model -> SaveRouteRequest
 saveRequestFrom model =
@@ -2419,6 +2512,7 @@ applySavedRoute model route originalWaypoints =
                 ( List.head originalWaypoints
                 , List.head (List.reverse originalWaypoints)
                 )
+
             else
                 ( List.head route.path
                 , List.head (List.reverse route.path)
@@ -2444,6 +2538,7 @@ applySavedRoute model route originalWaypoints =
         routeMode =
             if List.isEmpty originalWaypoints then
                 PointToPoint
+
             else
                 MultiPoint
     in
@@ -2453,7 +2548,8 @@ applySavedRoute model route originalWaypoints =
         , elevationCursorIndex = Nothing
         , error = Nothing
         , form = newForm
-        , waypoints = originalWaypoints  -- Restore original waypoints
+        , waypoints = originalWaypoints -- Restore original waypoints
+
         -- Les itinéraires enregistrés ne gardent pas quels tronçons étaient
         -- directs : les points rechargés repartent tous sur les chemins.
         , directLegs = Set.empty
@@ -2567,6 +2663,7 @@ multiPointRequest model =
         , closeLoop = model.closeLoop
         , wPop = 5.0
         , wPaved = 8.0
+
         -- Le mode « chemin noir » cache les curseurs : il embarque son propre
         -- penchant pour la forêt, mesuré à +8 points de couvert sur le GR31.
         , wForest = 2.0

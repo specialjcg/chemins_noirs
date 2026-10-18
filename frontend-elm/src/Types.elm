@@ -282,6 +282,8 @@ type Msg
     | ToggleElevationBand
     | ForestWeightChanged String
     | ToggleReferenceRoute Int
+    | ToggleFolderReferences String
+    | RemoveReferenceRoutes (List Int)
     | ReferenceRouteLoaded Int (Result Http.Error SavedRoute)
     | UndoWaypoints
     | RedoWaypoints
