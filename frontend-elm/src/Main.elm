@@ -339,7 +339,7 @@ update msg model =
                                 model.lastResponse
                       }
                     , Cmd.batch
-                        [ Ports.setRouteSurfaces { surfaces = Just surfaces, ign = ign }
+                        [ Ports.setRouteSurfaces { surfaces = Just surfaces, ign = ign, elevations = Nothing }
                         , Api.sendLog
                             ("surfaces reçues : "
                                 ++ String.fromInt (List.length (List.filter not surfaces))
@@ -2271,9 +2271,14 @@ soit, et `InsertWaypoint` recalcule de toute façon en multi-points : on renvoie
 donc vers le mode plutôt que de basculer dans le dos de l'utilisateur.
 
 -}
-surfaceLayers : RouteResponse -> { surfaces : Maybe (List Bool), ign : Maybe (List Bool) }
+surfaceLayers :
+    RouteResponse
+    -> { surfaces : Maybe (List Bool), ign : Maybe (List Bool), elevations : Maybe (List (Maybe Float)) }
 surfaceLayers route =
-    { surfaces = route.pointSurfaces, ign = route.pointIgn }
+    { surfaces = route.pointSurfaces
+    , ign = route.pointIgn
+    , elevations = Maybe.map .elevations route.elevationProfile
+    }
 
 
 insertOnRouteLine : Coordinate -> Model -> Msg

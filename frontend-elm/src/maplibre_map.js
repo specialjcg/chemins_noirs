@@ -1,6 +1,10 @@
 import maplibregl from 'maplibre-gl';
 import mlcontour from 'maplibre-contour';
 
+import {
+  createFlyoverControl, initFlyover, setFlyoverElevations, setFlyoverRoute,
+  setFlyoverStages, setFlyoverWaypoints, startFlyover, stopFlyover
+} from './flyover.js';
 import { casteIgn, largeurMiseALEchelle, symboDuFiltre } from './chemin_noir.js';
 
 /**
@@ -38,19 +42,6 @@ let clickHandlerSet = false;
 let terrainEnabled = false;
 let bboxLayer;
 let currentRoute = null;
-let animationFrameId = null;
-let animationStartTimestamp = null;
-let animationClockMs = 0;      // Temps d'animation écoulé, hors attentes de tuiles
-let animationLastFrame = null; // Horodatage de l'image précédente
-let animationStalledMs = 0;    // Depuis combien de temps on attend les tuiles
-let routeLengthMeters = 0;
-let routeDistances = [];
-let animationDurationMs = 60000;
-let lastBearing = null;
-let lastAnimationMode = null;
-let terrainSampleWarned = false;
-let lastTurnAngle = 0; // Track turn angle for banking effect
-let lastTerrainZoomAdjust = 0; // Smoothed zoom offset for terrain avoidance
 let waypointMarkers = []; // Markers for multi-point route waypoints
 let currentMapStyle = 'topo'; // 'topo' | 'satellite' | 'hybrid'
 let kmMarkers = []; // Kilometer markers along route
@@ -65,171 +56,6 @@ let currentRouteCoords = null; // Kept so toggling on can fetch without a new ro
 const TERRAIN_EXAGGERATION = 2.5; // Amplify terrain for better visibility
 const EARTH_RADIUS_M = 6371000;
 const DRONE_PITCH = 60; // Default pitch for 3D drone view
-const CAMERA_MIN_CLEARANCE = 30; // m au-dessus du sol avant de reculer la caméra
-const STOP_VIEW_PITCH = 45; // vue 3D à l'arrêt du survol
-const STOP_VIEW_ZOOM = 15;
-
-// Camera mode presets - SIGNIFICANTLY DIFFERENT for visibility
-const CAMERA_MODES = {
-  CINEMA: {
-    name: 'Cinéma',
-    icon: '🎬',
-    pitch: 65,
-    altitude: 12,
-    zoom: 19.0,
-    lookahead: 100,
-    speed: 60, // m/s - fast
-    smoothing: 0.25,
-    banking: true,
-    bankingAmount: 8, // degrees
-    adaptiveSpeed: true,
-    minSpeed: 30, // m/s in sharp turns
-    turnThreshold: 40, // degrees
-    lateralOffset: 0, // No offset - follow path
-    bearingOffset: 0 // Look straight ahead
-  },
-  LATERAL: {
-    name: 'Cinéma Latéral',
-    icon: '🎥',
-    pitch: 55, // Gentler angle for side view
-    altitude: 25, // Higher up to see more
-    zoom: 18.5,
-    lookahead: 150, // Look further ahead for cinematic effect
-    speed: 50, // m/s - fast cinematic
-    smoothing: 0.35, // Smooth movements
-    banking: false, // No banking for stable shot
-    bankingAmount: 0,
-    adaptiveSpeed: true,
-    minSpeed: 24,
-    turnThreshold: 45,
-    lateralOffset: 40, // 40m to the side of the path
-    bearingOffset: -25 // Look towards the path (negative = look left towards path)
-  },
-  FPV: {
-    name: 'FPV Racing',
-    icon: '🏁',
-    pitch: 75, // Much steeper for racing feel
-    altitude: 5, // Very low
-    zoom: 19.8,
-    lookahead: 60, // Short lookahead for aggressive feel
-    speed: 70, // m/s - FAST!
-    smoothing: 0.15, // Quick reactions
-    banking: true,
-    bankingAmount: 18, // Aggressive banking
-    adaptiveSpeed: true,
-    minSpeed: 40, // Still fast in turns
-    turnThreshold: 30, // More aggressive
-    lateralOffset: 0,
-    bearingOffset: 0
-  },
-  DISCOVERY: {
-    name: 'Découverte',
-    icon: '🔭',
-    pitch: 50, // Much gentler angle
-    altitude: 20, // High up for overview
-    zoom: 18.3,
-    lookahead: 200, // Long lookahead
-    speed: 36, // m/s - fast discovery
-    smoothing: 0.45, // Very smooth
-    banking: false,
-    bankingAmount: 0,
-    adaptiveSpeed: false, // Constant speed
-    minSpeed: 8,
-    turnThreshold: 60,
-    lateralOffset: 0,
-    bearingOffset: 0
-  },
-  WALKING: {
-    name: 'Marche',
-    icon: '🥾',
-    pitch: 70,
-    altitude: 3,
-    zoom: 17,
-    lookahead: 30,
-    speed: 3, // m/s ~10 km/h (accelerated walking)
-    smoothing: 0.3,
-    banking: false,
-    bankingAmount: 0,
-    adaptiveSpeed: false,
-    minSpeed: 3,
-    turnThreshold: 60,
-    lateralOffset: 0,
-    bearingOffset: 0
-  }
-};
-
-// Current camera mode (default: CINEMA for nature trails)
-let currentCameraMode = CAMERA_MODES.CINEMA;
-
-const DRONE_MIN_DURATION = 5000;
-
-// La durée n'est plus bornée directement : la borner revenait à accélérer la
-// caméra sur les longs itinéraires, jusqu'à 23x la vitesse du mode sur 250 km,
-// et les tuiles n'avaient plus aucune chance de suivre. On borne la vitesse.
-const MAX_SPEED_FACTOR = 3;          // au plus 3x l'allure du mode
-const COMFORT_DURATION = 600000;     // en deçà de 10 min, on garde l'allure nominale
-
-// Au-delà, l'animation avance quand même : une source de tuiles muette ne doit
-// pas la figer pour de bon.
-const TILE_WAIT_BUDGET_MS = 2000;
-// Un onglet remis au premier plan rend un delta énorme ; sans plafond la
-// caméra ferait un bond.
-const MAX_FRAME_DELTA_MS = 100;
-
-/**
- * Set 3D camera position with advanced control
- * Alternative to Free Camera API using easeTo/jumpTo
- * @param {Object} options - Camera options
- * @param {Array<number>} options.center - [lng, lat]
- * @param {number} options.zoom - Zoom level
- * @param {number} options.pitch - Camera pitch (0-85 degrees)
- * @param {number} options.bearing - Camera bearing (0-360 degrees)
- * @param {boolean} options.animate - Use animation (default: true)
- * @param {number} options.duration - Animation duration in ms (default: 1000)
- */
-function setCamera3DPosition(options) {
-  const {
-    center,
-    zoom,
-    pitch = DRONE_PITCH,
-    bearing = 0,
-    animate = true,
-    duration = 1000
-  } = options;
-
-  const cameraOptions = {
-    center,
-    zoom,
-    pitch,
-    bearing
-  };
-
-  if (animate) {
-    mapInstance.easeTo({
-      ...cameraOptions,
-      duration,
-      easing: (t) => t * (2 - t) // easeOutQuad
-    });
-  } else {
-    mapInstance.jumpTo(cameraOptions);
-  }
-}
-
-/**
- * Fly to a location with a cinematic animation
- * @param {Object} options - Flight options
- * @param {Array<number>} options.center - [lng, lat]
- * @param {number} options.zoom - Target zoom level
- * @param {number} options.pitch - Target pitch
- * @param {number} options.bearing - Target bearing
- * @param {number} options.duration - Animation duration in ms
- */
-function flyToLocation(options) {
-  mapInstance.flyTo({
-    ...options,
-    essential: true // Animation won't be interrupted by user interaction
-  });
-}
 
 // Calculate bearing between two coordinates (in degrees)
 function calculateBearing(start, end) {
@@ -621,13 +447,9 @@ function ensureMap() {
   const terrainControl = createTerrainControl();
   mapInstance.addControl(terrainControl, 'top-right');
 
-  // Add camera animation control
-  const animationControl = createAnimationControl();
-  mapInstance.addControl(animationControl, 'top-right');
-
-  // Add camera mode control
-  const cameraModeControl = createCameraModeControl();
-  mapInstance.addControl(cameraModeControl, 'top-right');
+  // Survol 3D : bouton ▶, le reste vit dans son panneau.
+  initFlyover(mapInstance, { enableTerrain: enableTerrainForFlyover, mapColor });
+  mapInstance.addControl(createFlyoverControl(), 'top-right');
 
   // Add pitch toggle control (for free tilt)
   const pitchControl = createPitchControl();
@@ -1109,6 +931,7 @@ let stageMarkers = [];
 let stagesPanel = null;
 
 function clearStages() {
+  setFlyoverStages(null);
   stageMarkers.forEach(m => m.remove());
   stageMarkers = [];
   stagesPanel?.remove();
@@ -1232,6 +1055,15 @@ function showStages(plan) {
       });
     }
   }
+  // Le survol marque une pause à chaque nuit.
+  setFlyoverStages(plan.stages.map(s => {
+    const lodging = s.lodging ?? plan.arrival?.lodging;
+    return {
+      endKm: s.end_km,
+      title: s.lodging ? `J${s.day} · nuit` : 'Arrivée',
+      detail: lodging?.name ? `hébergement : ${lodging.name}` : null
+    };
+  }));
 }
 
 async function planStages() {
@@ -1441,134 +1273,6 @@ function createTerrainControl() {
   }
 
   return new TerrainControl();
-}
-
-function createAnimationControl() {
-  class AnimationControl {
-    onAdd(map) {
-      this._map = map;
-      this._container = document.createElement('div');
-      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
-
-      this._button = document.createElement('button');
-      this._button.className = 'maplibregl-ctrl-animation';
-      this._button.innerHTML = '▶'; // Play icon
-      this._button.title = 'Start/Stop camera animation';
-      this._button.onclick = () => this.toggleAnimation();
-
-      this._container.appendChild(this._button);
-      return this._container;
-    }
-
-    toggleAnimation() {
-      if (animationFrameId !== null) {
-        // Stop animation
-        stopAnimation();
-        this._button.innerHTML = '▶';
-        this._button.classList.remove('active');
-        this._button.style.backgroundColor = '';
-        this._button.style.color = '';
-      } else {
-        // Start animation
-        startAnimation();
-        this._button.innerHTML = '⏸'; // Pause icon
-        this._button.classList.add('active');
-        this._button.style.backgroundColor = mapColor('--map-control-active');
-        this._button.style.color = mapColor('--map-marker-ink');
-      }
-
-      console.debug('[maplibre] Animation toggled:', animationFrameId !== null);
-    }
-
-    onRemove() {
-      this._container.parentNode.removeChild(this._container);
-      this._map = undefined;
-    }
-  }
-
-  return new AnimationControl();
-}
-
-function createCameraModeControl() {
-  class CameraModeControl {
-    onAdd(map) {
-      this._map = map;
-      this._container = document.createElement('div');
-      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
-
-      this._button = document.createElement('button');
-      this._button.className = 'maplibregl-ctrl-camera-mode';
-      this.updateButtonDisplay();
-      this._button.onclick = () => this.cycleMode();
-
-      this._container.appendChild(this._button);
-      return this._container;
-    }
-
-    updateButtonDisplay() {
-      this._button.textContent = currentCameraMode.icon;
-      const offsetInfo = currentCameraMode.lateralOffset !== 0 ?
-        `\nOffset latéral: ${currentCameraMode.lateralOffset}m` : '';
-      this._button.title = `Mode: ${currentCameraMode.name}\n` +
-        `Vitesse: ${currentCameraMode.speed}m/s | ` +
-        `Altitude: ${currentCameraMode.altitude}m | ` +
-        `Pitch: ${currentCameraMode.pitch}°${offsetInfo}`;
-
-      // Update visual indicator
-      const modeColors = {
-        'Cinéma': mapColor('--map-camera-cinema'),
-        'Cinéma Latéral': mapColor('--map-camera-lateral'),
-        'FPV Racing': mapColor('--map-camera-fpv'),
-        'Découverte': mapColor('--map-camera-discovery')
-      };
-      this._button.style.backgroundColor = modeColors[currentCameraMode.name];
-      this._button.style.color = mapColor('--map-marker-ink');
-    }
-
-    cycleMode() {
-      // Cycle through modes: CINEMA -> LATERAL -> FPV -> DISCOVERY -> CINEMA
-      const modes = [CAMERA_MODES.CINEMA, CAMERA_MODES.LATERAL, CAMERA_MODES.FPV, CAMERA_MODES.DISCOVERY];
-      const currentIndex = modes.indexOf(currentCameraMode);
-      const nextIndex = (currentIndex + 1) % modes.length;
-      const previousMode = currentCameraMode;
-      currentCameraMode = modes[nextIndex];
-
-      this.updateButtonDisplay();
-
-      // If animation is running, recalculate metrics with new mode
-      if (currentRoute && currentRoute.length > 0) {
-        updateRouteMetrics(currentRoute);
-        // Reset animation state for smooth transition
-        lastBearing = null;
-        lastTurnAngle = 0;
-        lastAnimationMode = null;
-
-        // If animation is playing, immediately apply new camera settings
-        if (animationFrameId !== null) {
-          const center = this._map.getCenter();
-          const bearing = this._map.getBearing();
-          this._map.easeTo({
-            pitch: currentCameraMode.pitch,
-            zoom: currentCameraMode.zoom,
-            duration: 800
-          });
-        }
-      }
-
-      console.log(`[maplibre] 🎥 Mode: ${previousMode.name} → ${currentCameraMode.name}`);
-      console.log(`  Speed: ${previousMode.speed}m/s → ${currentCameraMode.speed}m/s`);
-      console.log(`  Pitch: ${previousMode.pitch}° → ${currentCameraMode.pitch}°`);
-      console.log(`  Altitude: ${previousMode.altitude}m → ${currentCameraMode.altitude}m`);
-      console.log(`  Banking: ${previousMode.banking ? previousMode.bankingAmount + '°' : 'OFF'} → ${currentCameraMode.banking ? currentCameraMode.bankingAmount + '°' : 'OFF'}`);
-    }
-
-    onRemove() {
-      this._container.parentNode.removeChild(this._container);
-      this._map = undefined;
-    }
-  }
-
-  return new CameraModeControl();
 }
 
 function createPoiControl() {
@@ -2100,7 +1804,8 @@ function _applyDirectOverlay() {
   });
 }
 
-export function setRouteSurfaces({ surfaces, ign }) {
+export function setRouteSurfaces({ surfaces, ign, elevations }) {
+  setFlyoverElevations(elevations);
   currentRouteSurfaces = surfaces; // null or Array<bool>
   currentRouteIgn = ign;
   if (ign) {
@@ -2189,6 +1894,7 @@ export function updateRoute(coords) {
       routeSource.setData({ type: 'FeatureCollection', features: [] });
     }
     currentRoute = null;
+    setFlyoverRoute([]);
     currentRouteSurfaces = null;
     currentRouteIgn = null;
     _applyUnpavedOverlay();
@@ -2223,14 +1929,7 @@ export function updateRoute(coords) {
   _applyUnpavedOverlay();
   _applyIgnOverlay();
 
-  updateRouteMetrics(coords);
-  animationStartTimestamp = null;
-  animationClockMs = 0;
-  animationLastFrame = null;
-  animationStalledMs = 0;
-  lastBearing = null;
-  lastAnimationMode = null;
-  terrainSampleWarned = false;
+  setFlyoverRoute(coords);
 
   // Km markers désactivés sur demande utilisateur — encombraient le circuit.
   // Le code de updateKmMarkers reste disponible si on veut les réactiver via
@@ -2716,93 +2415,24 @@ export function toggleThree3DView(enabled) {
   }
 }
 
-// Animation functions for camera following the route
+/** Survol 3D, piloté aussi par Elm (ports startAnimation / stopAnimation). */
 export function startAnimation() {
   ensureMap();
-
-  if (!currentRoute || currentRoute.length < 2) {
-    console.warn('[maplibre] No route to animate');
-    return;
-  }
-
-  // Enable terrain if not already enabled
-  if (!terrainEnabled) {
-    mapInstance.setTerrain({ source: 'terrainSource', exaggeration: TERRAIN_EXAGGERATION });
-    terrainEnabled = true;
-  }
-
-  if (!routeDistances.length) {
-    updateRouteMetrics(currentRoute);
-  }
-
-  console.debug('[maplibre] Starting camera animation');
-  animationStartTimestamp = null;
-  animationClockMs = 0;
-  animationLastFrame = null;
-  animationStalledMs = 0;
-  lastTerrainZoomAdjust = 0;
-  if (animationFrameId !== null) {
-    cancelAnimationFrame(animationFrameId);
-  }
-  animationFrameId = requestAnimationFrame(animateCamera);
+  startFlyover();
 }
 
 export function stopAnimation() {
-  if (animationFrameId !== null) {
-    cancelAnimationFrame(animationFrameId);
-    animationFrameId = null;
-    console.debug('[maplibre] Animation stopped');
-    // Retour à la vue 3D posée, centrée là où le survol s'est arrêté.
-    mapInstance?.easeTo({ pitch: STOP_VIEW_PITCH, roll: 0, zoom: STOP_VIEW_ZOOM, duration: 1200 });
-  }
-  animationStartTimestamp = null;
-  animationClockMs = 0;
-  animationLastFrame = null;
-  animationStalledMs = 0;
-  lastBearing = null;
-  lastAnimationMode = null;
-  terrainSampleWarned = false;
+  stopFlyover();
 }
 
-/**
- * Project a point onto the nearest position on a polyline.
- * Returns the projected {lat, lon} that lies exactly on the line.
- */
-function snapToPolyline(point, polyline) {
-  let bestDist = Infinity;
-  let bestPoint = point;
-
-  for (let i = 0; i < polyline.length - 1; i++) {
-    const a = polyline[i];
-    const b = polyline[i + 1];
-
-    // Vector AB and AP
-    const abLat = b.lat - a.lat;
-    const abLon = b.lon - a.lon;
-    const apLat = point.lat - a.lat;
-    const apLon = point.lon - a.lon;
-
-    // Project: t = dot(AP, AB) / dot(AB, AB), clamped to [0, 1]
-    const dotAB = abLat * abLat + abLon * abLon;
-    if (dotAB < 1e-14) continue; // degenerate segment
-    const t = Math.max(0, Math.min(1, (apLat * abLat + apLon * abLon) / dotAB));
-
-    const projLat = a.lat + t * abLat;
-    const projLon = a.lon + t * abLon;
-
-    const dLat = point.lat - projLat;
-    const dLon = point.lon - projLon;
-    const dist = dLat * dLat + dLon * dLon;
-
-    if (dist < bestDist) {
-      bestDist = dist;
-      bestPoint = { lat: projLat, lon: projLon };
-    }
-  }
-  return bestPoint;
+function enableTerrainForFlyover() {
+  if (terrainEnabled) return;
+  mapInstance.setTerrain({ source: 'terrainSource', exaggeration: TERRAIN_EXAGGERATION });
+  terrainEnabled = true;
 }
 
 export function updateWaypointMarkers(waypoints) {
+  setFlyoverWaypoints(waypoints);
   // Remove all existing waypoint markers
   waypointMarkers.forEach(marker => marker.remove());
   waypointMarkers = [];
@@ -2883,233 +2513,6 @@ export function updateWaypointMarkers(waypoints) {
   console.debug(`[maplibre] Updated ${waypoints.length} draggable waypoint markers`);
 }
 
-function animateCamera(timestamp) {
-  if (!currentRoute || currentRoute.length < 2) {
-    stopAnimation();
-    return;
-  }
-
-  if (animationStartTimestamp === null) {
-    animationStartTimestamp = timestamp;
-  }
-
-  // L'horloge d'animation ne suit pas le temps réel : elle se fige tant que le
-  // fond n'est pas chargé, sinon la caméra survole du gris. Le budget d'attente
-  // évite qu'une source muette ne bloque tout.
-  const delta = animationLastFrame === null
-    ? 0
-    : Math.min(timestamp - animationLastFrame, MAX_FRAME_DELTA_MS);
-  animationLastFrame = timestamp;
-
-  const tilesReady = typeof mapInstance.areTilesLoaded !== 'function'
-    || mapInstance.areTilesLoaded();
-
-  if (tilesReady) {
-    animationStalledMs = 0;
-    animationClockMs += delta;
-  } else {
-    animationStalledMs += delta;
-    if (animationStalledMs > TILE_WAIT_BUDGET_MS) {
-      animationClockMs += delta;
-    }
-  }
-
-  const mode = currentCameraMode;
-  const duration = Math.max(DRONE_MIN_DURATION, animationDurationMs);
-  const loopTime = animationClockMs % duration;
-  const progress = duration === 0 ? 0 : loopTime / duration;
-  const targetDistance = routeLengthMeters * progress;
-  const cameraPoint = coordinateAtDistance(targetDistance);
-  const lookAheadDistance = Math.min(
-    targetDistance + mode.lookahead,
-    routeLengthMeters
-  );
-  const lookAtPoint = coordinateAtDistance(lookAheadDistance);
-
-  const pathBearing = calculateBearing(
-    [cameraPoint.lon, cameraPoint.lat],
-    [lookAtPoint.lon, lookAtPoint.lat]
-  );
-
-  // Apply lateral offset for cinematic side view
-  let actualCameraPoint = cameraPoint;
-  if (mode.lateralOffset !== 0) {
-    actualCameraPoint = calculateLateralOffset(cameraPoint, pathBearing, mode.lateralOffset);
-  }
-
-  // Calculate bearing from camera to look-at point (accounting for offset)
-  const targetBearing = calculateBearing(
-    [actualCameraPoint.lon, actualCameraPoint.lat],
-    [lookAtPoint.lon, lookAtPoint.lat]
-  );
-
-  // Apply bearing offset for angled view
-  const adjustedBearing = (targetBearing + mode.bearingOffset + 360) % 360;
-
-  // Calculate turn angle for adaptive speed and banking
-  let turnAngle = 0;
-  if (Number.isFinite(lastBearing)) {
-    turnAngle = Math.abs(((adjustedBearing - lastBearing + 540) % 360) - 180);
-  }
-
-  const smoothedBearing = smoothAngle(lastBearing, adjustedBearing, mode.smoothing);
-  lastBearing = smoothedBearing;
-
-  // Calculate banking (roll) based on turn rate
-  let roll = 0;
-  if (mode.banking && Number.isFinite(lastTurnAngle)) {
-    // Smooth turn angle for natural banking
-    const smoothedTurnAngle = lastTurnAngle * 0.7 + turnAngle * 0.3;
-    lastTurnAngle = smoothedTurnAngle;
-
-    // Calculate roll based on turn intensity
-    const turnIntensity = Math.min(smoothedTurnAngle / 90, 1); // Normalize to 0-1
-    roll = turnIntensity * mode.bankingAmount;
-
-    // Apply direction based on turn direction
-    const turnDirection = ((adjustedBearing - lastBearing + 540) % 360) - 180;
-    roll = turnDirection > 0 ? roll : -roll;
-  } else {
-    lastTurnAngle = turnAngle;
-  }
-
-  // Use jumpTo for immediate, smooth frame-by-frame camera updates
-  // This eliminates the jerkiness from easeTo's 32ms animations overlapping
-  if (!lastAnimationMode) {
-    const offsetInfo = mode.lateralOffset !== 0 ? ` offset=${mode.lateralOffset}m` : '';
-    console.debug(`[maplibre] Camera mode: ${mode.name} - pitch=${mode.pitch}° altitude=${mode.altitude}m speed=${mode.speed}m/s banking=${mode.banking}${offsetInfo}`);
-    lastAnimationMode = 'jumpTo';
-  }
-
-  // MapLibre pose déjà le centre sur le relief : dézoomer selon l'altitude du
-  // sol envoyait la caméra à 180× sa distance au-dessus du Haut-Verdon. On ne
-  // recule que si la caméra frôle le sol (crête entre elle et le centre), et
-  // on revient doucement à la hauteur du mode une fois l'obstacle passé.
-  let adjustedZoom = mode.zoom;
-  if (terrainEnabled) {
-    const clearance = cameraGroundClearance();
-    lastTerrainZoomAdjust =
-      clearance !== null && clearance < CAMERA_MIN_CLEARANCE
-        ? Math.min(lastTerrainZoomAdjust + 0.1, 4)
-        : lastTerrainZoomAdjust * 0.97;
-    adjustedZoom -= lastTerrainZoomAdjust;
-  }
-
-  const cameraOptions = {
-    center: [actualCameraPoint.lon, actualCameraPoint.lat],
-    bearing: smoothedBearing,
-    pitch: mode.pitch,
-    zoom: adjustedZoom
-  };
-
-  // Add roll if banking is enabled (MapLibre GL v5+ supports this)
-  if (mode.banking && Math.abs(roll) > 0.5) {
-    cameraOptions.roll = roll;
-  }
-
-  mapInstance.jumpTo(cameraOptions);
-
-  animationFrameId = requestAnimationFrame(animateCamera);
-}
-
-function computeHumanZoom(lengthMeters) {
-  if (!Number.isFinite(lengthMeters) || lengthMeters <= 0) {
-    return HUMAN_ZOOM_MAX;
-  }
-  const normalized = Math.log10(Math.max(lengthMeters, 500) / 500);
-  const zoom = HUMAN_ZOOM_MAX - normalized * 1.2;
-  return Math.max(HUMAN_ZOOM_MIN, Math.min(HUMAN_ZOOM_MAX, zoom));
-}
-
-function updateRouteMetrics(coords) {
-  routeDistances = [];
-  routeLengthMeters = 0;
-
-  if (!Array.isArray(coords) || coords.length === 0) {
-    animationDurationMs = DRONE_MIN_DURATION;
-    return;
-  }
-
-  const mode = currentCameraMode;
-  routeDistances.push(0);
-
-  // Calculate duration with adaptive speed if enabled
-  let totalDuration = 0;
-
-  for (let i = 0; i < coords.length - 1; i++) {
-    const dist = haversineMeters(coords[i], coords[i + 1]);
-    routeLengthMeters += dist;
-    routeDistances.push(routeLengthMeters);
-
-    // Calculate segment duration based on turn angle (adaptive speed)
-    if (mode.adaptiveSpeed && i > 0 && i < coords.length - 2) {
-      const prevPoint = [coords[i - 1].lon, coords[i - 1].lat];
-      const currPoint = [coords[i].lon, coords[i].lat];
-      const nextPoint = [coords[i + 1].lon, coords[i + 1].lat];
-
-      const bearing1 = calculateBearing(prevPoint, currPoint);
-      const bearing2 = calculateBearing(currPoint, nextPoint);
-      const turnAngle = Math.abs(((bearing2 - bearing1 + 540) % 360) - 180);
-
-      // Reduce speed in sharp turns
-      let segmentSpeed = mode.speed;
-      if (turnAngle > mode.turnThreshold) {
-        const turnFactor = Math.min((turnAngle - mode.turnThreshold) / 45, 1);
-        segmentSpeed = mode.speed - (mode.speed - mode.minSpeed) * turnFactor;
-      }
-
-      totalDuration += (dist / segmentSpeed) * 1000; // Convert to ms
-    } else {
-      totalDuration += (dist / mode.speed) * 1000;
-    }
-  }
-
-  // `totalDuration` est la durée à l'allure du mode. On ne l'écourte que si le
-  // survol dépasse le confortable, et jamais au-delà de MAX_SPEED_FACTOR.
-  const fastestAllowed = totalDuration / MAX_SPEED_FACTOR;
-  animationDurationMs = Math.max(
-    DRONE_MIN_DURATION,
-    Math.min(totalDuration, Math.max(COMFORT_DURATION, fastestAllowed))
-  );
-
-  // `console.debug` ne connaît pas `%.1f` : on formate nous-mêmes.
-  console.debug(
-    `[maplibre] survol : ${(routeLengthMeters / 1000).toFixed(1)} km en `
-    + `${(animationDurationMs / 1000).toFixed(0)} s `
-    + `(${(routeLengthMeters / (animationDurationMs / 1000)).toFixed(0)} m/s, `
-    + `${(totalDuration / animationDurationMs).toFixed(2)}x l'allure du mode)`
-  );
-}
-
-function coordinateAtDistance(distance) {
-  if (!currentRoute || currentRoute.length === 0) {
-    return { lat: 0, lon: 0 };
-  }
-  if (distance <= 0 || routeDistances.length === 0) {
-    return currentRoute[0];
-  }
-  if (distance >= routeLengthMeters) {
-    return currentRoute[currentRoute.length - 1];
-  }
-
-  let idx = 0;
-  while (idx < routeDistances.length - 1 && routeDistances[idx + 1] < distance) {
-    idx++;
-  }
-
-  const start = currentRoute[idx];
-  const end = currentRoute[Math.min(idx + 1, currentRoute.length - 1)];
-  const segmentStart = routeDistances[idx];
-  const segmentEnd = routeDistances[Math.min(idx + 1, routeDistances.length - 1)];
-  const segmentLength = Math.max(segmentEnd - segmentStart, 1e-6);
-  const t = (distance - segmentStart) / segmentLength;
-
-  return {
-    lat: start.lat + (end.lat - start.lat) * t,
-    lon: start.lon + (end.lon - start.lon) * t
-  };
-}
-
 function haversineMeters(a, b) {
   if (!a || !b) {
     return 0;
@@ -3126,59 +2529,6 @@ function haversineMeters(a, b) {
     Math.cos(lat1) * Math.cos(lat2) * sinLon * sinLon;
 
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
-}
-
-/**
- * Calculate a point offset perpendicular to a bearing
- * @param {Object} point - {lat, lon}
- * @param {number} bearing - Direction in degrees
- * @param {number} offsetMeters - Distance to offset (positive = right, negative = left)
- * @returns {Object} - {lat, lon}
- */
-function calculateLateralOffset(point, bearing, offsetMeters) {
-  if (offsetMeters === 0) {
-    return point;
-  }
-
-  // Calculate perpendicular bearing (90° to the right)
-  const perpBearing = (bearing + 90) % 360;
-  const perpBearingRad = perpBearing * Math.PI / 180;
-
-  const lat1 = point.lat * Math.PI / 180;
-  const lon1 = point.lon * Math.PI / 180;
-  const angularDistance = offsetMeters / EARTH_RADIUS_M;
-
-  const lat2 = Math.asin(
-    Math.sin(lat1) * Math.cos(angularDistance) +
-    Math.cos(lat1) * Math.sin(angularDistance) * Math.cos(perpBearingRad)
-  );
-
-  const lon2 = lon1 + Math.atan2(
-    Math.sin(perpBearingRad) * Math.sin(angularDistance) * Math.cos(lat1),
-    Math.cos(angularDistance) - Math.sin(lat1) * Math.sin(lat2)
-  );
-
-  return {
-    lat: lat2 * 180 / Math.PI,
-    lon: lon2 * 180 / Math.PI
-  };
-}
-
-/**
- * Smooth angle interpolation with spline-like easing
- * Uses a smooth hermite interpolation for more natural camera rotation
- */
-function smoothAngle(previous, target, factor) {
-  if (!Number.isFinite(previous)) {
-    return target;
-  }
-  let delta = ((target - previous + 540) % 360) - 180;
-
-  // Apply smooth hermite easing (similar to Catmull-Rom spline)
-  // This creates a more natural, rounded transition
-  const easedFactor = factor * factor * (3 - 2 * factor); // smoothstep
-
-  return previous + delta * easedFactor;
 }
 
 /** Place small numbered markers every kilometer along the route polyline */
@@ -3226,13 +2576,6 @@ function ensureRouteLayers() {
   if (mapInstance.getLayer('route-line')) {
     mapInstance.moveLayer('route-line');
   }
-}
-
-/** Hauteur de la caméra au-dessus du sol sous elle (relief exagéré des deux côtés), ou null. */
-function cameraGroundClearance() {
-  const pos = mapInstance.getFreeCameraOptions().position;
-  const ground = pos && mapInstance.queryTerrainElevation(pos.toLngLat());
-  return Number.isFinite(ground) ? pos.toAltitude() - ground : null;
 }
 
 // Force MapLibre to recompute its viewport — used after a CSS-driven size change
