@@ -868,17 +868,36 @@ const OSM_LODGING = {
   camp_site: ['camping', 'camp']
 };
 
+/** overpass-api.de sature souvent (timeout, 502 sans CORS) : on passe au miroir suivant. */
+const OVERPASS_SERVERS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter'
+];
+
+async function overpassQuery(query) {
+  const errors = [];
+  for (const url of OVERPASS_SERVERS) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        body: 'data=' + encodeURIComponent(query),
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      return await res.json();
+    } catch (e) {
+      errors.push(`${new URL(url).host}: ${e.message}`);
+    }
+  }
+  throw new Error(errors.join(' ; '));
+}
+
 async function fetchOsmLodging(b) {
   const bbox = `${b.getSouth().toFixed(4)},${b.getWest().toFixed(4)},${b.getNorth().toFixed(4)},${b.getEast().toFixed(4)}`;
   const types = Object.keys(OSM_LODGING).join('|');
-  const query = `[out:json][timeout:20];nwr["tourism"~"^(${types})$"](${bbox});out center tags qt;`;
-  const res = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST',
-    body: 'data=' + encodeURIComponent(query),
-    signal: AbortSignal.timeout(22000)
-  });
-  if (!res.ok) throw new Error('Overpass ' + res.status);
-  const data = await res.json();
+  const query = `[out:json][timeout:10];nwr["tourism"~"^(${types})$"](${bbox});out center tags qt;`;
+  const data = await overpassQuery(query);
   return (data.elements || []).flatMap(el => {
     const lat = el.lat ?? el.center?.lat;
     const lon = el.lon ?? el.center?.lon;
