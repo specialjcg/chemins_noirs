@@ -21,7 +21,10 @@ const HEADING_TAU_S = 1.5;               // lissage du cap
 const TILE_WAIT_BUDGET_MS = 2000;        // au-delà, on avance même sans tuiles
 const MAX_FRAME_DELTA_MS = 100;
 const STAGE_PAUSE_MS = 3000;
-const PROGRESS_REFRESH_MS = 250;
+const PROGRESS_REFRESH_MS = 100;
+const STALL_RATE = 0.2;                  // allure pendant qu'on attend les tuiles
+const RATE_TAU_S = 0.4;                  // ralentir et repartir sans à-coup
+const ALT_TAU_S = 0.6;                   // lissage des altitudes lues sur le relief
 const STOP_VIEW = { pitch: 45, zoom: 15 };
 
 /** Vues de départ, réglables ensuite. dist en m, elev en degrés au-dessus de l'horizon, yaw autour du point. */
@@ -58,6 +61,11 @@ let heading = null;
 let nextStop = 0;
 let stageTimer = null;
 let lastProgressRefresh = 0;
+let rate = 1;                            // fraction de la vitesse réellement appliquée
+let smoothTargetAlt = null;
+let smoothCamAlt = null;
+let profileCache = null;                 // { key, base, done } images du profil
+let colors = null;                       // jetons CSS lus une fois par ouverture
 let savedInteractions = null;
 
 // DOM
@@ -167,6 +175,8 @@ export function setFlyoverRoute(coords) {
   stops = [];
   stageSource = 'none';
   posM = 0;
+  profileCache = null;
+  dropProgressLayer();
   if (lastWaypoints) setFlyoverWaypoints(lastWaypoints);
 }
 
@@ -174,6 +184,7 @@ export function setFlyoverRoute(coords) {
 export function setFlyoverElevations(values) {
   if (Array.isArray(values) && values.length === route.length) {
     elevations = values;
+    profileCache = null;
     drawProfile();
   }
 }
@@ -182,6 +193,7 @@ export function setFlyoverElevations(values) {
 export function setFlyoverStages(stages) {
   if (!stages) {
     if (stageSource === 'plan') { stops = []; stageSource = 'none'; }
+    profileCache = null;
     drawProfile();
     return;
   }
@@ -190,6 +202,7 @@ export function setFlyoverStages(stages) {
     .filter(s => s.m > 0 && s.m < totalM - 50);
   stageSource = 'plan';
   resetNextStop();
+  profileCache = null;
   drawProfile();
 }
 
@@ -209,6 +222,7 @@ export function setFlyoverWaypoints(waypoints) {
   }).filter(s => s.m > 0 && s.m < totalM - 50).sort((a, b) => a.m - b.m);
   stageSource = stops.length ? 'waypoints' : 'none';
   resetNextStop();
+  profileCache = null;
   drawProfile();
 }
 
@@ -236,7 +250,7 @@ export function stopFlyover() {
   panel = null;
   head?.remove();
   head = null;
-  setProgressData([]);
+  setProgress(null);
   restoreInteractions();
   map?.easeTo({ pitch: STOP_VIEW.pitch, zoom: STOP_VIEW.zoom, roll: 0, duration: 1200 });
   console.debug('[flyover] fermé');
@@ -279,6 +293,7 @@ function play() {
   playing = true;
   lastFrame = null;
   stalledMs = 0;
+  rate = 1;
   frameId = requestAnimationFrame(frame);
   updatePanel();
   console.debug('[flyover] lecture', `${(totalM / 1000).toFixed(1)} km`, `×${speed}`, cam.id);
@@ -300,6 +315,8 @@ function togglePlay() {
 function seek(m) {
   posM = Math.min(Math.max(m, 0), totalM);
   heading = null;
+  smoothTargetAlt = null;
+  smoothCamAlt = null;
   resetNextStop();
   hideCard();
   render(true);
@@ -309,12 +326,13 @@ function frame(ts) {
   const delta = lastFrame === null ? 0 : Math.min(ts - lastFrame, MAX_FRAME_DELTA_MS);
   lastFrame = ts;
 
-  // On attend les tuiles un peu, sinon la caméra survole du gris.
+  // Tuiles en retard : on ralentit en douceur au lieu de s'arrêter net, sinon
+  // la caméra avance par à-coups ; au-delà du budget, on repart quand même.
   const tilesReady = typeof map.areTilesLoaded !== 'function' || map.areTilesLoaded();
   stalledMs = tilesReady ? 0 : stalledMs + delta;
-  if (tilesReady || stalledMs > TILE_WAIT_BUDGET_MS) {
-    posM += BASE_SPEED_MS * speed * delta / 1000;
-  }
+  const wantedRate = tilesReady || stalledMs > TILE_WAIT_BUDGET_MS ? 1 : STALL_RATE;
+  rate += (wantedRate - rate) * (1 - Math.exp(-delta / 1000 / RATE_TAU_S));
+  posM += BASE_SPEED_MS * speed * rate * delta / 1000;
 
   if (nextStop < stops.length && posM >= stops[nextStop].m) {
     posM = stops[nextStop].m;
@@ -357,10 +375,16 @@ function render(snap, dt = 0) {
   const wanted = haversine(target, ahead) > 1 ? bearing(target, ahead) : (heading ?? 0);
   heading = snap ? wanted : smoothAngle(heading, wanted, 1 - Math.exp(-dt / HEADING_TAU_S));
 
-  const targetAlt = ground(target);
+  // Le relief s'affine quand ses tuiles arrivent : lu brut, il fait tressauter
+  // la caméra. On lisse les deux altitudes.
+  const k = snap ? 1 : 1 - Math.exp(-dt / ALT_TAU_S);
+  smoothTargetAlt = smoothTargetAlt === null ? ground(target) : smoothTargetAlt + (ground(target) - smoothTargetAlt) * k;
+  const targetAlt = smoothTargetAlt;
   const horiz = cam.dist * Math.cos(rad(cam.elev));
   const camPos = destination(target, heading + 180 + cam.yaw, Math.max(horiz, 1));
-  const camAlt = Math.max(targetAlt + cam.dist * Math.sin(rad(cam.elev)), ground(camPos) + CLEARANCE_M);
+  const wantedCamAlt = Math.max(targetAlt + cam.dist * Math.sin(rad(cam.elev)), ground(camPos) + CLEARANCE_M);
+  smoothCamAlt = smoothCamAlt === null || snap ? wantedCamAlt : smoothCamAlt + (wantedCamAlt - smoothCamAlt) * k;
+  const camAlt = Math.max(smoothCamAlt, targetAlt + 5);
 
   try {
     const opts = map.calculateCameraOptionsFromTo(
@@ -382,33 +406,55 @@ function render(snap, dt = 0) {
   const now = performance.now();
   if (snap || now - lastProgressRefresh > PROGRESS_REFRESH_MS) {
     lastProgressRefresh = now;
-    const i = segmentAt(posM);
-    setProgressData([...route.slice(0, i + 1), target]);
+    setProgress(posM / totalM);
     updatePanel();
   }
 }
 
-function setProgressData(points) {
+/**
+ * Tracé parcouru : une source fixe (tout le tracé) et un dégradé en marche
+ * d'escalier sur line-progress. Remplacer la géométrie à chaque rafraîchissement
+ * faisait recalculer la source par MapLibre, d'où une image perdue.
+ */
+function setProgress(fraction) {
   if (!map) return;
-  const data = {
-    type: 'Feature',
-    properties: {},
-    geometry: { type: 'LineString', coordinates: points.map(p => [p.lon, p.lat]) }
-  };
-  const src = map.getSource('flyover-progress');
-  if (src) {
-    src.setData(data);
+  const layer = map.getLayer('flyover-progress');
+  if (fraction === null) {
+    if (layer) map.setLayoutProperty('flyover-progress', 'visibility', 'none');
     return;
   }
-  if (!points.length || !map.isStyleLoaded()) return;
-  map.addSource('flyover-progress', { type: 'geojson', data });
-  map.addLayer({
-    id: 'flyover-progress',
-    type: 'line',
-    source: 'flyover-progress',
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': deps.mapColor('--map-flyover-done'), 'line-width': 6, 'line-opacity': 0.85 }
-  });
+  if (!layer) {
+    if (!map.isStyleLoaded()) return;
+    const data = {
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'LineString', coordinates: route.map(p => [p.lon, p.lat]) }
+    };
+    const src = map.getSource('flyover-progress');
+    if (src) src.setData(data);
+    else map.addSource('flyover-progress', { type: 'geojson', data, lineMetrics: true });
+    map.addLayer({
+      id: 'flyover-progress',
+      type: 'line',
+      source: 'flyover-progress',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-width': 6, 'line-opacity': 0.85, 'line-gradient': progressGradient(0) }
+    });
+    return;
+  }
+  map.setLayoutProperty('flyover-progress', 'visibility', 'visible');
+  map.setPaintProperty('flyover-progress', 'line-gradient', progressGradient(fraction));
+}
+
+function progressGradient(fraction) {
+  const f = Math.min(Math.max(fraction, 1e-6), 1);
+  return ['step', ['line-progress'], colors.done, f, 'rgba(0, 0, 0, 0)'];
+}
+
+/** Le tracé a changé : la source du tracé parcouru est à refaire. */
+function dropProgressLayer() {
+  if (map?.getLayer('flyover-progress')) map.removeLayer('flyover-progress');
+  if (map?.getSource('flyover-progress')) map.removeSource('flyover-progress');
 }
 
 // ── Interactions pendant le survol ───────────────────────────────────────
@@ -520,6 +566,14 @@ function el(tag, cls, text) {
 
 function openPanel() {
   open = true;
+  colors = {
+    done: deps.mapColor('--map-flyover-done'),
+    profile: deps.mapColor('--map-flyover-profile'),
+    stop: deps.mapColor('--map-flyover-stop'),
+    cursor: deps.mapColor('--map-flyover-cursor')
+  };
+  smoothTargetAlt = null;
+  smoothCamAlt = null;
   posM = 0;
   heading = null;
   resetNextStop();
@@ -632,26 +686,24 @@ function slopeAt(m) {
   return a != null && b != null && span > 0 ? (b - a) / span * 100 : null;
 }
 
-function drawProfile() {
-  const canvas = ui.canvas;
-  if (!panel || !canvas || totalM <= 0) return;
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
-  if (!w || !h) return;
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, w, h);
-
+/** Profil fixe (fond, partie parcourue, étapes) dessiné une fois, puis découpé au curseur. */
+function profileImages(w, h, dpr) {
+  const key = `${w}x${h}x${dpr}x${stops.length}`;
+  if (profileCache?.key === key) return profileCache;
   const x = m => m / totalM * w;
   const known = elevations?.filter(v => v != null) ?? [];
-  const lo = known.length ? Math.min(...known) : 0;
-  const hi = known.length ? Math.max(...known) : 1;
+  let lo = Infinity;
+  let hi = -Infinity;
+  known.forEach(v => { if (v < lo) lo = v; if (v > hi) hi = v; });
+  if (!known.length) { lo = 0; hi = 1; }
   const y = v => h - 4 - (v - lo) / Math.max(hi - lo, 1) * (h - 10);
 
-  const area = color => {
+  const paint = color => {
+    const c = document.createElement('canvas');
+    c.width = w * dpr;
+    c.height = h * dpr;
+    const ctx = c.getContext('2d');
+    ctx.scale(dpr, dpr);
     ctx.beginPath();
     ctx.moveTo(0, h);
     if (known.length) {
@@ -666,21 +718,33 @@ function drawProfile() {
     ctx.closePath();
     ctx.fillStyle = color;
     ctx.fill();
+    ctx.fillStyle = colors.stop;
+    stops.forEach(s => ctx.fillRect(Math.round(x(s.m)) - 1, 0, 2, h));
+    return c;
   };
+  profileCache = { key, base: paint(colors.profile), done: paint(colors.done) };
+  return profileCache;
+}
 
-  area(deps.mapColor('--map-flyover-profile'));
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, 0, x(posM), h);
-  ctx.clip();
-  area(deps.mapColor('--map-flyover-done'));
-  ctx.restore();
-
-  ctx.fillStyle = deps.mapColor('--map-flyover-stop');
-  stops.forEach(s => ctx.fillRect(Math.round(x(s.m)) - 1, 0, 2, h));
-
-  ctx.fillStyle = deps.mapColor('--map-flyover-cursor');
-  ctx.fillRect(Math.round(x(posM)) - 1, 0, 2, h);
+function drawProfile() {
+  const canvas = ui.canvas;
+  if (!panel || !canvas || totalM <= 0 || !colors) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+  }
+  const { base, done } = profileImages(w, h, dpr);
+  const ctx = canvas.getContext('2d');
+  const cut = Math.round(posM / totalM * w * dpr);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(base, 0, 0);
+  if (cut > 0) ctx.drawImage(done, 0, 0, cut, canvas.height, 0, 0, cut, canvas.height);
+  ctx.fillStyle = colors.cursor;
+  ctx.fillRect(cut - dpr, 0, 2 * dpr, canvas.height);
 }
 
 // ── Carte d'étape ────────────────────────────────────────────────────────
