@@ -7,6 +7,7 @@
  * des modes figés : impossible de dire « plus haut » ou « plus vite ».
  */
 import maplibregl from 'maplibre-gl';
+import { createGrip, makeDraggable } from './draggable.js';
 
 const EARTH_RADIUS_M = 6371000;
 const BASE_SPEED_MS = 100;               // ×1 = 100 m/s, une étape de 25 km en ~4 min
@@ -603,7 +604,8 @@ function openPanel() {
   faster.title = 'Plus vite (+)';
   faster.onclick = () => setSpeed(1);
 
-  row.append(ui.play, slower, ui.speed, faster, ui.stats, close);
+  const grip = createGrip();
+  row.append(grip, ui.play, slower, ui.speed, faster, ui.stats, close);
 
   ui.canvas = el('canvas', 'flyover-profile');
   ui.canvas.title = 'Cliquer ou glisser pour se déplacer';
@@ -627,6 +629,7 @@ function openPanel() {
 
   panel.append(row, ui.canvas, presets, sliders, hint);
   map.getContainer().append(panel);
+  makeDraggable(panel, grip, 'cn.drag.flyover');
   drawProfile();
   updatePanel();
 }

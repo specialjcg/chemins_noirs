@@ -5,6 +5,7 @@ import {
   createFlyoverControl, initFlyover, setFlyoverElevations, setFlyoverRoute,
   setFlyoverStages, setFlyoverWaypoints, startFlyover, stopFlyover
 } from './flyover.js';
+import { createGrip, makeDraggable } from './draggable.js';
 import { casteIgn, largeurMiseALEchelle, symboDuFiltre } from './chemin_noir.js';
 
 /**
@@ -617,6 +618,9 @@ function createStyleSwitcherControl() {
         this._container.appendChild(btn);
       });
 
+      const grip = createGrip();
+      this._container.prepend(grip);
+      makeDraggable(this._container, grip, 'cn.drag.style-switcher');
       return this._container;
     }
 

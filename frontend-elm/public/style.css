@@ -3491,3 +3491,28 @@ body:has(.app-container.is-collapsed) .reference-badges {
   color: var(--accent-brass);
   font-size: 1rem;
 }
+
+/* ─── Poignée des fenêtres déplaçables (survol, fonds de carte) ─────────── */
+.drag-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: 0 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.drag-grip:hover {
+  color: var(--accent-brass);
+}
+
+.is-dragging,
+.is-dragging .drag-grip {
+  cursor: grabbing;
+  user-select: none;
+}
