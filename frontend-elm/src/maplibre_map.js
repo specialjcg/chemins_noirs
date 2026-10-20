@@ -1060,11 +1060,11 @@ function showStages(plan) {
     }
   }
   // Le survol marque une pause à chaque nuit.
-  setFlyoverStages(plan.stages.map(s => {
-    const lodging = s.lodging ?? plan.arrival?.lodging;
+  setFlyoverStages(plan.stages.map(stage => {
+    const lodging = stage.lodging ?? plan.arrival?.lodging;
     return {
-      endKm: s.end_km,
-      title: s.lodging ? `J${s.day} · nuit` : 'Arrivée',
+      endKm: stage.end_km,
+      title: stage.lodging ? `J${stage.day} · nuit` : 'Arrivée',
       detail: lodging?.name ? `hébergement : ${lodging.name}` : null
     };
   }));

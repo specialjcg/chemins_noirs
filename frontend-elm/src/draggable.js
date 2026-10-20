@@ -7,20 +7,23 @@
  * double-clic sur la poignée pour revenir à la place d'origine.
  */
 
-function load(key) {
+const LEFT_BUTTON = 0;
+const ORIGIN = { x: 0, y: 0 };
+
+function loadOffset(key) {
   try {
-    const v = JSON.parse(localStorage.getItem(key));
-    if (Number.isFinite(v?.x) && Number.isFinite(v?.y)) return v;
-  } catch (e) {
+    const stored = JSON.parse(localStorage.getItem(key));
+    if (Number.isFinite(stored?.x) && Number.isFinite(stored?.y)) return stored;
+  } catch (error) {
     // Stockage indisponible ou valeur illisible : place d'origine.
   }
-  return { x: 0, y: 0 };
+  return ORIGIN;
 }
 
-function save(key, off) {
+function saveOffset(key, offset) {
   try {
-    localStorage.setItem(key, JSON.stringify(off));
-  } catch (e) {
+    localStorage.setItem(key, JSON.stringify(offset));
+  } catch (error) {
     // Navigation privée : la position ne survivra pas au rechargement.
   }
 }
@@ -35,54 +38,72 @@ export function createGrip(title = 'Déplacer (double-clic : remettre en place)'
   return grip;
 }
 
-export function makeDraggable(el, handle, key) {
-  let off = load(key);
+/** Décalage qui ramène `box` dans `area`, nul s'il y est déjà. */
+function shiftInside(box, area) {
+  let shiftX = 0;
+  let shiftY = 0;
+  if (box.left < area.left) shiftX = area.left - box.left;
+  else if (box.right > area.right) shiftX = area.right - box.right;
+  if (box.top < area.top) shiftY = area.top - box.top;
+  else if (box.bottom > area.bottom) shiftY = area.bottom - box.bottom;
+  return { x: shiftX, y: shiftY };
+}
 
-  const apply = () => {
-    el.style.translate = `${off.x}px ${off.y}px`;
-    // Rester dans la carte, même après un redimensionnement.
-    const area = el.closest('.maplibregl-map')?.getBoundingClientRect()
+/** Suit le pointeur depuis `startEvent` jusqu'au relâchement. */
+function followDrag(handle, startEvent, { onMove, onEnd }) {
+  startEvent.preventDefault();
+  startEvent.stopPropagation();
+  handle.setPointerCapture(startEvent.pointerId);
+  const onUp = () => {
+    handle.removeEventListener('pointermove', onMove);
+    handle.removeEventListener('pointerup', onUp);
+    onEnd();
+  };
+  handle.addEventListener('pointermove', onMove);
+  handle.addEventListener('pointerup', onUp);
+}
+
+export function makeDraggable(windowElement, handle, storageKey) {
+  let offset = loadOffset(storageKey);
+
+  const translate = () => {
+    windowElement.style.translate = `${offset.x}px ${offset.y}px`;
+  };
+
+  // Rester dans la carte, même après un redimensionnement.
+  const applyOffset = () => {
+    translate();
+    const mapBounds = windowElement.closest('.maplibregl-map')?.getBoundingClientRect()
       ?? { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
-    const r = el.getBoundingClientRect();
-    let dx = 0;
-    let dy = 0;
-    if (r.left < area.left) dx = area.left - r.left;
-    else if (r.right > area.right) dx = area.right - r.right;
-    if (r.top < area.top) dy = area.top - r.top;
-    else if (r.bottom > area.bottom) dy = area.bottom - r.bottom;
-    if (dx || dy) {
-      off = { x: off.x + dx, y: off.y + dy };
-      el.style.translate = `${off.x}px ${off.y}px`;
+    const shift = shiftInside(windowElement.getBoundingClientRect(), mapBounds);
+    if (shift.x || shift.y) {
+      offset = { x: offset.x + shift.x, y: offset.y + shift.y };
+      translate();
     }
   };
 
-  handle.addEventListener('pointerdown', e => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    handle.setPointerCapture(e.pointerId);
-    const start = { x: e.clientX - off.x, y: e.clientY - off.y };
-    el.classList.add('is-dragging');
-    const move = ev => {
-      off = { x: ev.clientX - start.x, y: ev.clientY - start.y };
-      apply();
-    };
-    const up = () => {
-      handle.removeEventListener('pointermove', move);
-      handle.removeEventListener('pointerup', up);
-      el.classList.remove('is-dragging');
-      save(key, off);
-    };
-    handle.addEventListener('pointermove', move);
-    handle.addEventListener('pointerup', up);
+  handle.addEventListener('pointerdown', startEvent => {
+    if (startEvent.button !== LEFT_BUTTON) return;
+    const grabPoint = { x: startEvent.clientX - offset.x, y: startEvent.clientY - offset.y };
+    windowElement.classList.add('is-dragging');
+    followDrag(handle, startEvent, {
+      onMove: event => {
+        offset = { x: event.clientX - grabPoint.x, y: event.clientY - grabPoint.y };
+        applyOffset();
+      },
+      onEnd: () => {
+        windowElement.classList.remove('is-dragging');
+        saveOffset(storageKey, offset);
+      }
+    });
   });
 
   handle.addEventListener('dblclick', () => {
-    off = { x: 0, y: 0 };
-    apply();
-    save(key, off);
+    offset = ORIGIN;
+    applyOffset();
+    saveOffset(storageKey, offset);
   });
 
   // Appliqué après insertion dans la page, pour que les bornes soient connues.
-  requestAnimationFrame(apply);
+  requestAnimationFrame(applyOffset);
 }
