@@ -59,6 +59,7 @@ let currentRouteCoords = null; // Kept so toggling on can fetch without a new ro
 const TERRAIN_EXAGGERATION = 2.5; // Amplify terrain for better visibility
 const EARTH_RADIUS_M = 6371000;
 const DRONE_PITCH = 60; // Default pitch for 3D drone view
+const MAX_PITCH = 85; // Right-drag tilt limit (MapLibre default 60), near the horizon
 
 // Calculate bearing between two coordinates (in degrees)
 function calculateBearing(start, end) {
@@ -154,6 +155,7 @@ function ensureMap() {
     center: [5.0, 45.0],
     zoom: 8,
     pitch: 0,
+    maxPitch: MAX_PITCH,
     bearing: 0,
     antialias: true
   });
