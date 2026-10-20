@@ -513,12 +513,13 @@ function ignWmtsUrl(layer, format, style = 'normal', matrixSet = 'PM') {
 }
 
 /**
- * Button toggling an IGN raster overlay, off by default.
+ * Button toggling an overlay layer, off by default.
  *
  * The layer is only added on first use, so a closed overlay costs no tiles.
+ * `layer()` builds its MapLibre spec then, once the style colors are known.
  */
-function createRasterOverlayControl({ source, layerId, icon, title, className, colorToken, opacity }) {
-  class RasterOverlayControl {
+function createOverlayControl({ layer, icon, title, className, colorToken }) {
+  class OverlayControl {
     onAdd(map) {
       this._map = map;
       this._enabled = false;
@@ -538,19 +539,13 @@ function createRasterOverlayControl({ source, layerId, icon, title, className, c
 
       // Sits above the background but below the route, which ensureRouteLayers
       // keeps on top anyway.
-      if (this._enabled && !this._map.getLayer(layerId)) {
-        this._map.addLayer({
-          id: layerId,
-          type: 'raster',
-          source,
-          minzoom: 0,
-          maxzoom: 22,
-          paint: { 'raster-opacity': opacity }
-        });
+      const spec = this._spec ?? (this._spec = layer());
+      if (this._enabled && !this._map.getLayer(spec.id)) {
+        this._map.addLayer(spec);
         ensureRouteLayers();
       }
 
-      setLayerVisible(layerId, this._enabled);
+      setLayerVisible(spec.id, this._enabled);
       this._btn.style.backgroundColor = this._enabled ? mapColor(colorToken) : '';
       this._btn.style.color = this._enabled ? 'white' : '';
     }
@@ -560,31 +555,31 @@ function createRasterOverlayControl({ source, layerId, icon, title, className, c
       this._map = undefined;
     }
   }
-  return new RasterOverlayControl();
+  return new OverlayControl();
+}
+
+function rasterOverlayLayer(id, source, opacity) {
+  return { id, type: 'raster', source, minzoom: 0, maxzoom: 22, paint: { 'raster-opacity': opacity } };
 }
 
 function createSlopesControl() {
-  return createRasterOverlayControl({
-    source: 'ign-slopes',
-    layerId: 'ign-slopes-tiles',
+  return createOverlayControl({
+    layer: () => rasterOverlayLayer('ign-slopes-tiles', 'ign-slopes', 0.55),
     icon: '📐',
     title: 'Afficher/masquer la carte des pentes IGN (>30°)',
     className: 'maplibregl-ctrl-slopes',
-    colorToken: '--map-toggle-slopes',
-    opacity: 0.55
+    colorToken: '--map-toggle-slopes'
   });
 }
 
 /** Public forests: where a route can cross freely, unlike private woods. */
 function createForestsControl() {
-  return createRasterOverlayControl({
-    source: 'ign-forests',
-    layerId: 'ign-forests-tiles',
+  return createOverlayControl({
+    layer: () => rasterOverlayLayer('ign-forests-tiles', 'ign-forests', 0.45),
     icon: '🌲',
     title: 'Afficher/masquer les forêts publiques (IGN/ONF)',
     className: 'maplibregl-ctrl-forests',
-    colorToken: '--map-toggle-forests',
-    opacity: 0.45
+    colorToken: '--map-toggle-forests'
   });
 }
 
