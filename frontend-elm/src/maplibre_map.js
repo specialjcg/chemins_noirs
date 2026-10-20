@@ -1,5 +1,6 @@
 import maplibregl from 'maplibre-gl';
 import mlcontour from 'maplibre-contour';
+import { Protocol as PmtilesProtocol } from 'pmtiles';
 
 import {
   createFlyoverControl, initFlyover, setFlyoverElevations, setFlyoverRoute,
@@ -7,6 +8,7 @@ import {
 } from './flyover.js';
 import { createGrip, makeDraggable } from './draggable.js';
 import { casteIgn, largeurMiseALEchelle, symboDuFiltre } from './chemin_noir.js';
+import { POPULATION_MIN_ZOOM, POPULATION_SOURCE_ID, populationLayer, populationSource } from './population_layer.js';
 
 /**
  * Couleur de carte lue dans le design system.
@@ -74,6 +76,9 @@ function calculateBearing(start, end) {
   const bearing = Math.atan2(y, x) * 180 / Math.PI;
   return (bearing + 360) % 360; // Normalize to 0-360
 }
+
+// Tuiles vectorielles lues par plages dans un seul fichier (couche population).
+maplibregl.addProtocol('pmtiles', new PmtilesProtocol().tile);
 
 function ensureMap() {
   if (mapInstance) {
@@ -469,6 +474,9 @@ function ensureMap() {
   // Add public forests toggle control (off by default)
   mapInstance.addControl(createForestsControl(), 'top-right');
 
+  // Add population density toggle control (off by default)
+  mapInstance.addControl(createPopulationControl(), 'top-right');
+
   // Add lodging toggle control (off by default)
   mapInstance.addControl(createLodgingControl(), 'top-right');
 
@@ -517,8 +525,9 @@ function ignWmtsUrl(layer, format, style = 'normal', matrixSet = 'PM') {
  *
  * The layer is only added on first use, so a closed overlay costs no tiles.
  * `layer()` builds its MapLibre spec then, once the style colors are known.
+ * `source` ({ id, spec() }) is for a source the style does not declare.
  */
-function createOverlayControl({ layer, icon, title, className, colorToken }) {
+function createOverlayControl({ layer, source, icon, title, className, colorToken }) {
   class OverlayControl {
     onAdd(map) {
       this._map = map;
@@ -541,6 +550,7 @@ function createOverlayControl({ layer, icon, title, className, colorToken }) {
       // keeps on top anyway.
       const spec = this._spec ?? (this._spec = layer());
       if (this._enabled && !this._map.getLayer(spec.id)) {
+        if (source && !this._map.getSource(source.id)) this._map.addSource(source.id, source.spec());
         this._map.addLayer(spec);
         ensureRouteLayers();
       }
@@ -580,6 +590,27 @@ function createForestsControl() {
     title: 'Afficher/masquer les forêts publiques (IGN/ONF)',
     className: 'maplibregl-ctrl-forests',
     colorToken: '--map-toggle-forests'
+  });
+}
+
+/** Inhabited 200 m cells (INSEE): an empty spot is a lonely spot. */
+function createPopulationControl() {
+  return createOverlayControl({
+    source: { id: POPULATION_SOURCE_ID, spec: () => populationSource(window.location.origin) },
+    layer: () => populationLayer({
+      id: 'population-cells',
+      colors: {
+        sparse: mapColor('--map-population-sparse'),
+        low: mapColor('--map-population-low'),
+        medium: mapColor('--map-population-medium'),
+        dense: mapColor('--map-population-dense')
+      },
+      opacity: 0.5
+    }),
+    icon: '👥',
+    title: `Afficher/masquer les zones habitées (Insee, carreaux de 200 m, dès le zoom ${POPULATION_MIN_ZOOM})`,
+    className: 'maplibregl-ctrl-population',
+    colorToken: '--map-toggle-population'
   });
 }
 

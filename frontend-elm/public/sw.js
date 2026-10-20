@@ -87,6 +87,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Fichiers PMTiles : lus par plages d'octets (réponses 206). Le cache ne
+  // tient pas compte de la plage demandée et refuse de ranger une 206 : on
+  // laisse le navigateur faire.
+  if (url.pathname.endsWith('.pmtiles')) {
+    return;
+  }
+
   // Le reste : cache d'abord, puis revalidation en arrière-plan. On répond
   // immédiatement avec la copie locale — c'est ce qui garde l'application
   // utilisable hors couverture — mais on va chercher la version fraîche dans

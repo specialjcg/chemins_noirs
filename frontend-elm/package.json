@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "maplibre-contour": "^0.1.0",
-    "maplibre-gl": "^5.0.0"
+    "maplibre-gl": "^5.0.0",
+    "pmtiles": "^4.5.0"
   },
   "devDependencies": {
     "elm": "^0.19.1-6",

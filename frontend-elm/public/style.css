@@ -257,6 +257,11 @@
 
   --map-toggle-slopes: var(--accent-terracotta);
   --map-toggle-forests: var(--accent-forest);
+  --map-toggle-population: var(--accent-rust);
+  --map-population-sparse: var(--accent-brass-light);
+  --map-population-low: var(--accent-terracotta-text);
+  --map-population-medium: var(--accent-terracotta);
+  --map-population-dense: var(--accent-rust);
   --map-toggle-water: var(--info-blue);
   --map-toggle-unpaved: var(--accent-brass);
   --map-toggle-lodging: var(--accent-terracotta);
