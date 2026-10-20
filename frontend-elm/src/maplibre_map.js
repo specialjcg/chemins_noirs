@@ -450,10 +450,6 @@ function ensureMap() {
   initFlyover(mapInstance, { enableTerrain: enableTerrainForFlyover, mapColor });
   mapInstance.addControl(createFlyoverControl(), 'top-right');
 
-  // Add pitch toggle control (for free tilt)
-  const pitchControl = createPitchControl();
-  mapInstance.addControl(pitchControl, 'top-right');
-
   // Add unpaved paths overlay toggle
   mapInstance.addControl(createUnpavedControl(), 'top-right');
 
@@ -636,49 +632,6 @@ function createStyleSwitcherControl() {
     }
   }
   return new StyleSwitcherControl();
-}
-
-function createPitchControl() {
-  class PitchControl {
-    onAdd(map) {
-      this._map = map;
-      this._container = document.createElement('div');
-      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
-
-      this._button = document.createElement('button');
-      this._button.className = 'maplibregl-ctrl-pitch';
-      this._button.textContent = '45°';
-      this._button.title = 'Toggle 45° pitch';
-      this._button.onclick = () => this.togglePitch();
-
-      this._container.appendChild(this._button);
-      return this._container;
-    }
-
-    togglePitch() {
-      const currentPitch = this._map.getPitch();
-      if (currentPitch < 10) {
-        // Enable terrain + tilt to 55° for visible relief
-        if (!terrainEnabled) {
-          terrainEnabled = true;
-          this._map.setTerrain({ source: 'terrainSource', exaggeration: TERRAIN_EXAGGERATION });
-        }
-        this._map.easeTo({ pitch: 55, duration: 800 });
-        this._button.textContent = '0°';
-      } else {
-        this._map.setTerrain(null);
-        terrainEnabled = false;
-        this._map.easeTo({ pitch: 0, duration: 800 });
-        this._button.textContent = '45°';
-      }
-    }
-
-    onRemove() {
-      this._container.parentNode.removeChild(this._container);
-      this._map = undefined;
-    }
-  }
-  return new PitchControl();
 }
 
 // ── Lodging overlay (OSM + refuges.info) ──────────────────────────────────
