@@ -52,6 +52,7 @@ fn route_km(engine: &RouteEngine) -> Option<(f64, Vec<Coordinate>)> {
         w_pop: 1.0,
         w_paved: 1.0,
         w_forest: 0.0,
+        w_density: 0.0,
     })?;
     let km = path.windows(2).map(|w| backend::geo_utils::haversine_km(w[0], w[1])).sum();
     Some((km, path))

@@ -129,6 +129,12 @@ pub struct EdgeRecord {
     /// `HabitationField::pressure`). Renseignée par `apply_landcover`.
     #[serde(default)]
     pub habitation_pressure: f64,
+    /// Pression de population moyenne le long du tronçon, dans `0.0..=1.0`,
+    /// d'après les carreaux Insee (voir `crate::population`). Comme `ign`,
+    /// jamais écrite dans le cache : elle est recalculée à chaque chargement
+    /// par `apply_population`, le format postcard reste celui d'avant.
+    #[serde(skip)]
+    pub density_pressure: f64,
     /// Tronçon venu de la BD TOPO de l'IGN, absent d'OSM (voir `crate::ign`).
     /// Jamais écrit dans le cache du graphe : la fusion IGN est refaite à
     /// chaque chargement, le graphe en cache reste celui d'OSM seul. Le
@@ -620,6 +626,7 @@ impl GraphBuilder {
                         // d'occupation du sol : rien à propager.
                         forest_ratio: 0.0,
                         habitation_pressure: 0.0,
+                        density_pressure: 0.0,
                         ign: false,
                     });
                 }
@@ -692,6 +699,7 @@ impl GraphBuilder {
                     waypoints: e.waypoints,
                     forest_ratio: e.forest_ratio,
                     habitation_pressure: e.habitation_pressure,
+                    density_pressure: e.density_pressure,
                     ign: e.ign,
                 })
             })
@@ -1209,6 +1217,7 @@ impl GraphBuilder {
                     waypoints: e.waypoints,
                     forest_ratio: e.forest_ratio,
                     habitation_pressure: e.habitation_pressure,
+                    density_pressure: e.density_pressure,
                     ign: e.ign,
                 })
             })
@@ -1548,6 +1557,25 @@ pub fn apply_landcover_from(
     }
 }
 
+/// Reporte la densité de population Insee sur chaque tronçon : pression
+/// moyenne des points échantillonnés tous les `POPULATION_SAMPLE_M`.
+///
+/// Le champ n'est pas persisté (voir `EdgeRecord::density_pressure`) : à
+/// appeler à chaque chargement du graphe, fusion IGN comprise.
+pub fn apply_population(graph: &mut GraphFile, grid: &crate::population::PopulationGrid) {
+    const POPULATION_SAMPLE_M: f64 = 50.0;
+
+    let coords = node_coords(graph);
+    for edge in graph.edges.iter_mut() {
+        let Some(line) = edge_line(edge, &coords) else {
+            continue;
+        };
+        let samples = samples_along(&line, POPULATION_SAMPLE_M);
+        let pressure: f64 = samples.iter().map(|point| grid.pressure_at(point.lat, point.lon)).sum();
+        edge.density_pressure = if samples.is_empty() { 0.0 } else { pressure / samples.len() as f64 };
+    }
+}
+
 fn node_coords(graph: &GraphFile) -> HashMap<u64, Coordinate> {
     graph
         .nodes
@@ -1607,6 +1635,7 @@ fn create_edge_record(
         waypoints: Vec::new(), // No intermediate waypoints for now
         forest_ratio: 0.0,     // Renseigné plus tard par `apply_landcover`
         habitation_pressure: 0.0,
+        density_pressure: 0.0,
         ign: false,
     })
 }
@@ -1849,6 +1878,7 @@ fn build_edge_with_waypoints(
         waypoints,
         forest_ratio: 0.0, // Renseigné plus tard par `apply_landcover`
         habitation_pressure: 0.0,
+        density_pressure: 0.0,
         ign: false,
     })
 }
@@ -2030,6 +2060,7 @@ mod tests {
             waypoints: vec![],
             forest_ratio: 0.0,
             habitation_pressure: 0.0,
+            density_pressure: 0.0,
             ign: false,
         };
 
@@ -2063,6 +2094,7 @@ mod tests {
             waypoints,
             forest_ratio: 0.0,
             habitation_pressure: 0.0,
+            density_pressure: 0.0,
             ign: false,
         };
         let mut graph = GraphFile {
@@ -2082,6 +2114,42 @@ mod tests {
             graph.edges[0].habitation_pressure
         );
         assert_eq!(graph.edges[1].habitation_pressure, 0.0);
+    }
+
+    #[test]
+    fn apply_population_averages_the_inhabited_cells_along_each_edge() {
+        use crate::population::PopulationGrid;
+
+        // Un carreau de 40 habitants (pression 1) sous le centre de Paris.
+        let grid = PopulationGrid::from_csv("east,north,ind\n3760600,2889400,40\n".as_bytes()).expect("grille");
+        let node = |id, lon| NodeRecord { id, lat: 48.8566, lon, elevation: None, population_density: 0.0 };
+        let edge = |from, to| EdgeRecord {
+            from,
+            to,
+            surface: SurfaceType::Dirt,
+            length_m: 0.0,
+            waypoints: vec![],
+            forest_ratio: 0.0,
+            habitation_pressure: 0.0,
+            density_pressure: 0.0,
+            ign: false,
+        };
+        let mut graph = GraphFile {
+            // 1-2 : 60 m dans le carreau ; 2-3 : 1,5 km vers l'ouest, qui en sort vite ;
+            // 4-5 : à Lyon, hors de tout carreau.
+            nodes: vec![node(1, 2.3522), node(2, 2.3514), node(3, 2.3310), node(4, 4.8357), node(5, 4.8360)],
+            edges: vec![edge(1, 2), edge(2, 3), edge(4, 5)],
+        };
+
+        apply_population(&mut graph, &grid);
+
+        assert!((graph.edges[0].density_pressure - 1.0).abs() < 1e-12, "{}", graph.edges[0].density_pressure);
+        assert!(
+            graph.edges[1].density_pressure > 0.0 && graph.edges[1].density_pressure < 0.2,
+            "deux ou trois échantillons sur trente dans le carreau : {}",
+            graph.edges[1].density_pressure
+        );
+        assert_eq!(graph.edges[2].density_pressure, 0.0);
     }
     use super::*;
 

@@ -788,6 +788,7 @@ async fn multi_route_handler(
                 w_pop: req.w_pop,
                 w_paved: req.w_paved,
                 w_forest: req.w_forest,
+                w_density: req.w_density,
             };
 
             let t_seg = std::time::Instant::now();
@@ -1310,7 +1311,38 @@ fn prepare_graph_for_bbox(
 ) -> Result<GraphFile, (StatusCode, String)> {
     let mut graph = prepare_osm_graph_for_bbox(config, bbox, cancel)?;
     attach_ign(&mut graph, config, &bbox, cancel);
+    attach_population(&mut graph);
     Ok(graph)
+}
+
+/// Carreaux Insee, lus une fois pour toutes (2,3 millions de carreaux, ~0,5 s).
+/// `POPULATION_GRID` désigne le CSV de `scripts/build_population_grid.sh`.
+fn population_grid() -> Option<&'static backend::population::PopulationGrid> {
+    static GRID: std::sync::OnceLock<Option<backend::population::PopulationGrid>> = std::sync::OnceLock::new();
+    GRID.get_or_init(|| {
+        let path = std::env::var("POPULATION_GRID").unwrap_or_else(|_| "data/population/insee_200m.csv".to_string());
+        match backend::population::PopulationGrid::load(std::path::Path::new(&path)) {
+            Ok(grid) => {
+                tracing::info!("carreaux de population Insee : {} lus depuis {path}", grid.len());
+                Some(grid)
+            }
+            Err(err) => {
+                tracing::warn!("carreaux de population indisponibles ({err}) : w_density sans effet");
+                None
+            }
+        }
+    })
+    .as_ref()
+}
+
+/// Densité Insee sur tous les tronçons, IGN compris. Jamais en cache (voir
+/// `EdgeRecord::density_pressure`) : refaite à chaque chargement.
+fn attach_population(graph: &mut GraphFile) {
+    if let Some(grid) = population_grid() {
+        let t0 = std::time::Instant::now();
+        backend::graph::apply_population(graph, grid);
+        tracing::info!("PERF densité de population : {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
+    }
 }
 
 /// Ajoute au graphe les chemins IGN absents d'OSM (voir `backend::ign`).

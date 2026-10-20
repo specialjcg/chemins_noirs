@@ -277,6 +277,8 @@ struct EdgeData {
     habitation_pressure: f64,
     /// Part du tronçon en forêt, dans `0.0..=1.0`.
     forest_ratio: f64,
+    /// Pression de population Insee moyenne le long du tronçon, dans `0.0..=1.0`.
+    density_pressure: f64,
     /// Intermediate waypoints for this edge (OSM geometry)
     waypoints: Vec<Coordinate>,
     /// Tronçon ajouté depuis la BD TOPO de l'IGN (voir `crate::ign`).
@@ -290,6 +292,8 @@ pub struct WeightConfig {
     /// Pénalité appliquée à ce qui n'est *pas* en forêt. Voir `edge_cost` pour
     /// la raison de ce sens de lecture.
     pub forest: f64,
+    /// Pénalité de densité de population (carreaux Insee).
+    pub density: f64,
 }
 
 /// Breakdown of an existing polyline scored with `RouteEngine::score_polyline`.
@@ -354,6 +358,7 @@ impl RouteEngine {
                 surface: edge.surface,
                 habitation_pressure: edge.habitation_pressure,
                 forest_ratio: edge.forest_ratio,
+                density_pressure: edge.density_pressure,
                 waypoints: edge.waypoints,
                 ign: edge.ign,
             };
@@ -449,13 +454,15 @@ impl RouteEngine {
     ///
     /// ## Edge Weight Calculation
     /// ```text
-    /// weight = base_cost * (1.0 + habitation_penalty + surface_penalty + open_ground_penalty)
+    /// weight = base_cost * (1.0 + habitation_penalty + surface_penalty + open_ground_penalty
+    ///                      + density_penalty)
     ///
     /// where:
     ///   base_cost = edge_length_km
     ///   habitation_penalty = habitation_pressure * w_pop
     ///   surface_penalty = w_paved * (1.0 if paved, 0.2 if trail, 0.0 if dirt)
     ///   open_ground_penalty = (1.0 - forest_ratio) * w_forest
+    ///   density_penalty = density_pressure * w_density
     /// ```
     ///
     /// ## Optimizations
@@ -713,6 +720,7 @@ impl RouteEngine {
             population: req.w_pop,
             paved: req.w_paved,
             forest: req.w_forest,
+            density: req.w_density,
         };
 
         let heuristic = |idx: NodeIndex| {
@@ -1269,7 +1277,8 @@ impl RouteEngine {
             * (1.0
                 + weights.population * edge.habitation_pressure
                 + weights.paved * paved_penalty
-                + weights.forest * open_ground_penalty)
+                + weights.forest * open_ground_penalty
+                + weights.density * edge.density_pressure)
     }
 }
 
@@ -1461,6 +1470,7 @@ mod tests {
             w_pop: 0.0,
             w_paved: 5.0,
             w_forest: 0.0,
+            w_density: 0.0,
         };
         let path = engine.find_path(&base_req).expect("path");
         assert!(path.len() > 3, "should take longer scenic path");
@@ -1481,6 +1491,7 @@ mod tests {
             w_pop: 0.0,
             w_paved: 0.0,
             w_forest: 0.0,
+            w_density: 0.0,
         };
         let path = engine.find_path(&base_req).expect("path");
         // Note: With OSM waypoints + interpolation, paths may have more points
@@ -1519,6 +1530,7 @@ mod tests {
             w_pop: 1.0,
             w_paved: 1.0,
             w_forest: 0.0,
+            w_density: 0.0,
         };
 
         let path = engine.find_path(&far_req);
@@ -1564,6 +1576,7 @@ mod tests {
             w_pop: 1.0,
             w_paved: 1.0,
             w_forest: 0.0,
+            w_density: 0.0,
         };
 
         // Should either return a single-point path or None
@@ -1624,14 +1637,14 @@ mod tests {
                         Coordinate { lat: 45.020, lon: 5.002 },  // wp1 ← target area
                         Coordinate { lat: 45.025, lon: 5.001 },  // wp2
                     ],
-                    forest_ratio: 0.0, habitation_pressure: 0.0, ign: false,
+                    forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false,
                 },
                 // Paved roads at intersection
-                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 400.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
-                EdgeRecord { from: 1, to: 4, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
-                EdgeRecord { from: 1, to: 5, surface: SurfaceType::Paved, length_m: 550.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 400.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
+                EdgeRecord { from: 1, to: 4, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
+                EdgeRecord { from: 1, to: 5, surface: SurfaceType::Paved, length_m: 550.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
                 // Connect N2→N5 for routing alternatives
-                EdgeRecord { from: 2, to: 5, surface: SurfaceType::Paved, length_m: 700.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 2, to: 5, surface: SurfaceType::Paved, length_m: 700.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
             ],
         }
     }
@@ -1813,6 +1826,7 @@ mod tests {
             w_pop: 1.0,
             w_paved: 1.0,
             w_forest: 0.0,
+            w_density: 0.0,
         };
 
         let path = engine.find_path(&req).expect("should find path");
@@ -1846,6 +1860,7 @@ mod tests {
             w_pop: 1.0,
             w_paved: 1.0,
             w_forest: 0.0,
+            w_density: 0.0,
         };
 
         let path = engine.find_path(&req).expect("should find path");
@@ -1886,6 +1901,7 @@ mod tests {
             w_pop: 0.0,
             w_paved: 0.0,
             w_forest: 0.0,
+            w_density: 0.0,
         };
 
         let path = engine.find_path(&req).expect("should find path");
@@ -1919,6 +1935,7 @@ mod tests {
             w_pop: 0.0,
             w_paved: 0.0,
             w_forest: 0.0,
+            w_density: 0.0,
         };
 
         let path = engine.find_path(&req).expect("should find path");
@@ -1984,8 +2001,8 @@ mod tests {
                 NodeRecord { id: 3, lat: 45.000, lon: 5.020, elevation: None, population_density: 0.0 },
             ],
             edges: vec![
-                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
-                EdgeRecord { from: 2, to: 3, surface: SurfaceType::Dirt, length_m: 800.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Paved, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
+                EdgeRecord { from: 2, to: 3, surface: SurfaceType::Dirt, length_m: 800.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
             ],
         };
         let engine = RouteEngine::from_graph_file(graph).expect("graphe de test");
@@ -2023,9 +2040,9 @@ mod tests {
                 NodeRecord { id: 3, lat: 45.005, lon: 5.005, elevation: None, population_density: 0.0 },
             ],
             edges: vec![
-                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Trail, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
-                EdgeRecord { from: 1, to: 3, surface: SurfaceType::Trail, length_m: 500.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0, ign: false },
-                EdgeRecord { from: 3, to: 2, surface: SurfaceType::Trail, length_m: 500.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Trail, length_m: 800.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
+                EdgeRecord { from: 1, to: 3, surface: SurfaceType::Trail, length_m: 500.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
+                EdgeRecord { from: 3, to: 2, surface: SurfaceType::Trail, length_m: 500.0, waypoints: vec![], forest_ratio: 1.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
             ],
         }
     }
@@ -2039,6 +2056,7 @@ mod tests {
             // tronçons ont la même surface.
             w_paved: 0.0,
             w_forest,
+            w_density: 0.0,
         }
     }
 
@@ -2082,11 +2100,58 @@ mod tests {
     }
 
     #[test]
+    fn density_weight_avoids_the_short_trail_through_a_hamlet() {
+        // Même tracé que pour la ferme, mais la pression vient des carreaux Insee.
+        let mut graph = forest_fixture();
+        graph.edges[0].density_pressure = 1.0;
+        let engine = RouteEngine::from_graph_file(graph).expect("engine");
+
+        let request = RouteRequest { w_density: 1.0, ..forest_request(0.0) };
+        let path = engine.find_path(&request).expect("path");
+
+        assert!(
+            path.iter().any(|c| (c.lat - 45.005).abs() < 1e-4),
+            "avec w_density=1 le détour loin du hameau doit l'emporter : {path:?}"
+        );
+    }
+
+    #[test]
+    fn density_weight_is_ignored_when_zero() {
+        let mut graph = forest_fixture();
+        graph.edges[0].density_pressure = 1.0;
+        let engine = RouteEngine::from_graph_file(graph).expect("engine");
+
+        let path = engine.find_path(&forest_request(0.0)).expect("path");
+
+        assert!(
+            !path.iter().any(|c| (c.lat - 45.005).abs() < 1e-4),
+            "sans w_density le tronçon direct reste le plus court : {path:?}"
+        );
+    }
+
+    #[test]
+    fn density_pressure_never_makes_an_edge_cheaper_than_its_length() {
+        let mut graph = forest_fixture();
+        graph.edges.iter_mut().for_each(|edge| edge.density_pressure = 1.0);
+        let engine = RouteEngine::from_graph_file(graph).expect("engine");
+        let weights = WeightConfig { population: 0.0, paved: 0.0, forest: 0.0, density: 5.0 };
+
+        for edge in engine.graph.edge_weights() {
+            assert!(
+                engine.edge_cost(edge, weights) >= edge.length_km - 1e-9,
+                "coût {} < longueur {}",
+                engine.edge_cost(edge, weights),
+                edge.length_km
+            );
+        }
+    }
+
+    #[test]
     fn forest_ratio_never_makes_an_edge_cheaper_than_its_length() {
         // L'heuristique A* est la distance à vol d'oiseau : un coût inférieur à
         // la longueur la rendrait inadmissible.
         let engine = RouteEngine::from_graph_file(forest_fixture()).expect("engine");
-        let weights = WeightConfig { population: 0.0, paved: 0.0, forest: 5.0 };
+        let weights = WeightConfig { population: 0.0, paved: 0.0, forest: 5.0, density: 0.0 };
 
         for edge in engine.graph.edge_weights() {
             assert!(
@@ -2138,7 +2203,7 @@ mod tests {
                 // Géométrie intermédiaire : sans elle le clic se raccroche
                 // directement à un nœud et le préfixe de snap n'existe pas.
                 EdgeRecord {
-                    from: 1, to: 2, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0, ign: false,
+                    from: 1, to: 2, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false,
                     waypoints: vec![
                         Coordinate { lat: 45.0, lon: 5.002 },
                         Coordinate { lat: 45.0, lon: 5.004 },
@@ -2147,7 +2212,7 @@ mod tests {
                     ],
                 },
                 EdgeRecord {
-                    from: 2, to: 3, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0, ign: false,
+                    from: 2, to: 3, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false,
                     waypoints: vec![
                         Coordinate { lat: 45.0, lon: 5.012 },
                         Coordinate { lat: 45.0, lon: 5.014 },
@@ -2155,7 +2220,7 @@ mod tests {
                     ],
                 },
                 EdgeRecord {
-                    from: 3, to: 4, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0, ign: false,
+                    from: 3, to: 4, surface: SurfaceType::Trail, length_m: 790.0, forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false,
                     waypoints: vec![
                         Coordinate { lat: 45.0, lon: 5.024 },
                         Coordinate { lat: 45.0, lon: 5.027 },
@@ -2175,7 +2240,7 @@ mod tests {
         let end = Coordinate { lat: 45.0, lon: 5.020 };
 
         let path = engine
-            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0 })
+            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0, w_density: 0.0 })
             .expect("path");
 
         let travelled: f64 = path.windows(2).map(|p| straight_line_km(p[0], p[1])).sum();
@@ -2201,7 +2266,7 @@ mod tests {
 
         let leg = |from, to| {
             engine
-                .find_path(&RouteRequest { start: from, end: to, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0 })
+                .find_path(&RouteRequest { start: from, end: to, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0, w_density: 0.0 })
                 .expect("leg")
         };
 
@@ -2229,8 +2294,8 @@ mod tests {
                 NodeRecord { id: 3, lat: 45.0, lon: 5.020, elevation: None, population_density: 0.0 },
             ],
             edges: vec![
-                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Trail, length_m: 790.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
-                EdgeRecord { from: 2, to: 3, surface: SurfaceType::Trail, length_m: 790.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, ign: false },
+                EdgeRecord { from: 1, to: 2, surface: SurfaceType::Trail, length_m: 790.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
+                EdgeRecord { from: 2, to: 3, surface: SurfaceType::Trail, length_m: 790.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
             ],
         }
     }
@@ -2245,7 +2310,7 @@ mod tests {
         let end = Coordinate { lat: 45.0, lon: 5.020 };
 
         let path = engine
-            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0 })
+            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0, w_density: 0.0 })
             .expect("path");
 
         assert!(
@@ -2266,7 +2331,7 @@ mod tests {
         let end = Coordinate { lat: 45.0, lon: 5.008 };
 
         let path = engine
-            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0 })
+            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0, w_density: 0.0 })
             .expect("path");
 
         let travelled: f64 = path.windows(2).map(|p| straight_line_km(p[0], p[1])).sum();
@@ -2294,7 +2359,7 @@ mod tests {
         let end = Coordinate { lat: 45.0, lon: 5.012 };
 
         let path = engine
-            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0 })
+            .find_path(&RouteRequest { start, end, w_pop: 0.0, w_paved: 0.0, w_forest: 0.0, w_density: 0.0 })
             .expect("path");
 
         let travelled: f64 = path.windows(2).map(|p| straight_line_km(p[0], p[1])).sum();

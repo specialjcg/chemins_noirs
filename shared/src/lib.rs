@@ -34,6 +34,10 @@ pub struct RouteRequest {
     /// Pénalité du hors-forêt. 0 = indifférent au couvert boisé.
     #[serde(default = "default_forest_weight")]
     pub w_forest: f64,
+    /// Pénalité de densité de population (carreaux Insee de 200 m). 0 par
+    /// défaut : les itinéraires déjà en base ne changent pas.
+    #[serde(default)]
+    pub w_density: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +52,10 @@ pub struct MultiPointRouteRequest {
     /// Pénalité du hors-forêt. 0 = indifférent au couvert boisé.
     #[serde(default = "default_forest_weight")]
     pub w_forest: f64,
+    /// Pénalité de densité de population (carreaux Insee de 200 m). 0 par
+    /// défaut : les itinéraires déjà en base ne changent pas.
+    #[serde(default)]
+    pub w_density: f64,
     /// `direct_legs[i]` : le tronçon du point i au point i+1 est tiré en ligne
     /// droite, sans suivre de chemin. Plus court que la liste des tronçons, ou
     /// absent : les tronçons manquants suivent les chemins.
@@ -93,6 +101,10 @@ pub struct LoopRouteRequest {
     /// Pénalité du hors-forêt. 0 = indifférent au couvert boisé.
     #[serde(default = "default_forest_weight")]
     pub w_forest: f64,
+    /// Pénalité de densité de population (carreaux Insee de 200 m). 0 par
+    /// défaut : les itinéraires déjà en base ne changent pas.
+    #[serde(default)]
+    pub w_density: f64,
     #[serde(default)]
     pub max_total_ascent: Option<f64>,
     #[serde(default)]

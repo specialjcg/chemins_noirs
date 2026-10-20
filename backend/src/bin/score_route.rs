@@ -128,6 +128,7 @@ fn main() -> Result<(), String> {
         population: arg_f64(&args, "--w-pop", 1.0),
         paved: arg_f64(&args, "--w-paved", 2.0),
         forest: arg_f64(&args, "--w-forest", 0.5),
+        density: arg_f64(&args, "--w-density", 0.0),
     };
 
     let raw = std::fs::read_to_string(&input).map_err(|e| format!("{}: {}", input.display(), e))?;

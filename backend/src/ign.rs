@@ -527,6 +527,7 @@ impl Merger<'_> {
             waypoints: coords[1..coords.len() - 1].to_vec(),
             forest_ratio: 0.0,
             habitation_pressure: 0.0,
+            density_pressure: 0.0,
             ign: true,
         });
     }
@@ -551,6 +552,7 @@ fn split_edge(edge: &EdgeRecord, line: &[(f64, f64)], mut splits: Vec<Split>, pl
             waypoints: coords[1..coords.len() - 1].to_vec(),
             forest_ratio: edge.forest_ratio,
             habitation_pressure: edge.habitation_pressure,
+            density_pressure: edge.density_pressure,
             ign: edge.ign,
         });
     };
@@ -653,6 +655,7 @@ mod tests {
             waypoints: vec![],
             forest_ratio: 0.5,
             habitation_pressure: 0.0,
+            density_pressure: 0.0,
             ign: false,
         }
     }

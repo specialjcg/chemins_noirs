@@ -170,6 +170,7 @@ fn main() -> Result<(), String> {
         population: arg_f64(&args, "--w-pop", 1.0),
         paved: arg_f64(&args, "--w-paved", 3.0),
         forest: arg_f64(&args, "--w-forest", 0.0),
+        density: arg_f64(&args, "--w-density", 0.0),
     };
     let pbf = PathBuf::from(arg(&args, "--pbf").unwrap_or_else(|| "data/gr31-region.osm.pbf".into()));
     let cache_dir = PathBuf::from(arg(&args, "--cache").unwrap_or_else(|| "data/cache".into()));
@@ -228,6 +229,7 @@ fn main() -> Result<(), String> {
                 w_pop: weights.population,
                 w_paved: weights.paved,
                 w_forest: weights.forest,
+                w_density: weights.density,
             });
 
             let (keep, routed_km, routed_cost, routed_paved_km, routed_forest_km, routed_built_km, reason) = match routed {
