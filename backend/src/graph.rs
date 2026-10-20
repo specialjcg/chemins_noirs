@@ -1526,47 +1526,61 @@ pub fn apply_landcover_from(
         node.population_density = habitation.pressure(node.lat, node.lon);
     }
 
-    let coords: HashMap<u64, Coordinate> = graph
+    let coords = node_coords(graph);
+
+    for edge in graph.edges.iter_mut().skip(first_edge) {
+        let Some(line) = edge_line(edge, &coords) else {
+            continue;
+        };
+        let samples = samples_along(&line, FOREST_SAMPLE_M);
+        if samples.is_empty() {
+            edge.forest_ratio = 0.0;
+            edge.habitation_pressure = 0.0;
+            continue;
+        }
+
+        let count = samples.len() as f64;
+        let in_forest = samples.iter().filter(|point| grid.is_forest(point.lat, point.lon)).count() as f64;
+        let pressure: f64 = samples.iter().map(|point| habitation.pressure(point.lat, point.lon)).sum();
+
+        edge.forest_ratio = in_forest / count;
+        edge.habitation_pressure = pressure / count;
+    }
+}
+
+fn node_coords(graph: &GraphFile) -> HashMap<u64, Coordinate> {
+    graph
         .nodes
         .iter()
         .map(|node| (node.id, Coordinate { lat: node.lat, lon: node.lon }))
-        .collect();
+        .collect()
+}
 
-    for edge in graph.edges.iter_mut().skip(first_edge) {
-        let (Some(from), Some(to)) = (coords.get(&edge.from), coords.get(&edge.to)) else {
-            continue;
-        };
+/// Géométrie réelle du tronçon, extrémités comprises.
+fn edge_line(edge: &EdgeRecord, coords: &HashMap<u64, Coordinate>) -> Option<Vec<Coordinate>> {
+    let (from, to) = (coords.get(&edge.from)?, coords.get(&edge.to)?);
+    let mut line = Vec::with_capacity(edge.waypoints.len() + 2);
+    line.push(*from);
+    line.extend_from_slice(&edge.waypoints);
+    line.push(*to);
+    Some(line)
+}
 
-        // Géométrie réelle du tronçon, extrémités comprises.
-        let mut line = Vec::with_capacity(edge.waypoints.len() + 2);
-        line.push(*from);
-        line.extend_from_slice(&edge.waypoints);
-        line.push(*to);
-
-        let mut samples = 0.0;
-        let mut in_forest = 0.0;
-        let mut pressure = 0.0;
-
-        for pair in line.windows(2) {
-            let steps = ((haversine_km(pair[0], pair[1]) * 1000.0 / FOREST_SAMPLE_M).ceil() as usize)
-                .max(1);
-
-            for step in 0..steps {
-                let t = (step as f64 + 0.5) / steps as f64;
-                let lat = pair[0].lat + (pair[1].lat - pair[0].lat) * t;
-                let lon = pair[0].lon + (pair[1].lon - pair[0].lon) * t;
-
-                samples += 1.0;
-                if grid.is_forest(lat, lon) {
-                    in_forest += 1.0;
-                }
-                pressure += habitation.pressure(lat, lon);
-            }
+/// Points au milieu de pas d'au plus `step_m` le long de la ligne, au moins un
+/// par segment.
+fn samples_along(line: &[Coordinate], step_m: f64) -> Vec<Coordinate> {
+    let mut samples = Vec::new();
+    for pair in line.windows(2) {
+        let steps = ((haversine_km(pair[0], pair[1]) * 1000.0 / step_m).ceil() as usize).max(1);
+        for step in 0..steps {
+            let fraction = (step as f64 + 0.5) / steps as f64;
+            samples.push(Coordinate {
+                lat: pair[0].lat + (pair[1].lat - pair[0].lat) * fraction,
+                lon: pair[0].lon + (pair[1].lon - pair[0].lon) * fraction,
+            });
         }
-
-        edge.forest_ratio = if samples > 0.0 { in_forest / samples } else { 0.0 };
-        edge.habitation_pressure = if samples > 0.0 { pressure / samples } else { 0.0 };
     }
+    samples
 }
 
 // Pure function to create an edge record from node pair
