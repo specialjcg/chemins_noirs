@@ -269,22 +269,22 @@ update msg model =
                                 endWp =
                                     List.head (List.drop 1 model.waypoints) |> Maybe.withDefault { lat = 0, lon = 0 }
 
-                                ( wPop, wPaved, wForest ) =
+                                weights =
                                     if model.cheminNoir then
-                                        ( 5.0, 8.0, 2.0 )
+                                        cheminNoirWeights
 
                                     else
-                                        ( String.toFloat model.form.wPop |> Maybe.withDefault 1.5
-                                        , String.toFloat model.form.wPaved |> Maybe.withDefault 4.0
-                                        , String.toFloat model.form.wForest |> Maybe.withDefault 0.0
-                                        )
+                                        { pop = String.toFloat model.form.wPop |> Maybe.withDefault 1.5
+                                        , paved = String.toFloat model.form.wPaved |> Maybe.withDefault 4.0
+                                        , forest = String.toFloat model.form.wForest |> Maybe.withDefault 0.0
+                                        }
 
                                 request =
                                     { start = startWp
                                     , end = endWp
-                                    , wPop = wPop
-                                    , wPaved = wPaved
-                                    , wForest = wForest
+                                    , wPop = weights.pop
+                                    , wPaved = weights.paved
+                                    , wForest = weights.forest
                                     }
                             in
                             ( { model | pending = True, pendingSeconds = 0, error = Nothing }
@@ -2569,18 +2569,18 @@ loopFormToRequest cheminNoir form loopForm waypoints =
             let
                 weightsResult =
                     if cheminNoir then
-                        Ok ( 5.0, 8.0, 2.0 )
+                        Ok cheminNoirWeights
 
                     else
                         case ( String.toFloat form.wPop, String.toFloat form.wPaved, String.toFloat form.wForest ) of
-                            ( Just wPop, Just wPaved, Just wForest ) ->
-                                Ok ( wPop, wPaved, wForest )
+                            ( Just pop, Just paved, Just forest ) ->
+                                Ok { pop = pop, paved = paved, forest = forest }
 
                             _ ->
                                 Err "Poids invalides"
             in
             case weightsResult of
-                Ok ( wPop, wPaved, wForest ) ->
+                Ok weights ->
                     case String.toFloat loopForm.distanceKm of
                         Just distanceKm ->
                             case String.toFloat loopForm.toleranceKm of
@@ -2592,9 +2592,9 @@ loopFormToRequest cheminNoir form loopForm waypoints =
                                                 , targetDistanceKm = distanceKm
                                                 , distanceToleranceKm = toleranceKm
                                                 , candidateCount = max 1 candidateCount
-                                                , wPop = wPop
-                                                , wPaved = wPaved
-                                                , wForest = wForest
+                                                , wPop = weights.pop
+                                                , wPaved = weights.paved
+                                                , wForest = weights.forest
                                                 , maxTotalAscent = String.toFloat loopForm.maxAscentM
                                                 , minTotalAscent = String.toFloat loopForm.minAscentM
                                                 }
@@ -2661,17 +2661,33 @@ generateGpx route =
     header ++ String.concat points ++ footer
 
 
+{-| Poids d'une requête de tracé. -}
+type alias Weights =
+    { pop : Float
+    , paved : Float
+    , forest : Float
+    }
+
+
+{-| Le mode « chemin noir » cache les curseurs et embarque ses propres poids,
+dont un penchant pour la forêt mesuré à +8 points de couvert sur le GR31.
+-}
+cheminNoirWeights : Weights
+cheminNoirWeights =
+    { pop = 5.0
+    , paved = 8.0
+    , forest = 2.0
+    }
+
+
 multiPointRequest : Model -> MultiPointRouteRequest
 multiPointRequest model =
     if model.cheminNoir then
         { waypoints = model.waypoints
         , closeLoop = model.closeLoop
-        , wPop = 5.0
-        , wPaved = 8.0
-
-        -- Le mode « chemin noir » cache les curseurs : il embarque son propre
-        -- penchant pour la forêt, mesuré à +8 points de couvert sur le GR31.
-        , wForest = 2.0
+        , wPop = cheminNoirWeights.pop
+        , wPaved = cheminNoirWeights.paved
+        , wForest = cheminNoirWeights.forest
         , directLegs = directLegFlags model
         }
 
