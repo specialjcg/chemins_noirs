@@ -255,7 +255,6 @@
   --map-ring-end: var(--accent-terracotta);
   --map-ring-waypoint: var(--accent-brass);
 
-  --map-toggle-slopes: var(--accent-terracotta);
   --map-toggle-forests: var(--accent-forest);
   --map-toggle-population: var(--accent-rust);
   --map-population-sparse: var(--accent-brass-light);

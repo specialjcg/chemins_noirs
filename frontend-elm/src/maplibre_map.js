@@ -130,13 +130,6 @@ function ensureMap() {
           maxzoom: 19,
           attribution: IGN_ATTRIBUTION
         },
-        'ign-slopes': {
-          type: 'raster',
-          tiles: [ignWmtsUrl('GEOGRAPHICALGRIDSYSTEMS.SLOPES.MOUNTAIN', 'image/png')],
-          tileSize: 256,
-          maxzoom: 17,
-          attribution: IGN_ATTRIBUTION
-        },
         // Public forests (domaniales, communales…). Only served with the ONF
         // style on the PM_3_16 grid: zooms 3 to 16, overzoomed beyond.
         'ign-forests': {
@@ -468,9 +461,6 @@ function ensureMap() {
   const poiControl = createPoiControl();
   mapInstance.addControl(poiControl, 'top-right');
 
-  // Add IGN slope map toggle control (off by default)
-  mapInstance.addControl(createSlopesControl(), 'top-right');
-
   // Add public forests toggle control (off by default)
   mapInstance.addControl(createForestsControl(), 'top-right');
 
@@ -570,16 +560,6 @@ function createOverlayControl({ layer, source, icon, title, className, colorToke
 
 function rasterOverlayLayer(id, source, opacity) {
   return { id, type: 'raster', source, minzoom: 0, maxzoom: 22, paint: { 'raster-opacity': opacity } };
-}
-
-function createSlopesControl() {
-  return createOverlayControl({
-    layer: () => rasterOverlayLayer('ign-slopes-tiles', 'ign-slopes', 0.55),
-    icon: '📐',
-    title: 'Afficher/masquer la carte des pentes IGN (>30°)',
-    className: 'maplibregl-ctrl-slopes',
-    colorToken: '--map-toggle-slopes'
-  });
 }
 
 /** Public forests: where a route can cross freely, unlike private woods. */
