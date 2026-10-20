@@ -312,6 +312,9 @@ pub struct PolylineScore {
     /// Longueur pondérée par la densité bâtie des tronçons empruntés. Même
     /// lecture que `forest_km` : 0 km = aucun habitat le long du tracé.
     pub built_km: f64,
+    /// Longueur pondérée par la densité de population Insee
+    /// (`density_pressure`). 0 km = aucun habitant le long du tracé.
+    pub density_km: f64,
 }
 
 impl RouteEngine {
@@ -1158,6 +1161,7 @@ impl RouteEngine {
                     }
                     score.forest_km += step_km * edge.forest_ratio;
                     score.built_km += step_km * edge.habitation_pressure;
+                    score.density_km += step_km * edge.density_pressure;
                     // Charge this step at the snapped edge's rate, per km.
                     let per_km = self.edge_cost(edge, weights) / edge.length_km.max(1e-9);
                     score.cost += step_km * per_km;

@@ -81,7 +81,7 @@ fn engine_for(bbox: BoundingBox, pbf: &PathBuf, cache_dir: &PathBuf) -> Result<R
     if cache_path.exists() {
         if let Ok(graph) = GraphFile::read_from_path(&cache_path) {
             eprintln!("  graphe : cache ({} nœuds)", graph.nodes.len());
-            return RouteEngine::from_graph_file(graph).map_err(|e| e.to_string());
+            return engine_with_population(graph);
         }
     }
 
@@ -108,6 +108,21 @@ fn engine_for(bbox: BoundingBox, pbf: &PathBuf, cache_dir: &PathBuf) -> Result<R
 
     std::fs::create_dir_all(cache_dir).ok();
     graph.write_to_path(&cache_path).ok();
+    engine_with_population(graph)
+}
+
+/// Densité Insee, comme le serveur (`attach_population`). Jamais en cache :
+/// appliquée après lecture, sinon `density_pressure` reste à zéro.
+/// `POPULATION_GRID` désigne le CSV de `scripts/build_population_grid.sh`.
+fn engine_with_population(mut graph: GraphFile) -> Result<RouteEngine, String> {
+    let path = std::env::var("POPULATION_GRID").unwrap_or_else(|_| "data/population/insee_200m.csv".to_string());
+    match backend::population::PopulationGrid::load(std::path::Path::new(&path)) {
+        Ok(grid) => {
+            eprintln!("  population Insee : {} carreaux lus depuis {path}", grid.len());
+            backend::graph::apply_population(&mut graph, &grid);
+        }
+        Err(err) => eprintln!("  population Insee INDISPONIBLE ({err}) — densité sans objet"),
+    }
     RouteEngine::from_graph_file(graph).map_err(|e| e.to_string())
 }
 
@@ -153,10 +168,10 @@ fn main() -> Result<(), String> {
 
     if as_json {
         println!(
-            r#"{{"length_km":{:.3},"measured_km":{:.3},"unmatched_km":{:.3},"paved_km":{:.3},"trail_km":{:.3},"dirt_km":{:.3},"forest_km":{:.3},"built_km":{:.3},"cost":{:.3},"forest_pct":{:.1},"paved_pct":{:.1}}}"#,
+            r#"{{"length_km":{:.3},"measured_km":{:.3},"unmatched_km":{:.3},"paved_km":{:.3},"trail_km":{:.3},"dirt_km":{:.3},"forest_km":{:.3},"built_km":{:.3},"density_km":{:.3},"cost":{:.3},"forest_pct":{:.1},"paved_pct":{:.1}}}"#,
             score.length_km, mesure_km, score.unmatched_km,
             score.paved_km, score.trail_km, score.dirt_km,
-            score.forest_km, score.built_km, score.cost,
+            score.forest_km, score.built_km, score.density_km, score.cost,
             part(score.forest_km), part(score.paved_km),
         );
     } else {
@@ -170,9 +185,10 @@ fn main() -> Result<(), String> {
         println!("  chemin           {:8.2} km  ({:.1} %)", score.trail_km, part(score.trail_km));
         println!("  terre            {:8.2} km  ({:.1} %)", score.dirt_km, part(score.dirt_km));
         println!("  densité bâtie    {:8.2} km·hab", score.built_km);
+        println!("  densité Insee    {:8.2} km·hab", score.density_km);
         println!();
-        println!("coût pondéré       {:8.2}  (w_pop {}, w_paved {}, w_forest {})",
-            score.cost, weights.population, weights.paved, weights.forest);
+        println!("coût pondéré       {:8.2}  (w_pop {}, w_paved {}, w_forest {}, w_density {})",
+            score.cost, weights.population, weights.paved, weights.forest, weights.density);
     }
 
     Ok(())
