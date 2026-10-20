@@ -173,6 +173,7 @@ view model =
                 , inputField "Éviter population" model.form.wPop PopWeightChanged False
                 , inputField "Éviter bitume" model.form.wPaved PavedWeightChanged False
                 , inputField "Chercher la forêt" model.form.wForest ForestWeightChanged False
+                , inputField "Éviter densité (Insee)" model.form.wDensity DensityWeightChanged False
                 ]
 
           else

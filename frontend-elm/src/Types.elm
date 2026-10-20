@@ -105,6 +105,7 @@ type alias RouteForm =
     , wPop : String
     , wPaved : String
     , wForest : String
+    , wDensity : String
     }
 
 
@@ -140,6 +141,9 @@ defaultRouteForm =
     -- 0 par défaut : le critère forêt s'ajoute à la demande, il ne change pas
     -- le comportement de ceux qui ne le règlent pas.
     , wForest = "0.0"
+
+    -- 0 par défaut, comme la forêt : la densité Insee se demande.
+    , wDensity = "0.0"
     }
 
 
@@ -281,6 +285,7 @@ type Msg
     | ElevationCursorMoved Int
     | ToggleElevationBand
     | ForestWeightChanged String
+    | DensityWeightChanged String
     | ToggleReferenceRoute Int
     | ToggleFolderReferences String
     | RemoveReferenceRoutes (List Int)
@@ -359,6 +364,7 @@ type alias RouteRequest =
     , wPop : Float
     , wPaved : Float
     , wForest : Float
+    , wDensity : Float
     }
 
 
@@ -368,6 +374,7 @@ type alias MultiPointRouteRequest =
     , wPop : Float
     , wPaved : Float
     , wForest : Float
+    , wDensity : Float
     , directLegs : List Bool
     }
 
@@ -380,6 +387,7 @@ type alias LoopRouteRequest =
     , wPop : Float
     , wPaved : Float
     , wForest : Float
+    , wDensity : Float
     , maxTotalAscent : Maybe Float
     , minTotalAscent : Maybe Float
     }

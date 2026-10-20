@@ -189,6 +189,18 @@ update msg model =
             , resetLoopCandidatesCmd model
             )
 
+        DensityWeightChanged val ->
+            let
+                form =
+                    model.form
+
+                newForm =
+                    { form | wDensity = val }
+            in
+            ( { model | form = newForm }
+            , resetLoopCandidatesCmd model
+            )
+
         LoopDistanceChanged val ->
             let
                 loopForm =
@@ -277,6 +289,7 @@ update msg model =
                                         { pop = String.toFloat model.form.wPop |> Maybe.withDefault 1.5
                                         , paved = String.toFloat model.form.wPaved |> Maybe.withDefault 4.0
                                         , forest = String.toFloat model.form.wForest |> Maybe.withDefault 0.0
+                                        , density = String.toFloat model.form.wDensity |> Maybe.withDefault 0.0
                                         }
 
                                 request =
@@ -285,6 +298,7 @@ update msg model =
                                     , wPop = weights.pop
                                     , wPaved = weights.paved
                                     , wForest = weights.forest
+                                    , wDensity = weights.density
                                     }
                             in
                             ( { model | pending = True, pendingSeconds = 0, error = Nothing }
@@ -2572,9 +2586,9 @@ loopFormToRequest cheminNoir form loopForm waypoints =
                         Ok cheminNoirWeights
 
                     else
-                        case ( String.toFloat form.wPop, String.toFloat form.wPaved, String.toFloat form.wForest ) of
-                            ( Just pop, Just paved, Just forest ) ->
-                                Ok { pop = pop, paved = paved, forest = forest }
+                        case ( ( String.toFloat form.wPop, String.toFloat form.wPaved ), ( String.toFloat form.wForest, String.toFloat form.wDensity ) ) of
+                            ( ( Just pop, Just paved ), ( Just forest, Just density ) ) ->
+                                Ok { pop = pop, paved = paved, forest = forest, density = density }
 
                             _ ->
                                 Err "Poids invalides"
@@ -2595,6 +2609,7 @@ loopFormToRequest cheminNoir form loopForm waypoints =
                                                 , wPop = weights.pop
                                                 , wPaved = weights.paved
                                                 , wForest = weights.forest
+                                                , wDensity = weights.density
                                                 , maxTotalAscent = String.toFloat loopForm.maxAscentM
                                                 , minTotalAscent = String.toFloat loopForm.minAscentM
                                                 }
@@ -2666,17 +2681,20 @@ type alias Weights =
     { pop : Float
     , paved : Float
     , forest : Float
+    , density : Float
     }
 
 
 {-| Le mode « chemin noir » cache les curseurs et embarque ses propres poids,
-dont un penchant pour la forêt mesuré à +8 points de couvert sur le GR31.
+dont un penchant pour la forêt mesuré à +8 points de couvert sur le GR31, et
+l'évitement des carreaux Insee habités.
 -}
 cheminNoirWeights : Weights
 cheminNoirWeights =
     { pop = 5.0
     , paved = 8.0
     , forest = 2.0
+    , density = 3.0
     }
 
 
@@ -2688,6 +2706,7 @@ multiPointRequest model =
         , wPop = cheminNoirWeights.pop
         , wPaved = cheminNoirWeights.paved
         , wForest = cheminNoirWeights.forest
+        , wDensity = cheminNoirWeights.density
         , directLegs = directLegFlags model
         }
 
@@ -2697,6 +2716,7 @@ multiPointRequest model =
         , wPop = String.toFloat model.form.wPop |> Maybe.withDefault 1.0
         , wPaved = String.toFloat model.form.wPaved |> Maybe.withDefault 1.0
         , wForest = String.toFloat model.form.wForest |> Maybe.withDefault 0.0
+        , wDensity = String.toFloat model.form.wDensity |> Maybe.withDefault 0.0
         , directLegs = directLegFlags model
         }
 
