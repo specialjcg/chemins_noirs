@@ -15,6 +15,7 @@ pub mod loops;
 pub mod models;
 pub mod partial_graph;
 pub mod poi;
+pub mod population;
 pub mod routing;
 pub mod saved_routes_handlers;
 
