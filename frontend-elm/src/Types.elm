@@ -95,7 +95,7 @@ type alias Model =
     -- Longueur d'une étape (km) pour le découpage en GPX par étape.
     , stageKm : String
     -- Mode « Par étapes » : un A→B découpé et enregistré à chaque calcul.
-    -- Le tracé reste en PointToPoint (ou MultiPoint après insertion d'un point).
+    -- Le tracé est calculé en MultiPoint : deux points ou plus.
     , byStages : Bool
     , mapSearch : String
     , mapSearchResults : List GeoResult

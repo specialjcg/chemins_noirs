@@ -1377,9 +1377,11 @@ updateModel msg model =
             ( { model | stageKm = val }, Cmd.none )
 
         SelectStagesMode ->
+            -- Multi-points : autant d'étapes intermédiaires que de clics,
+            -- deux points suffisant pour un simple A→B.
             let
                 ( next, cmd ) =
-                    updateModel (ToggleRouteMode PointToPoint) model
+                    updateModel (ToggleRouteMode MultiPoint) model
             in
             ( { next | byStages = True }, cmd )
 
