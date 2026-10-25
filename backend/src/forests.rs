@@ -158,20 +158,72 @@ fn to_forest(feature: Feature) -> Option<Forest> {
     })
 }
 
-/// Forêts d'une réponse GeoJSON, les plus grandes d'abord.
+/// Les domaniales d'abord : ce sont les forêts réputées (Bercé, Tronçais,
+/// Fontainebleau…), l'IGN ne disant rien de la notoriété.
+fn is_domaniale(forest: &Forest) -> bool {
+    forest.nature.as_deref().is_some_and(|n| fold(n).contains("domaniale"))
+}
+
+/// Forêts d'une réponse GeoJSON : domaniales d'abord, puis les plus grandes.
 fn parse(collection: FeatureCollection) -> Vec<Forest> {
     let mut forests: Vec<Forest> = collection.features.into_iter().filter_map(to_forest).collect();
-    forests.sort_by(|a, b| b.area_ha.total_cmp(&a.area_ha));
+    forests.sort_by(|a, b| is_domaniale(b).cmp(&is_domaniale(a)).then(b.area_ha.total_cmp(&a.area_ha)));
     forests.truncate(MAX_RESULTS);
     forests
 }
 
-/// Cherche les forêts publiques dont le nom contient `query`.
-pub fn search(query: &str) -> Result<Vec<Forest>, ForestError> {
-    let pattern = ilike_pattern(query).ok_or(ForestError::QueryTooShort)?;
-    let filter = format!("toponyme ILIKE '{pattern}'");
-    let client = reqwest::blocking::Client::builder().timeout(WFS_TIMEOUT).build()?;
-    let collection: FeatureCollection = client
+/// Minuscules sans accents, pour comparer un nom à ce qui a été tapé.
+pub fn fold(text: &str) -> String {
+    text.chars()
+        .flat_map(|c| c.to_lowercase())
+        .map(|c| match c {
+            'à' | 'â' | 'ä' => "a".to_string(),
+            'é' | 'è' | 'ê' | 'ë' => "e".to_string(),
+            'î' | 'ï' => "i".to_string(),
+            'ô' | 'ö' => "o".to_string(),
+            'ù' | 'û' | 'ü' => "u".to_string(),
+            'ç' => "c".to_string(),
+            'œ' => "oe".to_string(),
+            other => other.to_string(),
+        })
+        .collect()
+}
+
+/// Noms distincts qui contiennent vraiment `query`, accents ignorés.
+///
+/// Le motif `ILIKE` remplace chaque voyelle par un joker et ramène des
+/// centaines de faux amis (« bercé » → `%b_r__%` → Biros, Buremont…) : ce
+/// second filtre ne garde que les vrais.
+fn matching_names(names: impl IntoIterator<Item = String>, query: &str) -> Vec<String> {
+    let wanted = fold(query.trim());
+    let mut kept: Vec<String> = names.into_iter().filter(|name| fold(name).contains(&wanted)).collect();
+    kept.sort();
+    kept.dedup();
+    kept
+}
+
+#[derive(Deserialize)]
+struct NameCollection {
+    features: Vec<NameFeature>,
+}
+
+#[derive(Deserialize)]
+struct NameFeature {
+    properties: NameProperties,
+}
+
+#[derive(Deserialize)]
+struct NameProperties {
+    toponyme: Option<String>,
+}
+
+fn wfs_get<T: serde::de::DeserializeOwned>(
+    client: &reqwest::blocking::Client,
+    filter: &str,
+    properties: &str,
+    count: &str,
+) -> Result<T, ForestError> {
+    Ok(client
         .get(WFS_URL)
         .query(&[
             ("SERVICE", "WFS"),
@@ -179,15 +231,35 @@ pub fn search(query: &str) -> Result<Vec<Forest>, ForestError> {
             ("REQUEST", "GetFeature"),
             ("TYPENAMES", WFS_LAYER),
             ("SRSNAME", "urn:ogc:def:crs:OGC:1.3:CRS84"),
-            ("CQL_FILTER", filter.as_str()),
-            ("PROPERTYNAME", "geometrie,toponyme,nature"),
-            // Large : le tri par taille se fait ici, après réception.
-            ("COUNT", "60"),
+            ("CQL_FILTER", filter),
+            ("PROPERTYNAME", properties),
+            ("COUNT", count),
             ("outputFormat", "application/json"),
         ])
         .send()?
         .error_for_status()?
-        .json()?;
+        .json()?)
+}
+
+/// Cherche les forêts publiques dont le nom contient `query`.
+///
+/// Deux requêtes : les noms seuls d'abord, légers, filtrés ici sans accents ;
+/// puis la géométrie des seuls noms retenus.
+pub fn search(query: &str) -> Result<Vec<Forest>, ForestError> {
+    let pattern = ilike_pattern(query).ok_or(ForestError::QueryTooShort)?;
+    let client = reqwest::blocking::Client::builder().timeout(WFS_TIMEOUT).build()?;
+
+    let names: NameCollection = wfs_get(&client, &format!("toponyme ILIKE '{pattern}'"), "toponyme", "1000")?;
+    let mut names = matching_names(names.features.into_iter().filter_map(|f| f.properties.toponyme), query);
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Au-delà, la liste ne se lit plus et l'URL s'allonge pour rien.
+    names.truncate(4 * MAX_RESULTS);
+
+    let quoted: Vec<String> = names.iter().map(|n| format!("'{}'", n.replace('\'', "''"))).collect();
+    let filter = format!("toponyme IN ({})", quoted.join(","));
+    let collection: FeatureCollection = wfs_get(&client, &filter, "geometrie,toponyme,nature", "200")?;
     Ok(parse(collection))
 }
 
@@ -227,6 +299,18 @@ mod tests {
     }
 
     #[test]
+    fn only_names_really_containing_the_query_are_kept() {
+        let names = ["Forêt Domaniale de Bercé", "Forêt Domaniale du Biros", "Forêt Domaniale de Buremont", "Forêt Domaniale de Bercé"]
+            .map(String::from);
+        assert_eq!(matching_names(names, "berce"), vec!["Forêt Domaniale de Bercé".to_string()]);
+    }
+
+    #[test]
+    fn fold_drops_accents_and_case() {
+        assert_eq!(fold("Bellême Œuvre Ç"), "belleme oeuvre c");
+    }
+
+    #[test]
     fn pattern_rejects_short_queries() {
         assert_eq!(ilike_pattern(" ab "), None);
     }
@@ -242,18 +326,21 @@ mod tests {
     }
 
     #[test]
-    fn biggest_parcel_wins_and_results_are_sorted_by_area() {
+    fn domaniales_first_then_biggest_parcel_wins() {
         let json = r#"{"features":[
           {"geometry":{"type":"Polygon","coordinates":[[[0,48],[0.01,48],[0.01,48.01],[0,48.01],[0,48]]]},
            "properties":{"toponyme":"Petite","nature":"Forêt communale"}},
+          {"geometry":{"type":"Polygon","coordinates":[[[3,48],[3.005,48],[3.005,48.005],[3,48.005],[3,48]]]},
+           "properties":{"toponyme":"Réputée","nature":"Forêt domaniale"}},
           {"geometry":{"type":"MultiPolygon","coordinates":[
              [[[1,48],[1.001,48],[1.001,48.001],[1,48.001],[1,48]]],
              [[[2,48],[2.1,48],[2.1,48.1],[2,48.1],[2,48]]]]},
            "properties":{"toponyme":"Grande","nature":"Forêt domaniale"}}]}"#;
         let forests = parse(serde_json::from_str(json).unwrap());
+        // « Réputée », domaniale, passe devant la communale pourtant plus grande.
+        assert_eq!(forests.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["Grande", "Réputée", "Petite"]);
         assert_eq!(forests[0].name, "Grande");
         assert!((forests[0].lon - 2.04).abs() < 0.05 && (forests[0].lat - 48.04).abs() < 0.05);
         assert_eq!(forests[0].bbox, [1.0, 48.0, 2.1, 48.1]);
-        assert_eq!(forests[1].name, "Petite");
     }
 }
