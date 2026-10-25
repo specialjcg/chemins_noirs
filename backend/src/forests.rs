@@ -189,14 +189,38 @@ pub fn fold(text: &str) -> String {
         .collect()
 }
 
-/// Noms distincts qui contiennent vraiment `query`, accents ignorés.
+/// Mots qui ne distinguent aucune forêt : « Forêt de Lyons » doit trouver
+/// « Forêt Domaniale de Lyons ».
+const GENERIC_WORDS: &[&str] = &[
+    "foret", "forets", "bois", "domaniale", "communale", "departementale", "indivise", "publique",
+    "massif", "de", "du", "des", "d", "la", "le", "les", "l", "en", "et",
+];
+
+/// Mots significatifs, sans accents : apostrophes (droite ou typographique)
+/// et tirets séparent les mots, « d’Eawy » donnant « eawy ».
+pub fn significant_words(text: &str) -> Vec<String> {
+    fold(text)
+        .split(|c: char| c.is_whitespace() || matches!(c, '\'' | '’' | '-'))
+        .filter(|w| !w.is_empty() && !GENERIC_WORDS.contains(w))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Noms distincts contenant chacun des mots significatifs de `query`,
+/// accents ignorés.
 ///
 /// Le motif `ILIKE` remplace chaque voyelle par un joker et ramène des
 /// centaines de faux amis (« bercé » → `%b_r__%` → Biros, Buremont…) : ce
 /// second filtre ne garde que les vrais.
 fn matching_names(names: impl IntoIterator<Item = String>, query: &str) -> Vec<String> {
-    let wanted = fold(query.trim());
-    let mut kept: Vec<String> = names.into_iter().filter(|name| fold(name).contains(&wanted)).collect();
+    let wanted = significant_words(query);
+    let mut kept: Vec<String> = names
+        .into_iter()
+        .filter(|name| {
+            let words = significant_words(name);
+            wanted.iter().all(|w| words.iter().any(|n| n.contains(w.as_str())))
+        })
+        .collect();
     kept.sort();
     kept.dedup();
     kept
@@ -246,7 +270,10 @@ fn wfs_get<T: serde::de::DeserializeOwned>(
 /// Deux requêtes : les noms seuls d'abord, légers, filtrés ici sans accents ;
 /// puis la géométrie des seuls noms retenus.
 pub fn search(query: &str) -> Result<Vec<Forest>, ForestError> {
-    let pattern = ilike_pattern(query).ok_or(ForestError::QueryTooShort)?;
+    // Le mot le plus long filtre le mieux côté IGN ; les autres sont
+    // vérifiés ici.
+    let longest = significant_words(query).into_iter().max_by_key(|w| w.chars().count()).unwrap_or_default();
+    let pattern = ilike_pattern(&longest).ok_or(ForestError::QueryTooShort)?;
     let client = reqwest::blocking::Client::builder().timeout(WFS_TIMEOUT).build()?;
 
     let names: NameCollection = wfs_get(&client, &format!("toponyme ILIKE '{pattern}'"), "toponyme", "1000")?;
@@ -303,6 +330,14 @@ mod tests {
         let names = ["Forêt Domaniale de Bercé", "Forêt Domaniale du Biros", "Forêt Domaniale de Buremont", "Forêt Domaniale de Bercé"]
             .map(String::from);
         assert_eq!(matching_names(names, "berce"), vec!["Forêt Domaniale de Bercé".to_string()]);
+    }
+
+    #[test]
+    fn generic_words_and_typographic_apostrophes_do_not_block_a_match() {
+        let names = ["Forêt Domaniale de Lyons", "Forêt Domaniale d'Eawy", "Forêt Communale de Lyons-la-Forêt"].map(String::from);
+        assert_eq!(matching_names(names.clone(), "Forêt de Lyons").len(), 2);
+        assert_eq!(matching_names(names.clone(), "forêt d’Eawy"), vec!["Forêt Domaniale d'Eawy".to_string()]);
+        assert_eq!(significant_words("Forêt Domaniale"), Vec::<String>::new());
     }
 
     #[test]
