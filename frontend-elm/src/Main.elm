@@ -21,6 +21,7 @@ import Json.Decode
 import Json.Encode
 import Ports
 import Set
+import Stages
 import Task
 import Time
 import Types exposing (..)
@@ -63,6 +64,52 @@ init _ =
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
+    case msg of
+        Submit ->
+            if stagesActive model && String.isEmpty (String.trim model.saveRouteName) then
+                ( { model | error = Just "Donne un nom au tracé pour l'enregistrer par étapes" }
+                , Cmd.none
+                )
+
+            else
+                withStageMarkers model (updateModel msg model)
+
+        RouteFetched (Ok _) ->
+            let
+                ( next, cmd ) =
+                    withStageMarkers model (updateModel msg model)
+            in
+            if stagesActive next then
+                ( { next | pending = True }, Cmd.batch [ cmd, saveStagesCmd next ] )
+
+            else
+                ( next, cmd )
+
+        _ ->
+            withStageMarkers model (updateModel msg model)
+
+
+{-| Les bornes d'étape suivent le tracé, d'où qu'il vienne (calcul, import,
+dessin libre, itinéraire chargé). `==` court-circuite sur la référence.
+-}
+withStageMarkers : Model -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+withStageMarkers before ( next, cmd ) =
+    if
+        next.lastResponse
+            == before.lastResponse
+            && next.stageKm
+            == before.stageKm
+            && stagesActive next
+            == stagesActive before
+    then
+        ( next, cmd )
+
+    else
+        ( next, Cmd.batch [ cmd, stageMarkersCmd next ] )
+
+
+updateModel : Msg -> Model -> ( Model, Cmd Msg )
+updateModel msg model =
     case msg of
         PopWeightChanged val ->
             let
@@ -282,15 +329,16 @@ update msg model =
                                     List.head (List.drop 1 model.waypoints) |> Maybe.withDefault { lat = 0, lon = 0 }
 
                                 weights =
-                                    if model.cheminNoir then
-                                        cheminNoirWeights
+                                    case presetWeights model of
+                                        Just preset ->
+                                            preset
 
-                                    else
-                                        { pop = String.toFloat model.form.wPop |> Maybe.withDefault 1.5
-                                        , paved = String.toFloat model.form.wPaved |> Maybe.withDefault 4.0
-                                        , forest = String.toFloat model.form.wForest |> Maybe.withDefault 0.0
-                                        , density = String.toFloat model.form.wDensity |> Maybe.withDefault 0.0
-                                        }
+                                        Nothing ->
+                                            { pop = String.toFloat model.form.wPop |> Maybe.withDefault 1.5
+                                            , paved = String.toFloat model.form.wPaved |> Maybe.withDefault 4.0
+                                            , forest = String.toFloat model.form.wForest |> Maybe.withDefault 0.0
+                                            , density = String.toFloat model.form.wDensity |> Maybe.withDefault 0.0
+                                            }
 
                                 request =
                                     { start = startWp
@@ -312,7 +360,7 @@ update msg model =
                             )
 
                         else
-                            case loopFormToRequest model.cheminNoir model.form model.loopForm model.waypoints of
+                            case loopFormToRequest (presetWeights model) model.form model.loopForm model.waypoints of
                                 Ok request ->
                                     ( { model
                                         | pending = True
@@ -774,6 +822,7 @@ update msg model =
         ToggleRouteMode mode ->
             ( { model
                 | routeMode = mode
+                , byStages = False
                 , waypoints = []
                 , directLegs = Set.empty
                 , lastResponse = Nothing
@@ -1048,31 +1097,10 @@ update msg model =
         RouteSaved result ->
             case result of
                 Ok savedRoute ->
-                    let
-                        -- Une mise à jour renvoie une ligne déjà présente :
-                        -- l'empiler afficherait l'itinéraire deux fois.
-                        known =
-                            List.any (\r -> r.id == savedRoute.id) model.savedRoutes
-
-                        savedRoutes =
-                            if known then
-                                List.map
-                                    (\r ->
-                                        if r.id == savedRoute.id then
-                                            savedRoute
-
-                                        else
-                                            r
-                                    )
-                                    model.savedRoutes
-
-                            else
-                                savedRoute :: model.savedRoutes
-                    in
                     ( { model
                         | pending = False
                         , error = Nothing
-                        , savedRoutes = savedRoutes
+                        , savedRoutes = upsertSavedRoute savedRoute model.savedRoutes
 
                         -- Ce qui vient d'être écrit devient l'itinéraire chargé,
                         -- pour que la retouche suivante le reprenne au lieu d'en
@@ -1212,6 +1240,29 @@ update msg model =
                     , Cmd.none
                     )
 
+        AskDeleteFolder folder ->
+            ( { model | confirmDeleteFolder = Just folder }, Cmd.none )
+
+        CancelDeleteFolder ->
+            ( { model | confirmDeleteFolder = Nothing }, Cmd.none )
+
+        ConfirmDeleteFolder folder ->
+            ( { model | confirmDeleteFolder = Nothing, pending = True, pendingSeconds = 0 }
+            , Api.deleteFolder folder FolderDeleted
+            )
+
+        FolderDeleted result ->
+            case result of
+                Ok _ ->
+                    ( { model | pending = False, error = Nothing }
+                    , Api.listSavedRoutes SavedRoutesLoaded
+                    )
+
+                Err error ->
+                    ( { model | pending = False, error = Just (httpErrorToString error) }
+                    , Cmd.none
+                    )
+
         ToggleFavorite id ->
             ( { model | pending = True, pendingSeconds = 0 }
             , Api.toggleFavorite id FavoriteToggled
@@ -1290,12 +1341,63 @@ update msg model =
                     ( model
                     , Ports.downloadGpx
                         { filename = "chemins-noirs.gpx"
-                        , content = generateGpx route
+                        , content = Stages.gpx "Chemins Noirs" route.path (routeElevations route)
                         }
                     )
 
                 Nothing ->
                     ( model, Cmd.none )
+
+        ExportStageGpx index ->
+            case model.lastResponse of
+                Just route ->
+                    case routeStages model route |> List.drop index |> List.head of
+                        Just stage ->
+                            let
+                                number =
+                                    String.padLeft 2 '0' (String.fromInt (index + 1))
+                            in
+                            ( model
+                            , Ports.downloadGpx
+                                { filename = stageName (stagePrefix model) (index + 1) ++ ".gpx"
+                                , content =
+                                    Stages.gpx ("Chemins Noirs — étape " ++ number)
+                                        (Stages.slice stage route.path)
+                                        (Stages.slice stage (routeElevations route))
+                                }
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        StageKmChanged val ->
+            ( { model | stageKm = val }, Cmd.none )
+
+        SelectStagesMode ->
+            let
+                ( next, cmd ) =
+                    updateModel (ToggleRouteMode PointToPoint) model
+            in
+            ( { next | byStages = True }, cmd )
+
+        StageSaved result ->
+            case result of
+                Ok savedRoute ->
+                    ( { model
+                        | pending = False
+                        , savedRoutes = upsertSavedRoute savedRoute model.savedRoutes
+                        , openFolders = Set.insert (folderKey savedRoute) model.openFolders
+                      }
+                    , Cmd.none
+                    )
+
+                Err error ->
+                    ( { model | pending = False, error = Just (httpErrorToString error) }
+                    , Cmd.none
+                    )
 
         CopyShareLink ->
             let
@@ -1405,6 +1507,16 @@ update msg model =
         ToggleCheminNoir ->
             ( { model | cheminNoir = not model.cheminNoir }
             , Cmd.none
+            )
+
+        ToggleMaxForest ->
+            ( { model | maxForest = not model.maxForest }
+            , resetLoopCandidatesCmd model
+            )
+
+        ForestBoostChanged val ->
+            ( { model | forestBoost = val }
+            , resetLoopCandidatesCmd model
             )
 
         MapSearchChanged val ->
@@ -2576,22 +2688,23 @@ applySavedRoute model route originalWaypoints =
     }
 
 
-loopFormToRequest : Bool -> RouteForm -> LoopForm -> List Coordinate -> Result String LoopRouteRequest
-loopFormToRequest cheminNoir form loopForm waypoints =
+loopFormToRequest : Maybe Weights -> RouteForm -> LoopForm -> List Coordinate -> Result String LoopRouteRequest
+loopFormToRequest preset form loopForm waypoints =
     case List.head waypoints of
         Just start ->
             let
                 weightsResult =
-                    if cheminNoir then
-                        Ok cheminNoirWeights
+                    case preset of
+                        Just weights ->
+                            Ok weights
 
-                    else
-                        case ( ( String.toFloat form.wPop, String.toFloat form.wPaved ), ( String.toFloat form.wForest, String.toFloat form.wDensity ) ) of
-                            ( ( Just pop, Just paved ), ( Just forest, Just density ) ) ->
-                                Ok { pop = pop, paved = paved, forest = forest, density = density }
+                        Nothing ->
+                            case ( ( String.toFloat form.wPop, String.toFloat form.wPaved ), ( String.toFloat form.wForest, String.toFloat form.wDensity ) ) of
+                                ( ( Just pop, Just paved ), ( Just forest, Just density ) ) ->
+                                    Ok { pop = pop, paved = paved, forest = forest, density = density }
 
-                            _ ->
-                                Err "Poids invalides"
+                                _ ->
+                                    Err "Poids invalides"
             in
             case weightsResult of
                 Ok weights ->
@@ -2630,52 +2743,6 @@ loopFormToRequest cheminNoir form loopForm waypoints =
             Err "Placez un point de départ sur la carte"
 
 
-generateGpx : RouteResponse -> String
-generateGpx route =
-    let
-        header =
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-                ++ "<gpx version=\"1.1\" creator=\"Chemins Noirs\"\n"
-                ++ "  xmlns=\"http://www.topografix.com/GPX/1/1\">\n"
-                ++ "  <trk>\n"
-                ++ "    <name>Chemins Noirs</name>\n"
-                ++ "    <trkseg>\n"
-
-        elevations =
-            route.elevationProfile
-                |> Maybe.map .elevations
-                |> Maybe.withDefault []
-
-        points =
-            List.indexedMap
-                (\i coord ->
-                    let
-                        ele =
-                            elevations
-                                |> List.drop i
-                                |> List.head
-                                |> Maybe.andThen identity
-                                |> Maybe.map (\e -> "        <ele>" ++ String.fromFloat e ++ "</ele>\n")
-                                |> Maybe.withDefault ""
-                    in
-                    "      <trkpt lat=\""
-                        ++ String.fromFloat coord.lat
-                        ++ "\" lon=\""
-                        ++ String.fromFloat coord.lon
-                        ++ "\">\n"
-                        ++ ele
-                        ++ "      </trkpt>\n"
-                )
-                route.path
-
-        footer =
-            "    </trkseg>\n"
-                ++ "  </trk>\n"
-                ++ "</gpx>\n"
-    in
-    header ++ String.concat points ++ footer
-
-
 {-| Poids d'une requête de tracé. -}
 type alias Weights =
     { pop : Float
@@ -2698,27 +2765,195 @@ cheminNoirWeights =
     }
 
 
-multiPointRequest : Model -> MultiPointRouteRequest
-multiPointRequest model =
+{-| Poids imposés par le mode chemin noir, `Nothing` hors de ce mode (les
+curseurs décident). « Max forêt » ne remplace que le poids forêt.
+-}
+presetWeights : Model -> Maybe Weights
+presetWeights model =
     if model.cheminNoir then
-        { waypoints = model.waypoints
-        , closeLoop = model.closeLoop
-        , wPop = cheminNoirWeights.pop
-        , wPaved = cheminNoirWeights.paved
-        , wForest = cheminNoirWeights.forest
-        , wDensity = cheminNoirWeights.density
-        , directLegs = directLegFlags model
-        }
+        if model.maxForest then
+            Just
+                { cheminNoirWeights
+                    | forest =
+                        String.toFloat model.forestBoost
+                            |> Maybe.withDefault cheminNoirWeights.forest
+                }
+
+        else
+            Just cheminNoirWeights
 
     else
-        { waypoints = model.waypoints
-        , closeLoop = model.closeLoop
-        , wPop = String.toFloat model.form.wPop |> Maybe.withDefault 1.0
-        , wPaved = String.toFloat model.form.wPaved |> Maybe.withDefault 1.0
-        , wForest = String.toFloat model.form.wForest |> Maybe.withDefault 0.0
-        , wDensity = String.toFloat model.form.wDensity |> Maybe.withDefault 0.0
-        , directLegs = directLegFlags model
-        }
+        Nothing
+
+
+{-| Étapes du dernier tracé ; longueur invalide → une seule étape. -}
+routeStages : Model -> RouteResponse -> List Stages.Stage
+routeStages model route =
+    Stages.split (String.toFloat model.stageKm |> Maybe.withDefault 0) route.path
+
+
+stageMarkersCmd : Model -> Cmd Msg
+stageMarkersCmd model =
+    case ( stagesActive model, model.lastResponse ) of
+        ( True, Just route ) ->
+            routeStages model route
+                |> List.indexedMap Tuple.pair
+                |> List.drop 1
+                |> List.filterMap
+                    (\( i, stage ) ->
+                        route.path
+                            |> List.drop stage.first
+                            |> List.head
+                            |> Maybe.map (\c -> { lat = c.lat, lon = c.lon, label = "É" ++ String.fromInt (i + 1) })
+                    )
+                |> Ports.setStageMarkers
+
+        _ ->
+            Ports.setStageMarkers []
+
+
+stagePrefix : Model -> String
+stagePrefix model =
+    case String.trim model.saveRouteName of
+        "" ->
+            "chemins-noirs"
+
+        name ->
+            name
+
+
+stageName : String -> Int -> String
+stageName prefix number =
+    prefix ++ "-etape-" ++ String.padLeft 2 '0' (String.fromInt number)
+
+
+{-| Enregistre le tracé complet sous `<nom>` et chaque étape sous
+`<nom>-etape-NN`, dans le dossier saisi ou à défaut un dossier `<nom>`.
+
+Un recalcul remplace : une ligne du même nom dans ce dossier est mise à jour,
+et les étapes en trop d'un découpage précédent plus long sont supprimées.
+-}
+saveStagesCmd : Model -> Cmd Msg
+saveStagesCmd model =
+    case model.lastResponse of
+        Just full ->
+            let
+                name =
+                    stagePrefix model
+
+                folder =
+                    folderInput model.saveRouteFolder |> Maybe.withDefault name
+
+                inFolder =
+                    List.filter (\r -> folderKey r == folder) model.savedRoutes
+
+                stages =
+                    routeStages model full
+
+                count =
+                    List.length stages
+
+                request itemName description waypoints =
+                    { name = itemName
+                    , description = description
+                    , tags = Nothing
+                    , folder = Just folder
+                    , originalWaypoints = waypoints
+                    }
+
+                upsert itemName req route toMsg =
+                    case List.filter (\r -> r.name == itemName) inFolder of
+                        existing :: _ ->
+                            Api.updateSavedRoute existing.id req route toMsg
+
+                        [] ->
+                            Api.saveRouteToDb req route toMsg
+
+                fullCmd =
+                    upsert name (saveRequestFrom model |> (\r -> { r | name = name, folder = Just folder })) full RouteSaved
+
+                stageCmd i stage =
+                    let
+                        itemName =
+                            stageName name (i + 1)
+
+                        route =
+                            Stages.route stage full
+
+                        ends =
+                            List.filterMap identity [ List.head route.path, List.head (List.reverse route.path) ]
+                    in
+                    upsert itemName
+                        (request itemName
+                            (Just ("Étape " ++ String.fromInt (i + 1) ++ "/" ++ String.fromInt count ++ " de " ++ name))
+                            (Just ends)
+                        )
+                        route
+                        StageSaved
+
+                kept =
+                    List.range 1 count |> List.map (stageName name)
+
+                obsolete =
+                    inFolder
+                        |> List.filter (\r -> String.startsWith (name ++ "-etape-") r.name && not (List.member r.name kept))
+                        |> List.map (\r -> Api.deleteSavedRoute r.id RouteDeleted)
+            in
+            Cmd.batch (fullCmd :: List.indexedMap stageCmd stages ++ obsolete)
+
+        Nothing ->
+            Cmd.none
+
+
+{-| Une mise à jour renvoie une ligne déjà présente : l'empiler afficherait
+l'itinéraire deux fois.
+-}
+upsertSavedRoute : SavedRoute -> List SavedRoute -> List SavedRoute
+upsertSavedRoute savedRoute routes =
+    if List.any (\r -> r.id == savedRoute.id) routes then
+        List.map
+            (\r ->
+                if r.id == savedRoute.id then
+                    savedRoute
+
+                else
+                    r
+            )
+            routes
+
+    else
+        savedRoute :: routes
+
+
+routeElevations : RouteResponse -> List (Maybe Float)
+routeElevations route =
+    route.elevationProfile
+        |> Maybe.map .elevations
+        |> Maybe.withDefault []
+
+
+multiPointRequest : Model -> MultiPointRouteRequest
+multiPointRequest model =
+    case presetWeights model of
+        Just weights ->
+            { waypoints = model.waypoints
+            , closeLoop = model.closeLoop
+            , wPop = weights.pop
+            , wPaved = weights.paved
+            , wForest = weights.forest
+            , wDensity = weights.density
+            , directLegs = directLegFlags model
+            }
+
+        Nothing ->
+            { waypoints = model.waypoints
+            , closeLoop = model.closeLoop
+            , wPop = String.toFloat model.form.wPop |> Maybe.withDefault 1.0
+            , wPaved = String.toFloat model.form.wPaved |> Maybe.withDefault 1.0
+            , wForest = String.toFloat model.form.wForest |> Maybe.withDefault 0.0
+            , wDensity = String.toFloat model.form.wDensity |> Maybe.withDefault 0.0
+            , directLegs = directLegFlags model
+            }
 
 
 directLegFlags : Model -> List Bool

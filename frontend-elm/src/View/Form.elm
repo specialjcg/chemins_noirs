@@ -49,7 +49,7 @@ view model =
                     [ input
                         [ type_ "radio"
                         , name "route-mode"
-                        , checked (model.routeMode == PointToPoint)
+                        , checked (model.routeMode == PointToPoint && not model.byStages)
                         , onClick (ToggleRouteMode PointToPoint)
                         ]
                         []
@@ -69,11 +69,21 @@ view model =
                     [ input
                         [ type_ "radio"
                         , name "route-mode"
-                        , checked (model.routeMode == MultiPoint)
+                        , checked (model.routeMode == MultiPoint && not model.byStages)
                         , onClick (ToggleRouteMode MultiPoint)
                         ]
                         []
                     , span [] [ text "Multi-points" ]
+                    ]
+                , label []
+                    [ input
+                        [ type_ "radio"
+                        , name "route-mode"
+                        , checked (stagesActive model)
+                        , onClick SelectStagesMode
+                        ]
+                        []
+                    , span [] [ text "Par étapes" ]
                     ]
                 ]
             ]
@@ -104,6 +114,16 @@ view model =
                     ]
                 ]
             ]
+        , if model.cheminNoir then
+            viewMaxForest model
+
+          else
+            text ""
+        , if stagesActive model then
+            viewByStages model
+
+          else
+            text ""
 
         -- Geocoding: centrer la carte
         , fieldset []
@@ -357,6 +377,67 @@ inputField label value msg isDisabled =
         ]
 
 
+{-| Mode « Par étapes » : le tracé est découpé et enregistré automatiquement,
+complet et étape par étape, dans le dossier saisi ou à défaut un dossier au nom du
+tracé. Le nom est partagé avec le formulaire d'enregistrement.
+-}
+viewByStages : Model -> Html Msg
+viewByStages model =
+    fieldset []
+        [ legend [] [ text "Étapes" ]
+        , inputField "Longueur d'étape (km)" model.stageKm StageKmChanged False
+        , inputField "Nom du tracé" model.saveRouteName SaveRouteNameChanged False
+        , inputField "Dossier (vide = nom du tracé)" model.saveRouteFolder SaveRouteFolderChanged False
+        ]
+
+
+{-| « Max forêt » : pousse le tracé sous les arbres en remplaçant le poids
+forêt du mode chemin noir (2) par la valeur du curseur.
+-}
+viewMaxForest : Model -> Html Msg
+viewMaxForest model =
+    div [ class "chemin-noir-toggle" ]
+        [ label [ class "toggle-label" ]
+            [ div [ class "toggle-switch" ]
+                [ input
+                    [ type_ "checkbox"
+                    , checked model.maxForest
+                    , onCheck (\_ -> ToggleMaxForest)
+                    , class "toggle-input"
+                    ]
+                    []
+                , span [ class "toggle-slider" ] []
+                ]
+            , div [ class "toggle-text" ]
+                [ span [ class "toggle-title" ] [ text "🌲 Max forêt" ]
+                , span [ class "toggle-desc" ]
+                    [ text
+                        (if model.maxForest then
+                            "Poids forêt " ++ model.forestBoost
+
+                         else
+                            "Inactif — poids forêt 2"
+                        )
+                    ]
+                ]
+            ]
+        , if model.maxForest then
+            input
+                [ type_ "range"
+                , Html.Attributes.min "2"
+                , Html.Attributes.max "30"
+                , step "1"
+                , value model.forestBoost
+                , onInput ForestBoostChanged
+                , class "forest-boost-range"
+                ]
+                []
+
+          else
+            text ""
+        ]
+
+
 {-| « De A à B en passant par la forêt de … » : nom tapé, forêt choisie.
 
 Le poids forêt garde ensuite le tracé sous les arbres ; ce champ ne fait que
@@ -576,7 +657,35 @@ viewFolder model key routes viewRoute =
                     )
                 ]
                 [ text "⧉" ]
+            , if key == "" then
+                text ""
+
+              else
+                button
+                    [ type_ "button"
+                    , class "action-delete"
+                    , onClick (AskDeleteFolder key)
+                    , title "Supprimer le dossier et tous ses itinéraires"
+                    ]
+                    [ text "🗑" ]
             ]
+        , if model.confirmDeleteFolder == Just key && key /= "" then
+            div [ class "route-folder-confirm", attribute "role" "alert" ]
+                [ span []
+                    [ text
+                        ("Supprimer définitivement les "
+                            ++ String.fromInt (List.length routes)
+                            ++ " itinéraires de « "
+                            ++ key
+                            ++ " » ?"
+                        )
+                    ]
+                , button [ type_ "button", class "btn-danger", onClick (ConfirmDeleteFolder key) ] [ text "Supprimer" ]
+                , button [ type_ "button", onClick CancelDeleteFolder ] [ text "Annuler" ]
+                ]
+
+          else
+            text ""
         , if open then
             div [ attribute "role" "list", attribute "aria-label" label ]
                 (List.concatMap

@@ -257,6 +257,23 @@ impl Database {
         Ok(())
     }
 
+    /// Delete every route filed in `folder`, returning how many went.
+    ///
+    /// A blank name matches nothing: routes without a folder are never
+    /// swept as a group.
+    pub async fn delete_folder(&self, folder: &str) -> Result<u64, DatabaseError> {
+        let Some(folder) = normalize_folder(Some(folder.to_string())) else {
+            return Ok(0);
+        };
+        let result = sqlx::query("DELETE FROM saved_routes WHERE folder = $1")
+            .bind(&folder)
+            .execute(&self.pool)
+            .await?;
+
+        tracing::info!("Folder {:?} deleted: {} route(s)", folder, result.rows_affected());
+        Ok(result.rows_affected())
+    }
+
     /// Update route favorite status
     pub async fn toggle_favorite(&self, id: i32) -> Result<SavedRoute, DatabaseError> {
         let route = sqlx::query_as::<_, SavedRoute>(
@@ -490,6 +507,34 @@ mod tests {
         // Verify it no longer exists
         let result = db.get_route(route_id).await;
         assert!(matches!(result, Err(DatabaseError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_delete_folder_keeps_other_folders() {
+        let (db, _container) = setup_test_db().await;
+
+        for (name, folder) in [("A1", Some("a")), ("A2", Some("a")), ("B1", Some("b")), ("Loose", None)] {
+            let saved = db
+                .save_route(create_test_route_request(name))
+                .await
+                .expect("Failed to save route");
+            db.set_folder(saved.id, folder.map(str::to_string))
+                .await
+                .expect("Failed to file route");
+        }
+
+        assert_eq!(db.delete_folder("a").await.expect("delete folder"), 2);
+        assert_eq!(db.delete_folder("  ").await.expect("blank folder"), 0);
+
+        let mut left: Vec<String> = db
+            .list_routes()
+            .await
+            .expect("Failed to list routes")
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        left.sort();
+        assert_eq!(left, vec!["B1".to_string(), "Loose".to_string()]);
     }
 
     #[tokio::test]

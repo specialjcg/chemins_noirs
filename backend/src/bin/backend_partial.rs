@@ -1177,6 +1177,7 @@ async fn main() {
         .route("/api/routes/:id", axum::routing::delete(saved_routes_handlers::delete_route))
         .route("/api/routes/:id/favorite", axum::routing::post(saved_routes_handlers::toggle_favorite))
         .route("/api/routes/:id/folder", axum::routing::patch(saved_routes_handlers::set_folder))
+        .route("/api/folders/:name", axum::routing::delete(saved_routes_handlers::delete_folder))
         .layer(cors)
         .with_state(db);
 
@@ -1194,6 +1195,7 @@ async fn main() {
     tracing::info!("  GET /api/routes - List all saved routes");
     tracing::info!("  GET /api/routes/:id - Get specific route");
     tracing::info!("  DELETE /api/routes/:id - Delete route");
+    tracing::info!("  DELETE /api/folders/:name - Delete every route of a folder");
     tracing::info!("  POST /api/routes/:id/favorite - Toggle favorite");
     tracing::info!("Ready to generate graphs on-demand!");
 

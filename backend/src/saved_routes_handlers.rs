@@ -114,6 +114,17 @@ pub async fn delete_route(
         .map_err(db_error_to_api_error)
 }
 
+/// DELETE /api/folders/:name - Delete every route of a folder
+pub async fn delete_folder(
+    State(db): State<Arc<Database>>,
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    db.delete_folder(&name)
+        .await
+        .map(|deleted| Json(serde_json::json!({ "deleted": deleted })))
+        .map_err(db_error_to_api_error)
+}
+
 /// POST /api/routes/:id/favorite - Toggle favorite status
 pub async fn toggle_favorite(
     State(db): State<Arc<Database>>,

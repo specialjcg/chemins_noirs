@@ -69,6 +69,8 @@ type alias Model =
     -- Trois cents itinéraires d'un bloc ne se parcourent plus : tout est
     -- replié par défaut et seul le dossier ouvert montre ses lignes.
     , openFolders : Set String
+    -- Dossier dont la suppression attend confirmation.
+    , confirmDeleteFolder : Maybe String
     -- Itinéraire en cours de rangement, avec le dossier saisi.
     , movingRoute : Maybe ( Int, String )
     , showSavedRoutes : Bool
@@ -87,6 +89,14 @@ type alias Model =
     , directLegs : Set Int
     , mapRouteHoverIndex : Maybe Int
     , cheminNoir : Bool
+    -- « Max forêt » : en mode chemin noir, remplace le poids forêt par `forestBoost`.
+    , maxForest : Bool
+    , forestBoost : String
+    -- Longueur d'une étape (km) pour le découpage en GPX par étape.
+    , stageKm : String
+    -- Mode « Par étapes » : un A→B découpé et enregistré à chaque calcul.
+    -- Le tracé reste en PointToPoint (ou MultiPoint après insertion d'un point).
+    , byStages : Bool
     , mapSearch : String
     , mapSearchResults : List GeoResult
     , freehandSegments : Dict Int (List Coordinate)
@@ -184,6 +194,7 @@ initialModel =
     , forestQuery = ""
     , forestResults = []
     , openFolders = Set.empty
+    , confirmDeleteFolder = Nothing
     , movingRoute = Nothing
     , showSavedRoutes = False
     , referenceRoutes = Dict.empty
@@ -196,6 +207,10 @@ initialModel =
     , directLegs = Set.empty
     , mapRouteHoverIndex = Nothing
     , cheminNoir = True
+    , maxForest = False
+    , forestBoost = "10"
+    , stageKm = "30"
+    , byStages = False
     , mapSearch = ""
     , mapSearchResults = []
     , freehandSegments = Dict.empty
@@ -245,6 +260,10 @@ type Msg
     | SavedRouteLoaded (Result Http.Error SavedRoute)
     | DeleteSavedRoute Int
     | RouteDeleted (Result Http.Error ())
+    | AskDeleteFolder String
+    | CancelDeleteFolder
+    | ConfirmDeleteFolder String
+    | FolderDeleted (Result Http.Error Int)
     | ToggleFavorite Int
     | FavoriteToggled (Result Http.Error SavedRoute)
     | ToggleSavedRoutesPanel
@@ -276,6 +295,10 @@ type Msg
     | ToggleDirectLeg Int
     | ComputeMultiPointRoute
     | ExportGpx
+    | ExportStageGpx Int
+    | StageKmChanged String
+    | SelectStagesMode
+    | StageSaved (Result Http.Error SavedRoute)
     | CopyShareLink
     | GotGeolocation Float Float
     | RequestGeolocation
@@ -297,6 +320,8 @@ type Msg
     | MapRouteHoverIndex Int
     | MapRouteLeave
     | ToggleCheminNoir
+    | ToggleMaxForest
+    | ForestBoostChanged String
     | MapSearchChanged String
     | SearchMap
     | MapSearchResults (Result Http.Error (List GeoResult))
@@ -517,6 +542,12 @@ type alias SaveRouteRequest =
 
 
 -- HELPERS
+
+
+{-| « Par étapes » ne vaut que pour un A→B (simple ou multi-points). -}
+stagesActive : Model -> Bool
+stagesActive model =
+    model.byStages && model.routeMode /= Loop
 
 
 {-| Clé de dossier d'un itinéraire ; la chaîne vide regroupe ceux sans dossier.

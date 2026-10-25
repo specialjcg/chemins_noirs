@@ -469,6 +469,10 @@ app.ports.setReferenceRoutes.subscribe((routes) => {
   MapLibreMap.setReferenceRoutes(routes);
 });
 
+app.ports.setStageMarkers.subscribe((markers) => {
+  MapLibreMap.setStageMarkers(markers);
+});
+
 app.ports.setElevationHoverMarker.subscribe((coord) => {
   MapLibreMap.setElevationHoverMarker(coord);
 });

@@ -2026,6 +2026,33 @@ function _frameReferenceRoutes() {
   mapInstance.fitBounds(bounds, { padding: margesDesCalques(), duration: 800 });
 }
 
+let stageCutMarkers = [];
+
+/**
+ * Bornes d'étape ([{ lat, lon, label }]) : pastilles fixes, non déplaçables.
+ * Liste vide pour tout effacer.
+ */
+export function setStageMarkers(markers) {
+  stageCutMarkers.forEach((marker) => marker.remove());
+  stageCutMarkers = [];
+  if (!Array.isArray(markers) || !mapInstance) return;
+
+  stageCutMarkers = markers.map(({ lat, lon, label }) => {
+    const el = document.createElement('div');
+    el.className = 'stage-cut-marker';
+    el.textContent = label;
+    el.style.padding = '2px 6px';
+    el.style.borderRadius = '10px';
+    el.style.fontSize = '11px';
+    el.style.fontWeight = 'bold';
+    el.style.backgroundColor = mapColor('--map-ring-waypoint');
+    el.style.color = mapColor('--map-marker-face');
+    el.style.boxShadow = '0 1px 4px rgba(0,0,0,0.3)';
+    el.style.pointerEvents = 'none';
+    return new maplibregl.Marker({ element: el }).setLngLat([lon, lat]).addTo(mapInstance);
+  });
+}
+
 export function toggleSatelliteView(enabled) {
   // Legacy compatibility: true → satellite, false → topo
   switchMapStyle(enabled ? 'satellite' : 'topo');

@@ -95,6 +95,12 @@ port setElevationHoverMarker : Maybe { lat : Float, lon : Float } -> Cmd msg
 port setReferenceRoutes : List { path : List Coordinate, color : String } -> Cmd msg
 
 
+{-| Bornes des étapes sur la carte (départ de chaque étape après la première).
+Liste vide pour tout effacer.
+-}
+port setStageMarkers : List { lat : Float, lon : Float, label : String } -> Cmd msg
+
+
 port centerMapOn : { lat : Float, lon : Float } -> Cmd msg
 
 

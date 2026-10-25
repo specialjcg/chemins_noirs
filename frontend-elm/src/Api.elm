@@ -225,6 +225,20 @@ getSavedRoute id toMsg =
         }
 
 
+{-| Supprime tous les itinéraires d'un dossier ; renvoie leur nombre. -}
+deleteFolder : String -> (Result Http.Error Int -> msg) -> Cmd msg
+deleteFolder folder toMsg =
+    Http.request
+        { method = "DELETE"
+        , headers = []
+        , url = "/api/folders/" ++ Url.percentEncode folder
+        , body = Http.emptyBody
+        , expect = Http.expectJson toMsg (Json.Decode.field "deleted" Json.Decode.int)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
 deleteSavedRoute : Int -> (Result Http.Error () -> msg) -> Cmd msg
 deleteSavedRoute id toMsg =
     Http.request

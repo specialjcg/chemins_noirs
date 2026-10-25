@@ -9,6 +9,7 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, on)
 import Json.Decode as Decode
 import Types exposing (..)
+import Stages
 import Svg
 import View.ElevationBand as ElevationBand
 
@@ -21,6 +22,11 @@ view model =
                 [ viewLoopCandidates model
                 , viewStats route
                 , viewActionButtons
+                , if stagesActive model then
+                    viewStages model route
+
+                  else
+                    text ""
                 , viewSegmentStats route.segments
                 , viewObstacles route.obstacles
                 , viewMetadata route.metadata
@@ -193,6 +199,29 @@ surfaceLegendItem ( name, dist ) =
     span [ class "surface-legend-item" ]
         [ span [ class ("surface-dot surface-" ++ String.toLower name) ] []
         , text (name ++ " " ++ Format.km dist)
+        ]
+
+
+{-| Découpage en étapes de `stageKm` km, un GPX par étape. -}
+viewStages : Model -> RouteResponse -> Html Msg
+viewStages model route =
+    let
+        stages =
+            Stages.split (String.toFloat model.stageKm |> Maybe.withDefault 0) route.path
+
+        viewStage idx stage =
+            div [ class "segment-card" ]
+                [ span [ class "segment-label" ]
+                    [ text ("Étape " ++ String.fromInt (idx + 1)) ]
+                , div [ class "segment-details" ]
+                    [ span [] [ text (Format.km stage.distanceKm) ]
+                    , button [ class "btn-stage-gpx", onClick (ExportStageGpx idx) ] [ text "⬇ GPX" ]
+                    ]
+                ]
+    in
+    div [ class "segment-stats" ]
+        [ h3 [] [ text "Étapes" ]
+        , div [] (List.indexedMap viewStage stages)
         ]
 
 

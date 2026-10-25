@@ -1105,7 +1105,8 @@ button[disabled] {
   padding-right: var(--space-2);
 }
 
-.route-folder-bar > .action-layer {
+.route-folder-bar > .action-layer,
+.route-folder-bar > .action-delete {
   flex: none;
   padding: var(--space-1);
   font-size: var(--text-xs);
@@ -1279,6 +1280,28 @@ button[disabled] {
 
 .action-delete:hover {
   background: var(--accent-terracotta-dim);
+}
+
+.route-folder-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  color: var(--accent-terracotta-text);
+  background: var(--accent-terracotta-dim);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+
+.route-folder-confirm > span {
+  flex: 1 1 100%;
+}
+
+.route-folder-confirm .btn-danger {
+  background: var(--accent-terracotta-text);
+  color: var(--bg-deep);
+  border: none;
 }
 
 /* ─── Error ─── */
