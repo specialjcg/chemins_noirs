@@ -1163,6 +1163,12 @@ updateModel msg model =
                         markerCmds =
                             [ Ports.updateWaypointMarkers waypoints ]
 
+                        stageSettings =
+                            Stages.fromTags savedRoute.tags
+
+                        forestBoost =
+                            Maybe.andThen .forest stageSettings
+
                         -- Un itinéraire enregistré ne porte pas ses revêtements :
                         -- on les demande au moteur plutôt que de recalculer le
                         -- tracé, qui sortirait différent de celui qu'on a ouvert.
@@ -1190,6 +1196,15 @@ updateModel msg model =
                     ( applySavedRoute
                         { model
                             | pending = False
+
+                            -- Tracé enregistré par étapes : ses réglages
+                            -- reviennent pour qu'un Calculer le recalcule.
+                            , byStages = stageSettings /= Nothing
+                            , stageKm = Maybe.withDefault model.stageKm (Maybe.map .stageKm stageSettings)
+                            , closeLoop = Maybe.withDefault model.closeLoop (Maybe.map .closeLoop stageSettings)
+                            , cheminNoir = model.cheminNoir || forestBoost /= Nothing
+                            , maxForest = Maybe.withDefault model.maxForest (Maybe.map ((/=) Nothing << .forest) stageSettings)
+                            , forestBoost = Maybe.withDefault model.forestBoost forestBoost
                             , error = Nothing
                             , loadedRouteId = Just savedRoute.id
 
@@ -1378,12 +1393,18 @@ updateModel msg model =
 
         SelectStagesMode ->
             -- Multi-points : autant d'étapes intermédiaires que de clics,
-            -- deux points suffisant pour un simple A→B.
-            let
-                ( next, cmd ) =
-                    updateModel (ToggleRouteMode MultiPoint) model
-            in
-            ( { next | byStages = True }, cmd )
+            -- deux points suffisant pour un simple A→B. Depuis le
+            -- multi-points, les points restent : on peut redécouper un tracé
+            -- chargé sans le recliquer.
+            if model.routeMode == MultiPoint then
+                ( { model | byStages = True }, Cmd.none )
+
+            else
+                let
+                    ( next, cmd ) =
+                        updateModel (ToggleRouteMode MultiPoint) model
+                in
+                ( { next | byStages = True }, cmd )
 
         StageSaved result ->
             case result of
@@ -2745,7 +2766,8 @@ loopFormToRequest preset form loopForm waypoints =
             Err "Placez un point de départ sur la carte"
 
 
-{-| Poids d'une requête de tracé. -}
+{-| Poids d'une requête de tracé.
+-}
 type alias Weights =
     { pop : Float
     , paved : Float
@@ -2788,7 +2810,8 @@ presetWeights model =
         Nothing
 
 
-{-| Étapes du dernier tracé ; longueur invalide → une seule étape. -}
+{-| Étapes du dernier tracé ; longueur invalide → une seule étape.
+-}
 routeStages : Model -> RouteResponse -> List Stages.Stage
 routeStages model route =
     Stages.split (String.toFloat model.stageKm |> Maybe.withDefault 0) route.path
@@ -2834,6 +2857,7 @@ stageName prefix number =
 
 Un recalcul remplace : une ligne du même nom dans ce dossier est mise à jour,
 et les étapes en trop d'un découpage précédent plus long sont supprimées.
+
 -}
 saveStagesCmd : Model -> Cmd Msg
 saveStagesCmd model =
@@ -2871,8 +2895,24 @@ saveStagesCmd model =
                         [] ->
                             Api.saveRouteToDb req route toMsg
 
+                settings =
+                    { stageKm = model.stageKm
+                    , closeLoop = model.closeLoop
+                    , forest =
+                        if model.cheminNoir && model.maxForest then
+                            Just model.forestBoost
+
+                        else
+                            Nothing
+                    }
+
                 fullCmd =
-                    upsert name (saveRequestFrom model |> (\r -> { r | name = name, folder = Just folder })) full RouteSaved
+                    upsert name
+                        (saveRequestFrom model
+                            |> (\r -> { r | name = name, folder = Just folder, tags = Just (Stages.toTags settings) })
+                        )
+                        full
+                        RouteSaved
 
                 stageCmd i stage =
                     let

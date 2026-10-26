@@ -1,4 +1,4 @@
-module Stages exposing (Stage, gpx, route, slice, split)
+module Stages exposing (Settings, Stage, fromTags, gpx, route, slice, split, toTags)
 
 {-| Découpage d'un long tracé en étapes d'une longueur donnée.
 
@@ -140,3 +140,52 @@ gpx name path elevations =
         ++ "    </trkseg>\n"
         ++ "  </trk>\n"
         ++ "</gpx>\n"
+
+
+{-| Réglages d'un découpage, gardés dans les tags du tracé complet pour le
+recalculer plus tard : longueur d'étape, boucle fermée, poids « Max forêt ».
+-}
+type alias Settings =
+    { stageKm : String
+    , closeLoop : Bool
+    , forest : Maybe String
+    }
+
+
+toTags : Settings -> List String
+toTags settings =
+    List.filterMap identity
+        [ Just ("etapes:" ++ settings.stageKm)
+        , if settings.closeLoop then
+            Just "boucle"
+
+          else
+            Nothing
+        , Maybe.map ((++) "foret:") settings.forest
+        ]
+
+
+{-| `Nothing` pour un tracé qui n'a pas été enregistré par étapes. -}
+fromTags : List String -> Maybe Settings
+fromTags tags =
+    let
+        valueOf prefix =
+            tags
+                |> List.filterMap
+                    (\tag ->
+                        if String.startsWith prefix tag then
+                            Just (String.dropLeft (String.length prefix) tag)
+
+                        else
+                            Nothing
+                    )
+                |> List.head
+    in
+    valueOf "etapes:"
+        |> Maybe.map
+            (\km ->
+                { stageKm = km
+                , closeLoop = List.member "boucle" tags
+                , forest = valueOf "foret:"
+                }
+            )

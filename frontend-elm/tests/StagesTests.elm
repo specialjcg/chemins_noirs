@@ -94,4 +94,20 @@ suite =
             \_ ->
                 Stages.slice { first = 2, last = 4, distanceKm = 0 } (List.range 0 9)
                     |> Expect.equal [ 2, 3, 4 ]
+        , test "les réglages survivent à l'aller-retour par les tags" <|
+            \_ ->
+                let
+                    settings =
+                        { stageKm = "25", closeLoop = True, forest = Just "20" }
+                in
+                Stages.fromTags ("favori" :: Stages.toTags settings)
+                    |> Expect.equal (Just settings)
+        , test "sans Max forêt ni boucle, seule la longueur est notée" <|
+            \_ ->
+                Stages.toTags { stageKm = "30", closeLoop = False, forest = Nothing }
+                    |> Expect.equal [ "etapes:30" ]
+        , test "un tracé sans tag d'étapes n'a pas de réglages" <|
+            \_ ->
+                Stages.fromTags [ "boucle", "foret:20" ]
+                    |> Expect.equal Nothing
         ]
