@@ -1278,6 +1278,19 @@ updateModel msg model =
                     , Cmd.none
                     )
 
+        SendToGarmin id ->
+            ( { model | pending = True, pendingSeconds = 0, error = Nothing, garminNotice = Nothing }
+            , Api.sendToGarmin id SentToGarmin
+            )
+
+        SentToGarmin result ->
+            case result of
+                Ok message ->
+                    ( { model | pending = False, garminNotice = Just ("⌚ " ++ message) }, Cmd.none )
+
+                Err message ->
+                    ( { model | pending = False, error = Just message }, Cmd.none )
+
         ToggleFavorite id ->
             ( { model | pending = True, pendingSeconds = 0 }
             , Api.toggleFavorite id FavoriteToggled

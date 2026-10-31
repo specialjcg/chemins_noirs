@@ -359,6 +359,12 @@ view model =
 
             Nothing ->
                 text ""
+        , case model.garminNotice of
+            Just notice ->
+                p [ class "notice" ] [ text notice ]
+
+            Nothing ->
+                text ""
         ]
 
 
@@ -864,6 +870,13 @@ viewSavedRoute referenceRoutes ids index route =
                         "Ajouter aux favoris"
                 ]
                 [ text "⭐" ]
+            , button
+                [ type_ "button"
+                , class "action-garmin"
+                , onClick (SendToGarmin route.id)
+                , title "Envoyer sur la montre Garmin (parcours créé dans Garmin Connect)"
+                ]
+                [ text "⌚" ]
             , button
                 [ type_ "button"
                 , class "action-move"

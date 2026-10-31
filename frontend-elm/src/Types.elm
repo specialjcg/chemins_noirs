@@ -71,6 +71,8 @@ type alias Model =
     , openFolders : Set String
     -- Dossier dont la suppression attend confirmation.
     , confirmDeleteFolder : Maybe String
+    -- Compte rendu du dernier envoi d'un itinéraire vers la montre Garmin.
+    , garminNotice : Maybe String
     -- Itinéraire en cours de rangement, avec le dossier saisi.
     , movingRoute : Maybe ( Int, String )
     , showSavedRoutes : Bool
@@ -195,6 +197,7 @@ initialModel =
     , forestResults = []
     , openFolders = Set.empty
     , confirmDeleteFolder = Nothing
+    , garminNotice = Nothing
     , movingRoute = Nothing
     , showSavedRoutes = False
     , referenceRoutes = Dict.empty
@@ -266,6 +269,8 @@ type Msg
     | FolderDeleted (Result Http.Error Int)
     | ToggleFavorite Int
     | FavoriteToggled (Result Http.Error SavedRoute)
+    | SendToGarmin Int
+    | SentToGarmin (Result String String)
     | ToggleSavedRoutesPanel
     | SaveRoute
     | LoadRoute

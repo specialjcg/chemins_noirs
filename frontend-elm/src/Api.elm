@@ -252,6 +252,41 @@ deleteSavedRoute id toMsg =
         }
 
 
+{-| Crée le parcours Garmin d'un itinéraire sauvegardé et l'envoie à la montre.
+Le serveur répond `{ "message": ... }`, en succès comme en échec : on remonte
+ce message plutôt qu'un simple code HTTP.
+-}
+sendToGarmin : Int -> (Result String String -> msg) -> Cmd msg
+sendToGarmin id toMsg =
+    let
+        message body =
+            Json.Decode.decodeString (Json.Decode.field "message" Json.Decode.string) body
+                |> Result.withDefault body
+
+        toResult response =
+            case response of
+                Http.GoodStatus_ _ body ->
+                    Ok (message body)
+
+                Http.BadStatus_ _ body ->
+                    Err (message body)
+
+                Http.Timeout_ ->
+                    Err "Timeout - Garmin ne répond pas"
+
+                Http.NetworkError_ ->
+                    Err "Erreur réseau - vérifiez votre connexion"
+
+                Http.BadUrl_ url ->
+                    Err ("URL invalide: " ++ url)
+    in
+    Http.post
+        { url = savedRoutesApiRoot ++ "/" ++ String.fromInt id ++ "/garmin"
+        , body = Http.emptyBody
+        , expect = Http.expectStringResponse toMsg toResult
+        }
+
+
 toggleFavorite : Int -> (Result Http.Error SavedRoute -> msg) -> Cmd msg
 toggleFavorite id toMsg =
     Http.post

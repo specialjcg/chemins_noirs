@@ -10,7 +10,11 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+
 use crate::database::{Database, DatabaseError, SaveRouteRequest, SavedRoute};
+use crate::gpx_export::encode_route_as_gpx_with_elevations;
 use crate::models::ApiError;
 use shared::RouteResponse;
 
@@ -146,6 +150,71 @@ pub async fn set_folder(
         .await
         .map(Json)
         .map_err(db_error_to_api_error)
+}
+
+/// Directory of the Garmin CLI (`experiments/hardware/garmin`): the binary is
+/// `target/release/garmin` and must run there, where its token and `.env` live.
+const DEFAULT_GARMIN_CLI_DIR: &str = "/home/jcgouleau/Projects/experiments/hardware/garmin";
+
+/// POST /api/routes/:id/garmin - Create a Garmin Connect course from a saved
+/// route and send it to the watch, through the Garmin CLI.
+pub async fn send_to_garmin(
+    State(db): State<Arc<Database>>,
+    Path(id): Path<i32>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let saved = db.get_route(id).await.map_err(db_error_to_api_error)?;
+    let route = Database::to_route_response(&saved).map_err(db_error_to_api_error)?;
+    let elevations = route.elevation_profile.as_ref().map(|p| p.elevations.as_slice());
+    let gpx = encode_route_as_gpx_with_elevations(&route.path, elevations)
+        .ok()
+        .and_then(|b64| BASE64.decode(b64).ok())
+        .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Génération du GPX impossible"))?;
+
+    let name = saved.name.clone();
+    let message = tokio::task::spawn_blocking(move || garmin_push(id, &name, &gpx))
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, &e))?;
+
+    Ok(Json(serde_json::json!({ "message": message })))
+}
+
+/// Runs `garmin course push <gpx> --name <name>` and returns its last output line.
+fn garmin_push(id: i32, name: &str, gpx: &[u8]) -> Result<String, String> {
+    let cli_dir = std::env::var("GARMIN_CLI_DIR").unwrap_or_else(|_| DEFAULT_GARMIN_CLI_DIR.into());
+    let cli_dir = std::path::Path::new(&cli_dir);
+    let gpx_path = std::env::temp_dir().join(format!("chemins-noirs-garmin-{id}-{}.gpx", std::process::id()));
+    std::fs::write(&gpx_path, gpx).map_err(|e| format!("écriture du GPX : {e}"))?;
+
+    let output = std::process::Command::new(cli_dir.join("target/release/garmin"))
+        .current_dir(cli_dir)
+        .arg("course")
+        .arg("push")
+        .arg(&gpx_path)
+        .arg("--name")
+        .arg(name)
+        .output();
+    let _ = std::fs::remove_file(&gpx_path);
+
+    let output = output.map_err(|e| format!("outil Garmin introuvable dans {} : {e}", cli_dir.display()))?;
+    let last_line = |bytes: &[u8]| {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .trim()
+            .to_owned()
+    };
+    if output.status.success() {
+        Ok(last_line(&output.stdout))
+    } else {
+        Err(format!("Envoi Garmin échoué : {}", last_line(&output.stderr)))
+    }
+}
+
+fn api_error(status: StatusCode, message: &str) -> (StatusCode, Json<ApiError>) {
+    (status, Json(ApiError { message: message.to_owned() }))
 }
 
 /// Convert DatabaseError to API error response
