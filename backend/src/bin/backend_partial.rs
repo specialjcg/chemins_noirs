@@ -1086,6 +1086,17 @@ async fn main() {
     let pbf_path =
         std::env::var("PBF_PATH").unwrap_or_else(|_| "data/rhone-alpes-251111.osm.pbf".to_string());
     let cache_dir = std::env::var("CACHE_DIR").unwrap_or_else(|_| "data/cache".to_string());
+
+    // Lodgings come from the PBF rather than Overpass, which is often down.
+    // Building the index takes minutes the first time: done in the background,
+    // Overpass answers until it is ready.
+    {
+        let (pbf, cache) = (PathBuf::from(&pbf_path), PathBuf::from(&cache_dir));
+        std::thread::spawn(move || match backend::lodging_index::init(&pbf, &cache) {
+            Ok(count) => tracing::info!("lodging index ready: {count} lodgings"),
+            Err(e) => tracing::warn!("lodging index unavailable, Overpass fallback: {e}"),
+        });
+    }
     let tiles_dir = std::env::var("TILES_DIR")
         .ok()
         .map(PathBuf::from)
@@ -1166,6 +1177,7 @@ async fn main() {
         .route("/api/pois", axum::routing::get(pois_handler))
         .route("/api/forests", axum::routing::get(backend::forests::search_handler))
         .route("/api/lodgings-along-route", axum::routing::post(lodgings_along_route_handler))
+        .route("/api/lodgings", axum::routing::get(lodgings_in_bbox_handler))
         .route("/api/plan-stages", axum::routing::post(plan_stages_handler))
         .layer(cors.clone())
         .with_state(config)
@@ -1216,6 +1228,26 @@ struct PoiQuery {
     max_lat: f64,
     min_lon: f64,
     max_lon: f64,
+}
+
+/// Handler for /api/lodgings?min_lat=&max_lat=&min_lon=&max_lon= — lodgings
+/// of the local PBF index in a bbox. 503 while the index is being built: the
+/// map then falls back to Overpass.
+async fn lodgings_in_bbox_handler(
+    axum::extract::Query(query): axum::extract::Query<PoiQuery>,
+) -> Result<Json<Vec<backend::lodgings::Lodging>>, (StatusCode, String)> {
+    let index = backend::lodging_index::ready().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "index des hébergements en construction".to_string(),
+    ))?;
+    let bbox = BoundingBox {
+        min_lat: query.min_lat,
+        max_lat: query.max_lat,
+        min_lon: query.min_lon,
+        max_lon: query.max_lon,
+    };
+    let kinds = backend::lodgings::select_kinds(None);
+    Ok(Json(index.query(&bbox, &kinds)))
 }
 
 /// Handler for /api/pois?min_lat=&max_lat=&min_lon=&max_lon=

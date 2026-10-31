@@ -10,6 +10,7 @@ pub mod gpx_export;
 pub mod graph;
 pub mod ign;
 pub mod landcover;
+pub mod lodging_index;
 pub mod lodgings;
 pub mod loops;
 pub mod models;

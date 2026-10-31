@@ -1,7 +1,7 @@
 //! Lodging discovery along a hiking route.
 //!
-//! Given a route polyline, queries OpenStreetMap (Overpass API) for tourism
-//! accommodations within a buffer distance of the route, and returns them
+//! Given a route polyline, looks up OpenStreetMap tourism accommodations (local
+//! PBF index, Overpass API as a fallback) within a buffer distance of the route, and returns them
 //! annotated with their position along the route (cumulative km from start)
 //! and their perpendicular distance to the closest segment.
 //!
@@ -17,7 +17,7 @@ use crate::models::Coordinate;
 /// Tourism tags we consider as valid lodgings for hikers. A request picks a
 /// subset; anything else is dropped, which also keeps free text out of the
 /// Overpass query.
-const TOURISM_KINDS: &[&str] = &[
+pub(crate) const TOURISM_KINDS: &[&str] = &[
     "guest_house",
     "hostel",
     "alpine_hut",
@@ -282,7 +282,7 @@ async fn fetch_overpass(
 /// or return None if it's missing required fields.
 fn parse_element(el: &serde_json::Value) -> Option<Lodging> {
     let osm_id = el.get("id")?.as_i64()?;
-    let osm_type = el.get("type")?.as_str()?.to_string();
+    let osm_type = el.get("type")?.as_str()?;
 
     // Coordinates: nodes have lat/lon directly, ways/relations have a 'center'
     let (lat, lon) = if let (Some(lat), Some(lon)) = (
@@ -299,32 +299,33 @@ fn parse_element(el: &serde_json::Value) -> Option<Lodging> {
     };
 
     let tags = el.get("tags")?.as_object()?;
-    let kind = tags.get("tourism")?.as_str()?.to_string();
+    lodging_from_tags(osm_type, osm_id, lat, lon, |k| {
+        tags.get(k).and_then(|v| v.as_str()).map(str::to_string)
+    })
+}
 
-    let s = |k: &str| tags.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
-    let any_of = |keys: &[&str]| -> Option<String> {
-        for k in keys {
-            if let Some(v) = tags.get(*k).and_then(|v| v.as_str()) {
-                return Some(v.to_string());
-            }
-        }
-        None
-    };
+/// Builds a Lodging from OSM tags, whatever their source (Overpass JSON or the
+/// local PBF index). None without a `tourism` tag.
+pub(crate) fn lodging_from_tags(
+    osm_type: &str,
+    osm_id: i64,
+    lat: f64,
+    lon: f64,
+    tag: impl Fn(&str) -> Option<String>,
+) -> Option<Lodging> {
+    let kind = tag("tourism")?;
+    let any_of = |keys: &[&str]| keys.iter().find_map(|k| tag(k));
 
-    let name = s("name").unwrap_or_else(|| "(sans nom)".to_string());
+    let name = tag("name").unwrap_or_else(|| "(sans nom)".to_string());
     let phone = any_of(&["phone", "contact:phone"]);
     let website = any_of(&["website", "contact:website", "url"]);
     let email = any_of(&["email", "contact:email"]);
     let capacity = any_of(&["capacity", "beds", "rooms"]);
-    let stars = s("stars");
+    let stars = tag("stars");
     let address = {
-        let street = s("addr:street");
-        let housenumber = s("addr:housenumber");
-        let city = s("addr:city");
-        let postcode = s("addr:postcode");
-        let parts: Vec<String> = [housenumber, street, postcode, city]
+        let parts: Vec<String> = ["addr:housenumber", "addr:street", "addr:postcode", "addr:city"]
             .into_iter()
-            .flatten()
+            .filter_map(&tag)
             .collect();
         if parts.is_empty() {
             None
@@ -335,7 +336,7 @@ fn parse_element(el: &serde_json::Value) -> Option<Lodging> {
 
     Some(Lodging {
         osm_id,
-        osm_type,
+        osm_type: osm_type.to_string(),
         name,
         kind,
         lat,
@@ -349,6 +350,27 @@ fn parse_element(el: &serde_json::Value) -> Option<Lodging> {
         perpendicular_dist_m: 0.0,
         along_route_km: 0.0,
     })
+}
+
+/// Lodgings in the bbox: from the local PBF index when it is ready, from
+/// Overpass otherwise (index still building, or no PBF configured).
+async fn lodgings_in_bbox(
+    kinds: &[&str],
+    min_lat: f64,
+    max_lat: f64,
+    min_lon: f64,
+    max_lon: f64,
+) -> Result<Vec<Lodging>, String> {
+    if let Some(index) = crate::lodging_index::ready() {
+        let bbox = crate::graph::BoundingBox { min_lat, max_lat, min_lon, max_lon };
+        return Ok(index.query(&bbox, kinds));
+    }
+    let raw = fetch_overpass(kinds, min_lat, max_lat, min_lon, max_lon).await?;
+    let elements = raw
+        .get("elements")
+        .and_then(|v| v.as_array())
+        .ok_or("Overpass response missing 'elements'")?;
+    Ok(elements.iter().filter_map(parse_element).collect())
 }
 
 /// Main entry point: given a route polyline, return all lodgings within
@@ -365,17 +387,12 @@ pub async fn find_lodgings_along_route(
     // 1. Compute expanded bbox
     let (min_lat, max_lat, min_lon, max_lon) = expanded_bbox(coords, buffer_m);
 
-    // 2. Query Overpass
-    let raw = fetch_overpass(kinds, min_lat, max_lat, min_lon, max_lon).await?;
-    let elements = raw
-        .get("elements")
-        .and_then(|v| v.as_array())
-        .ok_or("Overpass response missing 'elements'")?;
+    // 2. Local index, or Overpass while it is not ready
+    let found = lodgings_in_bbox(kinds, min_lat, max_lat, min_lon, max_lon).await?;
 
-    // 3. Parse + project + filter
-    let mut lodgings: Vec<Lodging> = elements
-        .iter()
-        .filter_map(parse_element)
+    // 3. Project + filter
+    let mut lodgings: Vec<Lodging> = found
+        .into_iter()
         .filter_map(|mut l| {
             let (perp, along) = project_on_polyline(coords, l.lat, l.lon);
             if perp <= buffer_m {

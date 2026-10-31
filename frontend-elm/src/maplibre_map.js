@@ -683,23 +683,54 @@ async function overpassQuery(query) {
   throw new Error(errors.join(' ; '));
 }
 
-async function fetchOsmLodging(b) {
+function toOsmLodging(type, id, lat, lon, tourism, name) {
+  const [label, kind] = OSM_LODGING[tourism] || [];
+  if (lat == null || !label) return null;
+  return {
+    lon, lat, kind, label,
+    name: name || label,
+    source: 'OSM',
+    url: `https://www.openstreetmap.org/${type}/${id}`
+  };
+}
+
+/** Index local du backend, tiré du PBF ; 503 tant qu'il se construit. */
+async function fetchBackendLodging(b) {
+  const params = new URLSearchParams({
+    min_lat: b.getSouth().toFixed(4), max_lat: b.getNorth().toFixed(4),
+    min_lon: b.getWest().toFixed(4), max_lon: b.getEast().toFixed(4)
+  });
+  const res = await fetch('/api/lodgings?' + params, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error('backend ' + res.status);
+  const items = await res.json();
+  return items.flatMap(l => {
+    const name = l.name === '(sans nom)' ? null : l.name;
+    const item = toOsmLodging(l.osm_type, l.osm_id, l.lat, l.lon, l.kind, name);
+    return item ? [item] : [];
+  });
+}
+
+async function fetchOverpassLodging(b) {
   const bbox = `${b.getSouth().toFixed(4)},${b.getWest().toFixed(4)},${b.getNorth().toFixed(4)},${b.getEast().toFixed(4)}`;
   const types = Object.keys(OSM_LODGING).join('|');
   const query = `[out:json][timeout:10];nwr["tourism"~"^(${types})$"](${bbox});out center tags qt;`;
   const data = await overpassQuery(query);
   return (data.elements || []).flatMap(el => {
-    const lat = el.lat ?? el.center?.lat;
-    const lon = el.lon ?? el.center?.lon;
-    const [label, kind] = OSM_LODGING[el.tags?.tourism] || [];
-    if (lat == null || !label) return [];
-    return [{
-      lon, lat, kind, label,
-      name: el.tags.name || label,
-      source: 'OSM',
-      url: `https://www.openstreetmap.org/${el.type}/${el.id}`
-    }];
+    const item = toOsmLodging(
+      el.type, el.id, el.lat ?? el.center?.lat, el.lon ?? el.center?.lon, el.tags?.tourism, el.tags?.name
+    );
+    return item ? [item] : [];
   });
+}
+
+/** Overpass sature souvent : l'index du backend d'abord, Overpass en secours. */
+async function fetchOsmLodging(b) {
+  try {
+    return await fetchBackendLodging(b);
+  } catch (e) {
+    console.warn('[lodging] index local indisponible (' + e.message + '), repli sur Overpass');
+    return fetchOverpassLodging(b);
+  }
 }
 
 async function fetchRefugesInfo(b) {
