@@ -1265,25 +1265,37 @@ impl RouteEngine {
     }
 
     fn edge_cost(&self, edge: &EdgeData, weights: WeightConfig) -> f64 {
-        let paved_penalty = match edge.surface {
-            SurfaceType::Paved => 1.0,
-            SurfaceType::Trail => 0.2,
-            SurfaceType::Dirt => 0.0,
-        };
-
-        // On pénalise le hors-forêt au lieu de bonifier la forêt : l'heuristique
-        // de l'A* est la distance à vol d'oiseau, donc tout coût inférieur à
-        // `length_km` la rendrait inadmissible et l'algorithme renverrait des
-        // chemins sous-optimaux sans le signaler.
-        let open_ground_penalty = 1.0 - edge.forest_ratio;
-
-        edge.length_km
-            * (1.0
-                + weights.population * edge.habitation_pressure
-                + weights.paved * paved_penalty
-                + weights.forest * open_ground_penalty
-                + weights.density * edge.density_pressure)
+        edge_cost(edge, weights)
     }
+}
+
+fn edge_cost(edge: &EdgeData, weights: WeightConfig) -> f64 {
+    let paved_penalty = match edge.surface {
+        SurfaceType::Paved => 1.0,
+        SurfaceType::Trail => 0.2,
+        SurfaceType::Dirt => 0.0,
+    };
+
+    // On pénalise le hors-forêt au lieu de bonifier la forêt : l'heuristique
+    // de l'A* est la distance à vol d'oiseau, donc tout coût inférieur à
+    // `length_km` la rendrait inadmissible et l'algorithme renverrait des
+    // chemins sous-optimaux sans le signaler.
+    //
+    // Une route goudronnée reste une route, même sous les arbres : elle ne
+    // touche jamais le bonus forêt. Sinon, dès que le poids forêt dépasse le
+    // poids bitume (« Max forêt »), une départementale qui traverse un bois
+    // coûte moins qu'un chemin de terre à découvert, et le tracé la suit.
+    let open_ground_penalty = match edge.surface {
+        SurfaceType::Paved => 1.0,
+        SurfaceType::Trail | SurfaceType::Dirt => 1.0 - edge.forest_ratio,
+    };
+
+    edge.length_km
+        * (1.0
+            + weights.population * edge.habitation_pressure
+            + weights.paved * paved_penalty
+            + weights.forest * open_ground_penalty
+            + weights.density * edge.density_pressure)
 }
 
 // Removed: squared_distance (replaced by KD-Tree spatial index)
@@ -1449,6 +1461,32 @@ fn segment_intersection(a: (f64, f64), b: (f64, f64), p: (f64, f64), q: (f64, f6
 
 #[cfg(test)]
 mod tests {
+
+    fn edge(surface: SurfaceType, forest_ratio: f64) -> EdgeData {
+        EdgeData {
+            length_km: 1.0,
+            surface,
+            habitation_pressure: 0.0,
+            forest_ratio,
+            density_pressure: 0.0,
+            waypoints: Vec::new(),
+            ign: false,
+        }
+    }
+
+    #[test]
+    fn paved_road_in_forest_never_beats_open_dirt_track() {
+        // « Max forêt » 20 en mode chemin noir : la départementale qui
+        // traverse un bois doit rester plus chère qu'un chemin à découvert.
+        let max_forest = WeightConfig { population: 5.0, paved: 8.0, forest: 20.0, density: 3.0 };
+        let road_in_forest = super::edge_cost(&edge(SurfaceType::Paved, 1.0), max_forest);
+        let open_track = super::edge_cost(&edge(SurfaceType::Dirt, 0.0), max_forest);
+        let forest_trail = super::edge_cost(&edge(SurfaceType::Trail, 1.0), max_forest);
+        assert_eq!(road_in_forest, 29.0);
+        assert_eq!(open_track, 21.0);
+        assert!(forest_trail < open_track && open_track < road_in_forest);
+    }
+
     use petgraph::visit::EdgeRef;
 
     use super::*;
