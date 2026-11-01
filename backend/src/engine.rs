@@ -365,7 +365,7 @@ impl RouteEngine {
                 waypoints: edge.waypoints,
                 ign: edge.ign,
             };
-            graph.update_edge(from, to, data);
+            add_or_merge_edge(&mut graph, from, to, data);
         }
 
         // Build road-point index (nodes + edge waypoints) for better snap accuracy
@@ -1328,6 +1328,37 @@ fn point_to_segment_distance(p: Coordinate, a: Coordinate, b: Coordinate) -> (f6
     (d, t)
 }
 
+/// Ajoute l'arête, ou la fusionne avec celle qui relie déjà les deux mêmes
+/// nœuds.
+///
+/// Le graphe n'a qu'une arête par paire de nœuds. Deux voies parallèles entre
+/// les mêmes nœuds arrivent pourtant : un chemin IGN qui double un chemin OSM
+/// se raccroche aux mêmes coupures. `update_edge` remplaçait les données sans
+/// regarder le sens : quand la seconde était décrite de `to` vers `from`, sa
+/// géométrie se retrouvait à l'envers sur l'arête, et le tracé faisait un
+/// zigzag. On garde le chemin OSM plutôt que la copie IGN, sinon le plus court,
+/// et on remet ses points dans le sens de l'arête existante.
+fn add_or_merge_edge(graph: &mut UnGraph<NodeData, EdgeData>, from: NodeIndex, to: NodeIndex, mut data: EdgeData) {
+    let Some(existing) = graph.find_edge(from, to) else {
+        graph.add_edge(from, to, data);
+        return;
+    };
+    let current = &graph[existing];
+    let better = match (current.ign, data.ign) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => data.length_km < current.length_km,
+    };
+    if !better {
+        return;
+    }
+    let (source, _) = graph.edge_endpoints(existing).expect("edge just found");
+    if source != from {
+        data.waypoints.reverse();
+    }
+    graph[existing] = data;
+}
+
 /// Like expand_path_with_waypoints but also returns is_paved per coordinate.
 fn expand_path_with_waypoints_and_surfaces(
     route: &[NodeIndex],
@@ -1688,6 +1719,42 @@ mod tests {
                 // Connect N2→N5 for routing alternatives
                 EdgeRecord { from: 2, to: 5, surface: SurfaceType::Paved, length_m: 700.0, waypoints: vec![], forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign: false },
             ],
+        }
+    }
+
+    fn parallel_edges_graph(ign_first: bool) -> GraphFile {
+        use crate::graph::{EdgeRecord, NodeRecord};
+        let node = |id, lat, lon| NodeRecord { id, lat, lon, elevation: None, population_density: 0.0 };
+        let edge = |from, to, length_m, waypoints: Vec<Coordinate>, ign| EdgeRecord {
+            from, to, surface: SurfaceType::Dirt, length_m, waypoints,
+            forest_ratio: 0.0, habitation_pressure: 0.0, density_pressure: 0.0, ign,
+        };
+        // OSM bends east, described B→A; the IGN copy is a straight line A→B.
+        let osm = edge(2, 1, 1200.0, vec![
+            Coordinate { lat: 45.007, lon: 5.003 },
+            Coordinate { lat: 45.003, lon: 5.003 },
+        ], false);
+        let ign = edge(1, 2, 1000.0, vec![Coordinate { lat: 45.005, lon: 5.000 }], true);
+        GraphFile {
+            nodes: vec![node(1, 45.000, 5.000), node(2, 45.010, 5.000)],
+            edges: if ign_first { vec![ign, osm] } else { vec![osm, ign] },
+        }
+    }
+
+    #[test]
+    fn a_parallel_ign_copy_keeps_the_osm_way_in_the_right_order() {
+        for ign_first in [true, false] {
+            let engine = RouteEngine::from_graph_file(parallel_edges_graph(ign_first)).unwrap();
+            let path = engine
+                .find_path(&RouteRequest {
+                    start: Coordinate { lat: 45.000, lon: 5.000 },
+                    end: Coordinate { lat: 45.010, lon: 5.000 },
+                    w_pop: 0.0, w_paved: 0.0, w_forest: 0.0, w_density: 0.0,
+                })
+                .unwrap();
+            let lats: Vec<f64> = path.iter().map(|c| c.lat).collect();
+            assert!(path.iter().any(|c| c.lon == 5.003), "OSM way lost (ign_first={ign_first}): {path:?}");
+            assert!(lats.windows(2).all(|w| w[0] <= w[1]), "zigzag (ign_first={ign_first}): {lats:?}");
         }
     }
 
