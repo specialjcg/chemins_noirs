@@ -14,7 +14,7 @@ use backend::{
     elevation::create_elevation_profile,
     engine::RouteEngine,
     landcover::LandCoverGrid,
-    geo_utils::fold_overlap,
+    geo_utils::{fold_overlap, fold_short_spur, SHORT_SPUR_M},
     graph::{BoundingBox, GraphBuildError, GraphBuilder, GraphBuilderConfig, GraphFile},
     loops::{self, LoopGenerationError},
     models::{Coordinate, LoopRouteRequest, LoopRouteResponse, Obstacle, ObstacleKind, RouteRequest},
@@ -821,12 +821,15 @@ async fn multi_route_handler(
                     // une ancre insérée au bout d'une branche et que l'autre en
                     // remonte, la ligne se replie sur elle-même. Seule la
                     // jonction peut le voir.
-                    // Un point posé par le marcheur n'est jamais replié : y
-                    // aller puis revenir sur ses pas est un demi-tour voulu.
+                    // Un point posé par le marcheur n'est replié que si
+                    // l'antenne est courte : clic à côté de la trace, sur un
+                    // cul-de-sac voisin. Plus long, le demi-tour est voulu.
                     // Un tronçon direct est tiré tel quel : le replier le
                     // détournerait de la ligne que le marcheur a demandée.
-                    let (drop_tail, skip_head) = if direct_leg || is_original[i] {
+                    let (drop_tail, skip_head) = if direct_leg || (i > 0 && is_direct(i - 1)) {
                         (0, 0)
+                    } else if is_original[i] {
+                        fold_short_spur(&all_coords, &path, SHORT_SPUR_M)
                     } else {
                         fold_overlap(&all_coords, &path)
                     };

@@ -196,6 +196,28 @@ pub fn fold_overlap(tail: &[Coordinate], head: &[Coordinate]) -> (usize, usize) 
     (drop_tail, skip_head)
 }
 
+/// Longueur au-delà de laquelle un aller-retour vers un point posé par le
+/// marcheur est voulu (aller voir un point de vue, une source) et gardé.
+pub const SHORT_SPUR_M: f64 = 300.0;
+
+/// Comme `fold_overlap`, mais ne replie que si l'antenne retirée est courte.
+///
+/// Un clic tombe souvent à quelques mètres de la trace, sur le bout d'un
+/// cul-de-sac voisin : le tracé y descend et remonte pour rien. Au-delà de
+/// `max_m`, l'aller-retour est considéré comme voulu et laissé tel quel.
+pub fn fold_short_spur(tail: &[Coordinate], head: &[Coordinate], max_m: f64) -> (usize, usize) {
+    let (drop_tail, skip_head) = fold_overlap(tail, head);
+    if drop_tail == 0 {
+        return (0, 0);
+    }
+    let spur_m = approximate_distance_km(&tail[tail.len() - 1 - drop_tail..]) * 1000.0;
+    if spur_m <= max_m {
+        (drop_tail, skip_head)
+    } else {
+        (0, 0)
+    }
+}
+
 #[cfg(test)]
 mod fold_tests {
     use super::*;
@@ -277,5 +299,30 @@ mod fold_tests {
         let (drop_tail, skip_head) = fold_overlap(&tail, &head);
         assert!(drop_tail < tail.len(), "drop_tail={drop_tail}");
         assert!(skip_head < head.len(), "skip_head={skip_head}");
+    }
+    #[test]
+    fn a_short_spur_to_a_clicked_point_is_folded() {
+        // Antenne de ~220 m (2 × 0.001° de latitude).
+        let tail = vec![c(45.000, 5.000), c(45.001, 5.000), c(45.002, 5.000), c(45.003, 5.000)];
+        let head = vec![c(45.003, 5.000), c(45.002, 5.000), c(45.001, 5.000), c(45.001, 5.005)];
+
+        assert_eq!(fold_short_spur(&tail, &head, SHORT_SPUR_M), (2, 3));
+    }
+
+    #[test]
+    fn a_long_spur_to_a_clicked_point_is_kept() {
+        // Antenne de ~2.2 km : aller-retour voulu.
+        let tail = vec![c(45.000, 5.000), c(45.010, 5.000), c(45.020, 5.000), c(45.030, 5.000)];
+        let head = vec![c(45.030, 5.000), c(45.020, 5.000), c(45.010, 5.000), c(45.010, 5.005)];
+
+        assert_eq!(fold_short_spur(&tail, &head, SHORT_SPUR_M), (0, 0));
+    }
+
+    #[test]
+    fn no_spur_means_no_change() {
+        let tail = vec![c(45.000, 5.000), c(45.001, 5.001)];
+        let head = vec![c(45.001, 5.001), c(45.002, 5.002)];
+
+        assert_eq!(fold_short_spur(&tail, &head, SHORT_SPUR_M), (0, 0));
     }
 }
