@@ -192,7 +192,8 @@ impl Database {
                 route_data = $7,
                 gpx_data = $8,
                 tags = $9,
-                original_waypoints = COALESCE($10, original_waypoints),
+                -- Replaced, not kept: old waypoints would no longer match the new path.
+                original_waypoints = $10,
                 folder = COALESCE($11, folder)
             WHERE id = $1
             RETURNING *
@@ -618,6 +619,22 @@ mod tests {
         assert_eq!(saved.total_descent_m, None);
         assert_eq!(saved.tags.len(), 0);
         assert_eq!(saved.original_waypoints, None);
+    }
+
+    #[tokio::test]
+    async fn test_update_without_waypoints_drops_the_old_ones() {
+        let (db, _container) = setup_test_db().await;
+        let saved = db
+            .save_route(create_test_route_request("Old"))
+            .await
+            .expect("Failed to save route");
+        assert!(saved.original_waypoints.is_some());
+
+        let mut request = create_test_route_request("New");
+        request.original_waypoints = None;
+        let updated = db.update_route(saved.id, request).await.expect("Failed to update route");
+
+        assert_eq!(updated.original_waypoints, None);
     }
 
     #[tokio::test]
